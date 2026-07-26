@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 67 total | 67 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 75 total | 71 PASS | 0 FAIL | 3 SKIP | 1 ERROR
 
 ## Implemented Modules
 
@@ -37,7 +37,7 @@
 
 ## Known Test Issues
 
-None. All 67 tests pass (67 PASS, 0 FAIL, 0 SKIP, 0 ERROR).
+One known ERROR: biome_name type mismatch (numeric ID vs string) in get_biome_family — fix pending verification.
 
 ## Immediate Technical Tasks
 
