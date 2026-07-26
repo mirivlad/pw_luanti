@@ -1,0 +1,40 @@
+{
+  "games": [
+    {
+      "author": "ryvnf",
+      "name": "mineclonia",
+      "target": "mineclonia"
+    }
+  ],
+  "mods": [
+    {
+      "author": "rudzik8",
+      "name": "mcl_decor",
+      "target": "mcl_decor"
+    },
+    {
+      "author": "rudzik8",
+      "name": "mcl_cozy",
+      "target": "mcl_cozy"
+    }
+  ],
+  "dev_mods": [
+    {
+      "author": "sfan5",
+      "name": "worldedit",
+      "target": "worldedit"
+    },
+    {
+      "author": "TenPlus1",
+      "name": "protector",
+      "target": "protector"
+    }
+  ],
+  "texturepacks": [
+    {
+      "author": "shaft",
+      "name": "hand_painted_expanded",
+      "target": "hand_painted_expanded"
+    }
+  ]
+}

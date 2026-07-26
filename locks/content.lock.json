@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-07-26T19:47:15.247501+00:00",
+  "items": [
+    {
+      "section": "games",
+      "author": "ryvnf",
+      "name": "mineclonia",
+      "target": "mineclonia",
+      "installed_to": "data/games/mineclonia",
+      "downloaded_at": "2026-07-26T19:47:06.830241+00:00",
+      "sha256": "3f2255d5dffcff44d726e38f64a8362932281fb270976c753be375bdcc1aa1fa",
+      "source": "ContentDB:ryvnf/mineclonia"
+    },
+    {
+      "section": "mods",
+      "author": "rudzik8",
+      "name": "mcl_decor",
+      "target": "mcl_decor",
+      "installed_to": "data/mods/mcl_decor",
+      "downloaded_at": "2026-07-26T19:47:09.299968+00:00",
+      "sha256": "22bf1fa366323b13a16bc351bed62752d7f10fbfaf23c517e3ad0cd29b5047f2",
+      "source": "ContentDB:rudzik8/mcl_decor"
+    },
+    {
+      "section": "mods",
+      "author": "rudzik8",
+      "name": "mcl_cozy",
+      "target": "mcl_cozy",
+      "installed_to": "data/mods/mcl_cozy",
+      "downloaded_at": "2026-07-26T19:47:11.240521+00:00",
+      "sha256": "6f8356e1918a6f2e17c7dbbf6b4d7f739b3938190b8c2cf679cc35e9f7f34a3e",
+      "source": "ContentDB:rudzik8/mcl_cozy"
+    },
+    {
+      "section": "texturepacks",
+      "author": "shaft",
+      "name": "hand_painted_expanded",
+      "target": "hand_painted_expanded",
+      "installed_to": "data/texturepacks/hand_painted_expanded",
+      "downloaded_at": "2026-07-26T19:47:15.238969+00:00",
+      "sha256": "13ca5184178ad34db78fed1464cd52372a3a582afbd142f7ad03e11ee770adce",
+      "source": "ContentDB:shaft/hand_painted_expanded"
+    }
+  ]
+}

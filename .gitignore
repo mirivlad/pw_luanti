@@ -8,7 +8,7 @@ data/worlds/perfectworld/*
 data/worlds/perfectworld/*.sqlite
 data/worlds/perfectworld/ltk_report_*.json
 data/worlds/perfectworld/rc_cmd.json
-data/worlds/perfectworld/awbot_*.json
+data/worlds/perfectworld/pwbot_*.json
 data/debug.txt
 data/debug-test.txt
 data/mod_data/
