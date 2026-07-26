@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 61 total | 57 PASS | 2 FAIL | 2 ERROR | 0 SKIP
+**Test baseline:** 67 total | 63 PASS | 1 FAIL | 3 SKIP | 0 ERROR
 
 ## Implemented Modules
 
@@ -37,19 +37,15 @@
 
 ## Known Test Issues
 
-### FAIL (2)
+### FAIL (1)
 
 | Test | Cause |
 |------|-------|
-| `terrain_analysis_rejects_excessive_cut` | Assertion expects `excessive_cut` reason but `analyze_terrain` returns `excessive_slope` when slope check triggers first |
-| `terrain_preparation_limits_modified_area` | `prepare_terrain` modifies area wider than test's margin check expects |
+| `terrain_analysis_separates_slope_and_cut_checks` | Test fixture may not fully clear above-surface nodes, allowing leftover terrain from previous tests to affect surface detection. Fix: extend air clearance above the highest expected surface (y=100). |
 
-### ERROR (2)
+### SKIP (3)
 
-| Test | Cause |
-|------|-------|
-| `materialize_chunk_places_farmstead_once` | `prepare_candidate_area` doesn't handle `"__village__"` candidates (~20% chance); calls `get_footprint(nil)` |
-| `materialize_chunk_places_complete_farmstead_across_chunk_boundary` | Same root cause |
+Player tests (`player.player_online`, `player.player_position`, `player.player_teleport`) — pwbot disconnects between test runs. Expected when test client disconnects.
 
 ## Immediate Technical Tasks
 
