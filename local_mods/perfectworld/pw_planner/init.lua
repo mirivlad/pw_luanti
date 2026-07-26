@@ -798,7 +798,7 @@ function perfectworld.planner.create_village_profile(candidate, environment)
   -- Road character
   profile.road_character = {
     main_length = 30 + math.floor(prng() * 51),  -- 30-80
-    branches = archetype == "compact" and (1 + math.floor(prng() * 2)) or (prng() < 0.4 and 1 or 0),
+    branches = profile.archetype == "compact" and (1 + math.floor(prng() * 2)) or (prng() < 0.4 and 1 or 0),
     curve = prng() * 0.3,  -- 0-0.3 curvature factor
     crossing = prng() < 0.3,
   }
