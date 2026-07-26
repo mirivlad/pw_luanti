@@ -1,93 +1,145 @@
 # PerfectWorld
 
-Procedural physical world generation for [Luanti](https://www.luanti.org/) with [Mineclonia](https://content.luanti.org/packages/ryvnf/mineclonia/).
+Procedural physical world generation for [Luanti](https://www.luanti.org/) with
+[Mineclonia](https://content.luanti.org/packages/ryvnf/mineclonia/).
 
 PerfectWorld builds the physical shape of a living world: regions, settlements,
 buildings, roads, and farms — placed deterministically through mapgen
 integration.
 
-## Current State
+> **Status:** experimental. See [docs/status.md](docs/status.md) for current
+> test baseline and known issues.
 
-- Deterministic regional planner (1024×1024 regions)
-- 5 registered structure types (farmstead, houses, barn, well)
-- Village layout generator (street, plots, building assignment)
-- Structure placement pipeline with terrain analysis, preparation, and rollback
-- Farm placement with multi-phase location search
-- Simple road builder between village and farm
-- World format lock preventing silent corruption on config changes
-- 45 tests via Luanti TestKit
+## What It Does
+
+- Divides the world into 1024×1024 deterministic regions
+- Plans settlement candidates (farms, hamlets, villages) per region
+- Places 5 structure types: farmstead, two house variants, barn, well
+- Generates village layouts: main street, plots, building assignment
+- Builds local roads between village and farm
+- All placement is deterministic from world seed — same seed, same world
+
+## What It Doesn't Do (Yet)
+
+- NPCs, villagers, economy
+- Roads between settlements
+- Bridges or tunnels
+- Global route network
+- Interior decoration beyond minimal
+- Save migration between versions
 
 ## Requirements
 
 - Docker + Docker Compose
-- Python 3 for `scripts/install-content.py`
+- Python 3
+- 3 GB free disk space (Docker image + Mineclonia)
 - Port `30000/udp` available
 
 ## Quick Start
 
 ```bash
-# Install Mineclonia content
-./scripts/install-content.py
-
-# Sync local mods
+git clone git@github.com:mirivlad/pw_luanti.git
+cd pw_luanti
+python3 scripts/install-content.py
+docker compose build
 ./scripts/sync-local-mods.sh
-
-# Build Docker image
-./scripts/build-image.sh
-
-# Start server
 docker compose up -d
 ```
+
+Wait for the server:
+
+```bash
+timeout 90 sh -c 'while :; do
+  grep -q "Server for gameid=.*listening" data/debug.txt && exit 0
+  sleep 2
+done' && echo "Ready"
+```
+
+Connect with any Luanti 5.16.1 client to `127.0.0.1:30000` (game: Mineclonia).
+
+Stop: `docker compose down`
+
+See [docs/quickstart.md](docs/quickstart.md) for detailed first-run instructions.
 
 ## Running Tests
 
 ```bash
-# Start test client (requires Xvfb for headless)
+# Setup
+cp secrets/pwbot.password.example secrets/pwbot.password  # edit password
+
+# Test mode
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+
+# Start test client
 ./scripts/run-test-client.sh
 
-# Run tests via remote controller
-echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' > data/worlds/perfectworld/rc_cmd.json
+# Grant privileges
+docker exec perfectworld-dev sh -c 'echo "/grant pwbot all" > /proc/1/fd/0'
+
+# Tests auto-run when pwbot connects, or manually:
+echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
+  > data/worlds/perfectworld/rc_cmd.json
+
+# Results
+ls -t data/worlds/perfectworld/ltk_report_*.json | head -1
 ```
+
+Current: **61 total | 57 PASS | 2 FAIL | 2 ERROR | 0 SKIP**
+
+See [docs/testing.md](docs/testing.md) for full test documentation.
 
 ## Project Structure
 
 ```
 PerfectWorld/
-├── Dockerfile
-├── docker-compose.yml
-├── docker-compose.test.yml
+├── Dockerfile                    # Luanti 5.16.1 server build
+├── docker-compose.yml            # Server mode (with --terminal)
+├── docker-compose.test.yml       # Test mode (log to file)
 ├── config/
-│   ├── luanti.conf
-│   └── world.mt.example
-├── docs/
-│   └── perfectworld-architecture.md
+│   ├── luanti.conf               # Server configuration
+│   ├── content.json              # ContentDB packages to download
+│   └── world.mt.example          # Example world config
+├── locks/
+│   └── content.lock.json         # Pinned content versions
+├── docs/                         # Documentation
 ├── local_mods/
-│   ├── perfectworld/        # PerfectWorld modpack
-│   │   ├── pw_core/
-│   │   ├── pw_compat_mcl/
-│   │   ├── pw_planner/
-│   │   ├── pw_structures/
-│   │   ├── pw_roads/
-│   │   ├── pw_settlements/
-│   │   ├── pw_population/
-│   │   ├── pw_debug/
-│   │   └── pw_tests/
-│   ├── luanti_testkit/      # Universal test framework
-│   └── pw_remote_control/   # JSON remote controller
-└── scripts/
-    ├── build-image.sh
-    ├── install-content.py
-    ├── sync-local-mods.sh
-    ├── run-test-client.sh
-    ├── run-test-ui.sh
-    └── smoke-test.sh
+│   ├── perfectworld/             # PerfectWorld modpack
+│   │   ├── pw_core/              # API, version, world format lock
+│   │   ├── pw_compat_mcl/        # Mineclonia material mappings
+│   │   ├── pw_planner/           # Region planning, materialization
+│   │   ├── pw_structures/        # Structure registry, placement
+│   │   ├── pw_roads/             # Road network API
+│   │   ├── pw_settlements/       # Settlement types (skeleton)
+│   │   ├── pw_population/        # Population (skeleton)
+│   │   ├── pw_debug/             # Chat commands, screenshots
+│   │   └── pw_tests/             # TestKit-based tests
+│   ├── luanti_testkit/           # Universal test framework
+│   └── pw_remote_control/        # JSON remote controller
+├── scripts/                      # Build, install, test utilities
+└── secrets/                      # Password files (gitignored)
 ```
 
-## Limitations
+`data/` is runtime (gitignored): worlds, installed games, mods, logs.
 
-- Roads between settlements are simple straight lines
-- Bridges are not implemented
-- Population is a skeleton only
-- No global route pathfinding
-- Terrain adaptation uses flat terrace, not slope-following
-- Building interiors are minimal
+## Documentation
+
+| Document | For |
+|----------|-----|
+| [docs/quickstart.md](docs/quickstart.md) | First-time setup |
+| [docs/player-guide.md](docs/player-guide.md) | Commands and what to expect |
+| [docs/testing.md](docs/testing.md) | Running and understanding tests |
+| [docs/development.md](docs/development.md) | Architecture and contributing |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems and fixes |
+| [docs/status.md](docs/status.md) | Current state, known issues |
+| [docs/perfectworld-architecture.md](docs/perfectworld-architecture.md) | Detailed design |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
+| [MIGRATION.md](MIGRATION.md) | History: extraction from monorepo |
+
+## Origin
+
+PerfectWorld was extracted from a larger monorepo in July 2026.
+See [MIGRATION.md](MIGRATION.md) for details.
+
+## License
+
+This project does not yet have a formal license. All rights reserved until one is chosen.
