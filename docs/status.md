@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 75 total | 72 PASS | 0 FAIL | 3 SKIP | 0 ERROR
+**Test baseline:** 75 total | 75 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 ## Implemented Modules
 
@@ -41,7 +41,17 @@ See `docs/perfectworld-architecture.md` for detailed contracts.
 
 ## Known Test Issues
 
-SKIP (3): Player tests — pwbot disconnects between test runs. Expected behavior.
+None. All 75 tests pass (75 PASS, 0 FAIL, 0 SKIP, 0 ERROR).
+
+## Fingerprint v3
+
+Village fingerprint now includes:
+- `road_graph_fingerprint` — normalized geometry (all road points relative to center, /2)
+- Normalized lot positions (relative to center, /2)
+- All structure variants, roles, rotations
+- Archetype, biome_family, size_class
+
+Empty settlements (lot_count=0) get `status = "failed"`, never `"complete"`.
 
 ## Missing Systems
 
