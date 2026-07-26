@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 67 total | 63 PASS | 1 FAIL | 3 SKIP | 0 ERROR
+**Test baseline:** 67 total | 67 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 ## Implemented Modules
 
@@ -37,15 +37,7 @@
 
 ## Known Test Issues
 
-### FAIL (1)
-
-| Test | Cause |
-|------|-------|
-| `terrain_analysis_separates_slope_and_cut_checks` | Test fixture may not fully clear above-surface nodes, allowing leftover terrain from previous tests to affect surface detection. Fix: extend air clearance above the highest expected surface (y=100). |
-
-### SKIP (3)
-
-Player tests (`player.player_online`, `player.player_position`, `player.player_teleport`) — pwbot disconnects between test runs. Expected when test client disconnects.
+None. All 67 tests pass (67 PASS, 0 FAIL, 0 SKIP, 0 ERROR).
 
 ## Immediate Technical Tasks
 

@@ -332,19 +332,19 @@ T.register_test("perfectworld", "terrain_analysis_separates_slope_and_cut_checks
 	-- Verify the order: slope is checked first (design choice — the structure definition
 	-- sets max_slope, and cut/fill are secondary. A slope failure implies the terrain is
 	-- unsuitable regardless of cut/fill.)
-	local origin = {x = -1280, y = 30, z = -1280}
+	-- Use x=-1000,z=-1000 (region -1). Region -1 candidate placement range:
+	-- x: [-944, -81], z: [-944, -81]. -1000 is outside → safe from materialization.
+	-- Near spawn — chunks are already generated, load_area suffices.
+	local origin = {x = -1000, y = 30, z = -1000}
 	if minetest.load_area then
 		pcall(minetest.load_area, {x = origin.x - 16, y = origin.y - 10, z = origin.z - 16}, {x = origin.x + 16, y = origin.y + 16, z = origin.z + 16})
 	end
-	-- Create terrain with max_slope=8; use a steep linear gradient across the checked area.
-	-- The checked area is building_footprint (x: -1..1) + margin 1 = world x: -1282..-1278.
-	-- h = 30 + (dx + 10) * 4 → at dx=-2 (world -1282): h=62, at dx=2 (world -1278): h=78, slope=16 > max_slope=8.
-	-- Clear ALL nodes above surface to avoid leftover terrain from previous tests.
+	-- h = 30 + (dx + 10) * 4 → at dx=-2: h=62, at dx=2: h=78, slope=16 > max_slope=8.
 	for dx = -10, 10 do
 		for dz = -10, 10 do
 			local h = origin.y + (dx + 10) * 4
 			minetest.set_node({x = origin.x + dx, y = h, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})
-			for y = h + 1, 100 do
+			for y = h + 1, 256 do
 				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = "air"})
 			end
 		end
@@ -372,8 +372,8 @@ T.register_test("perfectworld", "terrain_analysis_separates_slope_and_cut_checks
 	ctx.assert.is_true(ok, "slope order test structure must register: " .. tostring(err))
 	local def = perfectworld.structures.get("pw_test_slope_order")
 	local ok2, result = perfectworld.structures.analyze_terrain(def, origin, 0)
-	ctx.assert.is_false(ok2, "steep terrain must be rejected regardless of cut")
-	ctx.assert.contains(result.reason, "slope", "slope check fires first by design")
+	ctx.assert.is_false(ok2, "steep terrain must be rejected; slope=" .. tostring(result and result.slope) .. " max=" .. tostring(def.terrain.max_slope))
+	ctx.assert.contains(result.reason or "", "slope", "slope check fires first by design")
 end)
 
 T.register_test("perfectworld", "terrain_preparation_idempotent", function(ctx)
