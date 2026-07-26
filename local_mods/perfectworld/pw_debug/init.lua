@@ -246,7 +246,17 @@ minetest.register_chatcommand("pw_materialize", {
     if not ok then
       return false, "materialized=false reason=" .. tostring(result)
     end
-    if result.structure_id then
+    if result.settlement then
+      return true, table.concat({
+        "village_materialized=true",
+        "settlement_id=" .. tostring(result.settlement.settlement_id),
+        "archetype=" .. tostring(result.settlement.archetype),
+        "fingerprint=" .. tostring(result.settlement.village_fingerprint),
+        "lot_count=" .. tostring(result.settlement.lot_count),
+        "structure_ids=" .. table.concat(result.settlement.structure_ids or {}, ","),
+        "road_ids=" .. table.concat(result.settlement.road_ids or {}, ","),
+      }, "\n")
+    elseif result.structure_id then
       return true, table.concat({
         "materialized=true",
         "structure_id=" .. tostring(result.structure_id),
@@ -257,7 +267,7 @@ minetest.register_chatcommand("pw_materialize", {
         "settlement_id=" .. tostring(result.settlement_id),
       }, "\n")
     end
-    return true, "village_materialized=true settlement_id=" .. tostring(result.settlement_id)
+    return true, "materialized=true"
   end,
 })
 
