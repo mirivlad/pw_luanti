@@ -322,6 +322,7 @@ function perfectworld.village_materialize(layout)
 				-- Place a short path from plot door to street
 				if plot.road_connector and street then
 					local pcx, pcz = plot.road_connector.x, plot.road_connector.z
+					local sx, sz = street.start.x, street.start.z
 					local path_steps = 8
 					local road_mat = perfectworld.compat.get_material("road")
 					for pi = 0, path_steps do
@@ -684,11 +685,31 @@ function perfectworld.planner._test_clear_cache()
 	cache = {}
 end
 
+-- === Candidate Type Helpers ===
+
+-- Composite candidates (like __village__) represent a settlement that requires
+-- multi-structure layout planning, not a single structure placement.
+perfectworld.planner.COMPOSITE_MARKER = "__village__"
+
+function perfectworld.planner.is_composite_candidate(candidate)
+  return candidate and candidate.structure_name == perfectworld.planner.COMPOSITE_MARKER
+end
+
 -- === Single Structure Materialization ===
 
 local function materialize_single_structure(candidate)
 	if perfectworld.materialization_enabled == false then
 		return false, perfectworld.world_format_error or "materialization_disabled"
+	end
+
+	-- Guard: composite candidates must go through the village pipeline.
+	if perfectworld.planner.is_composite_candidate(candidate) then
+		return false, "composite_candidate_in_single_pipeline"
+	end
+
+	-- Guard: structure_name must resolve to a registered definition.
+	if not perfectworld.structures.get(candidate.structure_name) then
+		return false, "unregistered_structure:" .. tostring(candidate.structure_name)
 	end
 
 	local x = candidate.x
@@ -1275,7 +1296,7 @@ function perfectworld.planner.materialize_region_candidate(rx, rz, index, opts)
 	-- Normal generation (materialize_chunk) must NOT pass skip_terrain_check.
 	candidate.skip_terrain_check = opts.skip_terrain_check
 
-	if candidate.structure_name == "__village__" then
+	if perfectworld.planner.is_composite_candidate(candidate) then
 		return materialize_village(candidate)
 	else
 		return materialize_single_structure(candidate)
@@ -1303,7 +1324,7 @@ function perfectworld.planner.materialize_chunk(minp, maxp)
 					if not perfectworld.planner.is_placed(candidate.id) then
 						result.attempted = result.attempted + 1
 						local ok, placed_or_reason
-						if candidate.structure_name == "__village__" then
+						if perfectworld.planner.is_composite_candidate(candidate) then
 							ok, placed_or_reason = materialize_village(candidate)
 						else
 							ok, placed_or_reason = materialize_single_structure(candidate)

@@ -4,10 +4,18 @@
 local T = luanti_testkit
 
 local function prepare_candidate_area(candidate, ground_y)
-  local def = perfectworld.structures.get(candidate.structure_name or "pw_farmstead_v1")
-  local minp, maxp = perfectworld.structures.get_footprint(def, {x = candidate.x, y = ground_y, z = candidate.z}, candidate.rotation or 0)
-  minp = {x = minp.x - 2, y = ground_y - 8, z = minp.z - 2}
-  maxp = {x = maxp.x + 2, y = 256, z = maxp.z + 2}
+  -- For composite candidates (__village__), use a reasonable footprint for terrain prep.
+  -- We don't materialize here — just clear the area so materialize_chunk can work.
+  local structure_name = candidate.structure_name
+  local def = perfectworld.structures.get(structure_name)
+  local footprint_radius = 8
+  if def then
+    local minp, maxp = perfectworld.structures.get_footprint(def, {x = candidate.x, y = ground_y, z = candidate.z}, candidate.rotation or 0)
+    footprint_radius = math.max(math.abs(maxp.x - candidate.x), math.abs(maxp.z - candidate.z),
+                                math.abs(minp.x - candidate.x), math.abs(minp.z - candidate.z)) + 2
+  end
+  local minp = {x = candidate.x - footprint_radius, y = ground_y - 8, z = candidate.z - footprint_radius}
+  local maxp = {x = candidate.x + footprint_radius, y = 256, z = candidate.z + footprint_radius}
   if minetest.load_area then
     pcall(minetest.load_area, minp, maxp)
   end
@@ -172,17 +180,19 @@ T.register_test("perfectworld", "materialize_chunk_places_complete_farmstead_acr
   for rx = -2, 2 do
     for rz = -2, 2 do
       local plan = perfectworld.planner.plan_region(rx, rz)
-      if plan.settlement_candidates and plan.settlement_candidates[1] then
-        selected_plan = plan
-        selected_candidate = plan.settlement_candidates[1]
-        break
+      for _, c in ipairs(plan.settlement_candidates or {}) do
+        if c.structure_name ~= "__village__" then
+          selected_plan = plan
+          selected_candidate = c
+          break
+        end
       end
     end
     if selected_candidate then break end
   end
 
   if not selected_candidate then
-    ctx.skip("no settlement candidate in scanned deterministic regions")
+    ctx.skip("no non-village settlement candidate in scanned deterministic regions")
     return
   end
 
@@ -229,17 +239,19 @@ T.register_test("perfectworld", "materialize_chunk_places_farmstead_once", funct
   for rx = -2, 2 do
     for rz = -2, 2 do
       local plan = perfectworld.planner.plan_region(rx, rz)
-      if plan.settlement_candidates and plan.settlement_candidates[1] then
-        selected_plan = plan
-        selected_candidate = plan.settlement_candidates[1]
-        break
+      for _, c in ipairs(plan.settlement_candidates or {}) do
+        if c.structure_name ~= "__village__" then
+          selected_plan = plan
+          selected_candidate = c
+          break
+        end
       end
     end
     if selected_candidate then break end
   end
 
   if not selected_candidate then
-    ctx.skip("no settlement candidate in scanned deterministic regions")
+    ctx.skip("no non-village settlement candidate in scanned deterministic regions")
     return
   end
 
@@ -275,6 +287,142 @@ T.register_test("perfectworld", "materialize_chunk_places_farmstead_once", funct
   ctx.assert.equal(placed_before, placed_after, "second materialize_chunk call must not add duplicate placement records")
 
   ctx.log("materialized candidate " .. c.id .. " as " .. c.structure_id .. " from plan " .. selected_plan.id)
+end)
+
+T.register_test("perfectworld", "materialize_chunk_handles_village_candidate", function(ctx)
+  -- Scan regions deterministically for a village candidate.
+  -- plan_region is deterministic, so once found, the same region always has the village.
+  local found_rx, found_rz, village_candidate
+  for rx = 0, 9 do
+    for rz = 0, 9 do
+      local plan = perfectworld.planner.plan_region(rx, rz)
+      for _, c in ipairs(plan.settlement_candidates or {}) do
+        if c.structure_name == "__village__" then
+          found_rx = rx
+          found_rz = rz
+          village_candidate = c
+          break
+        end
+      end
+    end
+    if village_candidate then break end
+  end
+
+  if not village_candidate then
+    ctx.skip("no village candidate found in scanned regions 0..9")
+    return
+  end
+
+  local ground_y = 0
+  local prep_minp, prep_maxp = prepare_candidate_area(village_candidate, ground_y)
+  if minetest.get_node({x = village_candidate.x, y = ground_y, z = village_candidate.z}).name == "ignore" then
+    minetest.emerge_area(prep_minp, prep_maxp)
+    ctx.skip("village candidate area not emerged")
+    return
+  end
+
+  perfectworld.planner._test_unmark_placed(village_candidate.id)
+  perfectworld.planner._test_clear_settlement(village_candidate.id)
+
+  local result = perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)
+  ctx.assert.is_true(
+    perfectworld.planner.is_placed(village_candidate.id),
+    "village candidate must be marked placed; result=" .. minetest.write_json(result)
+  )
+
+  -- Verify settlement plan was saved in mod_storage
+  local saved_plan = perfectworld.planner.get_settlement_plan(village_candidate.id)
+  ctx.assert.not_nil(saved_plan, "village settlement plan must be persisted in mod_storage")
+
+  -- Idempotency: second call must not duplicate
+  local placed_before = #perfectworld.planner.list_placed()
+  perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)
+  local placed_after = #perfectworld.planner.list_placed()
+  ctx.assert.equal(placed_before, placed_after, "second call must not duplicate records")
+
+  perfectworld.planner._test_unmark_placed(village_candidate.id)
+  perfectworld.planner._test_clear_settlement(village_candidate.id)
+  ctx.log("village candidate " .. village_candidate.id .. " at rx=" .. found_rx .. " rz=" .. found_rz .. " materialized")
+end)
+
+T.register_test("perfectworld", "materialize_chunk_idempotent_across_calls", function(ctx)
+  -- Select a non-village candidate and verify idempotency
+  local selected_candidate = nil
+  for rx = -2, 2 do
+    for rz = -2, 2 do
+      local plan = perfectworld.planner.plan_region(rx, rz)
+      for _, c in ipairs(plan.settlement_candidates or {}) do
+        if c.structure_name ~= "__village__" then
+          selected_candidate = c
+          break
+        end
+      end
+    end
+    if selected_candidate then break end
+  end
+
+  if not selected_candidate then
+    ctx.skip("no non-village candidate found")
+    return
+  end
+
+  local ground_y = 0
+  local prep_minp, prep_maxp = prepare_candidate_area(selected_candidate, ground_y)
+  if minetest.get_node({x = selected_candidate.x, y = ground_y, z = selected_candidate.z}).name == "ignore" then
+    minetest.emerge_area(prep_minp, prep_maxp)
+    ctx.skip("idempotency test area requested for emerge")
+    return
+  end
+
+  perfectworld.planner._test_unmark_placed(selected_candidate.id)
+  perfectworld.planner._test_clear_structure(selected_candidate.structure_id)
+
+  -- First materialization
+  local result1 = perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)
+  ctx.assert.is_true(result1.materialized >= 1, "first call must materialize")
+  local count_after_first = #perfectworld.planner.list_structures()
+
+  -- Second materialization
+  local result2 = perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)
+  local count_after_second = #perfectworld.planner.list_structures()
+  ctx.assert.equal(count_after_first, count_after_second, "second call must not add structure records")
+  ctx.assert.equal(result2.materialized, 0, "second call must not materialize new structures")
+
+  perfectworld.planner._test_unmark_placed(selected_candidate.id)
+  perfectworld.planner._test_clear_structure(selected_candidate.structure_id)
+  ctx.log("idempotency verified for " .. selected_candidate.id)
+end)
+
+T.register_test("perfectworld", "materialize_region_candidate_rejects_unknown_special", function(ctx)
+  -- Verify that an unregistered structure name produces a diagnostic error,
+  -- not a Lua exception, when passed through the placement pipeline.
+  local ground_y = 0
+  local fake_pos = {x = -5000, y = ground_y, z = -5000}
+  -- Prepare a small flat area so the placement attempt doesn't fail on terrain.
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = fake_pos.x - 8, y = ground_y - 8, z = fake_pos.z - 8},
+      {x = fake_pos.x + 8, y = 256, z = fake_pos.z + 8})
+  end
+  for dx = -8, 8 do
+    for dz = -8, 8 do
+      minetest.set_node({x = fake_pos.x + dx, y = ground_y - 1, z = fake_pos.z + dz}, {name = perfectworld.compat.resolve("dirt")})
+      for y = ground_y, 256 do
+        minetest.set_node({x = fake_pos.x + dx, y = y, z = fake_pos.z + dz}, {name = "air"})
+      end
+    end
+  end
+
+  local placed, reason = perfectworld.structures.place("__invalid_special__", {
+    structure_id = "structure_v1_test_unknown_0",
+    pos = fake_pos,
+    rotation = 0,
+    region_id = "region_v1_test",
+    settlement_id = "settlement_v1_test_unknown_0",
+  })
+  ctx.assert.is_false(placed, "unknown structure name must be rejected")
+  ctx.assert.contains(reason.reason, "not_registered", "diagnostic reason for unregistered structure")
+  ctx.log("unknown structure correctly rejected: " .. tostring(reason.reason))
 end)
 
 T.register_test("perfectworld", "roads_api_persists_and_reads_back", function(ctx)
