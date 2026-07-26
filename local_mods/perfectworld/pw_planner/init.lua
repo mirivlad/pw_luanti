@@ -1233,30 +1233,33 @@ local function generate_village_plan(candidate, profile, environment)
     fingerprint = nil, -- computed below
   }
 
-  -- Compute fingerprint
-  local fp_parts = {
-    "v2",
-    profile.archetype,
-    environment.biome_family,
-    tostring(#roads),
-    tostring(#final_lots),
-    profile.size_class,
-  }
+  -- Compute road graph fingerprint (normalized to center, captures real geometry)
+  local rg_parts = { "rg1", profile.archetype }
+  for _, road in ipairs(roads) do
+    table.insert(rg_parts, road.kind)
+    table.insert(rg_parts, tostring(#road.points))
+    table.insert(rg_parts, tostring(road.width or 2))
+    -- Normalized relative coordinates
+    for i, pt in ipairs(road.points) do
+      table.insert(rg_parts, tostring(math.floor((pt.x - center.x) / 2)))
+      table.insert(rg_parts, tostring(math.floor((pt.z - center.z) / 2)))
+    end
+  end
+  plan.road_graph_fingerprint = perfectworld.core.stable_hash(table.concat(rg_parts, "|"))
+
+  -- Compute village fingerprint (includes all lots and roads)
+  local fp_parts = { "v3", profile.archetype, environment.biome_family,
+    profile.size_class, tostring(#final_lots), tostring(#roads) }
+  -- Lots: roles, structures, rotations, normalized positions
   for _, lot in ipairs(final_lots) do
     table.insert(fp_parts, lot.role)
     table.insert(fp_parts, lot.structure_name)
     table.insert(fp_parts, tostring(lot.rotation))
-    table.insert(fp_parts, tostring(lot.center.x))
-    table.insert(fp_parts, tostring(lot.center.z))
+    table.insert(fp_parts, tostring(math.floor((lot.center.x - center.x) / 2)))
+    table.insert(fp_parts, tostring(math.floor((lot.center.z - center.z) / 2)))
   end
-  for _, road in ipairs(roads) do
-    table.insert(fp_parts, road.kind)
-    table.insert(fp_parts, tostring(#road.points))
-    if #road.points > 0 then
-      table.insert(fp_parts, tostring(road.points[1].x))
-      table.insert(fp_parts, tostring(road.points[1].z))
-    end
-  end
+  -- Road graph fingerprint
+  table.insert(fp_parts, plan.road_graph_fingerprint)
   plan.fingerprint = perfectworld.core.stable_hash(table.concat(fp_parts, "|"))
 
   return plan
@@ -1350,12 +1353,20 @@ local function materialize_village_plan(plan, profile, candidate)
   end
 
   -- Build settlement record
+  local settlement_status
+  if #placed_structures == 0 then
+    settlement_status = "failed"
+  elseif #errors > 0 then
+    settlement_status = "partial"
+  else
+    settlement_status = "complete"
+  end
   local settlement_record = {
     settlement_id = candidate.id,
     candidate_id = candidate.id,
     region_id = candidate.region_id or perfectworld.get_region_id(candidate.rx or 0, candidate.rz or 0),
     generator_version = profile.generator_version,
-    status = #errors > 0 and "partial" or "complete",
+    status = settlement_status,
     center_pos = {x = candidate.x, y = 0, z = candidate.z},
     bounds = {
       min_x = candidate.x - 50, max_x = candidate.x + 50,
@@ -1364,6 +1375,7 @@ local function materialize_village_plan(plan, profile, candidate)
     environment_profile = profile.environment,
     archetype = profile.archetype,
     village_fingerprint = plan.fingerprint,
+    road_graph_fingerprint = plan.road_graph_fingerprint,
     structure_ids = {},
     road_ids = {},
     lot_count = #placed_structures,
