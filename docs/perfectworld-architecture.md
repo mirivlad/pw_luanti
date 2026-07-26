@@ -333,6 +333,143 @@ Screenshot artifact for Structure Pipeline v1:
 artifacts/perfectworld/pw_farmstead_v1.png
 ```
 
+## Village Generation System (v2)
+
+The village generation system replaces the original single-template village
+with a biome-aware, multi-archetype grammar pipeline.
+
+### Environment Profile
+
+`pw_compat_mcl.get_environment(pos)` normalises Mineclonia biome data:
+
+```lua
+environment = {
+  biome_id       -- raw biome identifier
+  biome_name     -- resolved string name (from numeric registry)
+  biome_family   -- one of: temperate, forest, cold, dry, rocky, wet, coastal
+  heat           -- 0–100 heat point
+  humidity       -- 0–100 humidity point
+  elevation      -- Y coordinate
+  roughness      -- sampled surface height variation (0 = flat)
+  average_slope  -- alias for roughness
+  water_proximity -- distance to nearest water block, or 999
+  vegetation_density -- percentage of surface columns with flora
+  available_material_profile -- alias for biome_family
+}
+```
+
+Biome family mapping lives in `pw_compat_mcl` only — no `if biome_name == ...`
+checks in planner code. Unknown biomes fall back to `"temperate"` via
+heuristic name matching.
+
+### Village Profile
+
+`perfectworld.planner.create_village_profile(candidate, environment)` produces
+a deterministic profile:
+
+```lua
+profile = {
+  village_id          = candidate.id
+  generator_version   = PLANTER_VERSION
+  environment         = { ... }
+  seed_key            = stable_hash("village_v2" | region_seed | candidate.id | biome_family | roughness | planner_version)
+  archetype           = "linear" | "compact" | "hillside"
+  size_class          = "small"(3-5) | "medium"(5-8) | "large"(8-12)
+  target_lots
+  density
+  road_character      = { main_length, branches, curve, crossing }
+  lot_spacing         = { min_gap, max_gap, depth, set_back }
+  structure_roles     = ["dwelling", "farm", "utility", "central", ...]
+  material_palette    = { foundation, wall_primary, wall_secondary, roof, path, fence }
+  variation_parameters = { dwelling_variant, orientation_noise, spacing_jitter }
+}
+```
+
+### Three Archetypes
+
+| Archetype | Terrain | Road Graph | Characteristics |
+|-----------|---------|------------|-----------------|
+| `linear` | Flat valley, shore, narrow corridor | One curved main street | Lots on one or both sides, variable spacing, possible gaps |
+| `compact` | Open flat area, low roughness | Crossroads + branches | Denser, central public lot, multiple short streets |
+| `hillside` | Sloped, rocky, high roughness | Contour-following road | Lateral shifts to maintain gentle grade, stepped lots |
+
+Archetype selection uses weighted random with modifiers: roughness, water
+proximity, and biome family all influence the weights.
+
+### Grammar Pipeline
+
+Each village is built through an 11-step grammar, not from a fixed template:
+
+1. Select archetype (weighted by terrain)
+2. Build road skeleton (points along angles, with curves and branches)
+3. Allocate lots along roads (with spacing jitter, terrain suitability checks)
+4. Filter lots by terrain (water avoidance, max slope 4)
+5. Assign roles to lots (dwelling, farm, utility, central, optional)
+6. Select structure variants per role
+7. Orient structures toward road
+8. Check footprint overlaps and filter
+9. Form immutable materialization plan
+10. Materialize: roads first, then structures (each via `structures.place`)
+11. Save settlement record with fingerprint
+
+### Material Palettes
+
+Seven palettes provide biome-appropriate materials:
+
+| Family | Foundation | Wall Primary | Roof | Path |
+|--------|-----------|-------------|------|------|
+| temperate | cobble | wood | oak slab | coarse dirt |
+| forest | cobble | wood | oak slab | dirt |
+| cold | stone | wood | oak slab | gravel |
+| dry | sandstone | sandstone | tree trunk | sand |
+| rocky | stone | stone | stone | gravel |
+| wet | cobble | wood | oak slab | dirt |
+| coastal | stone | wood | oak slab | sand |
+
+### Settlement Record
+
+Saved via `pw_planner` mod_storage under the settlement plan key:
+
+```lua
+settlement = {
+  settlement_id       = candidate.id
+  candidate_id        = candidate.id
+  region_id
+  generator_version
+  status              = "complete" | "partial"
+  center_pos
+  bounds              = { min_x, max_x, min_z, max_z }
+  environment_profile = { ... }
+  archetype
+  village_fingerprint  = stable_hash
+  structure_ids        = [ ... ]
+  road_ids             = [ ... ]
+  lot_count
+  created_at           = game_time
+}
+```
+
+API: `pw_settlements.get(id)`, `.list_ids()`, `.list()`, `.get_by_candidate(id)`.
+
+### Deterministic Variation
+
+All randomness flows from `village_prng_new(seed_key)` where seed_key depends on:
+`region_seed + candidate.id + biome_family + roughness + planner_version`.
+Same inputs always produce the same plan, profile, and fingerprint. Different
+regions produce different results — not clones with shifted coordinates.
+
+### Fingerprint
+
+`stable_hash("v2" | archetype | biome_family | road_count | lot_count | size_class | [role, name, rotation, x, z for each lot] | [road_kind, point_count, first_point for each road])`
+
+Used for determinism verification, save diagnostics, and cross-region comparison.
+
+### Debug Commands
+
+- `/pw_village_list` — list all materialized settlements
+- `/pw_village_info [id]` — detailed info (archetype, fingerprint, lots, roads)
+- `/pw_village_tp <id>` — teleport to settlement center
+
 ## Future Roads
 
 `pw_roads` currently defines the API boundary only. Future work should add:
