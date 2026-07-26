@@ -28,6 +28,9 @@ All commands require at least `interact` privilege. Some require `server`.
 | `/pw_region` | Show your current region |
 | `/pw_plan [rx] [rz]` | Show the plan for a region |
 | `/pw_structure <id>` | Show a materialized structure record |
+| `/pw_village_list` | List all generated village settlements |
+| `/pw_village_info [id]` | Show detailed settlement info (archetype, fingerprint, lots) |
+| `/pw_village_tp <id>` | Teleport to a settlement center (requires teleport priv)
 | `/pw_demo` | Show demo village+farm coordinates |
 
 ### Development (server privilege)
