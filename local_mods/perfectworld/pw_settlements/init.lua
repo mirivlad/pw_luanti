@@ -20,4 +20,34 @@ function perfectworld.settlements.get_type(name)
   return settlement_types[name] and deep_copy(settlement_types[name]) or nil
 end
 
-minetest.log("action", "[pw_settlements] loaded (skeleton)")
+-- === Settlement Record API ===
+-- Persisted via pw_planner mod_storage. This module provides accessors.
+
+function perfectworld.settlements.get(settlement_id)
+  local data = perfectworld.planner.get_settlement_plan(settlement_id)
+  if data and data.settlement then
+    return deep_copy(data.settlement)
+  end
+  return nil
+end
+
+function perfectworld.settlements.list_ids()
+  return perfectworld.planner.list_settlements()
+end
+
+function perfectworld.settlements.list()
+  local out = {}
+  for _, id in ipairs(perfectworld.settlements.list_ids()) do
+    local s = perfectworld.settlements.get(id)
+    if s then
+      table.insert(out, s)
+    end
+  end
+  return out
+end
+
+function perfectworld.settlements.get_by_candidate(candidate_id)
+  return perfectworld.settlements.get(candidate_id)
+end
+
+minetest.log("action", "[pw_settlements] loaded")

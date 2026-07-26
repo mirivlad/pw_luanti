@@ -800,4 +800,84 @@ minetest.register_chatcommand("pw_photo_shoot", {
 	end,
 })
 
+-- === Village Settlement Commands ===
+
+minetest.register_chatcommand("pw_village_list", {
+  params = "",
+  description = "List all materialized village settlements",
+  privs = {interact = true},
+  func = function(name)
+    local ids = perfectworld.settlements.list_ids()
+    local lines = {"settlement_count=" .. #ids}
+    for _, id in ipairs(ids) do
+      local s = perfectworld.settlements.get(id)
+      if s then
+        table.insert(lines, "  " .. id .. " archetype=" .. (s.archetype or "?") .. " status=" .. (s.status or "?") .. " lots=" .. (s.lot_count or "?"))
+      end
+    end
+    return true, table.concat(lines, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_village_info", {
+  params = "<settlement_id>",
+  description = "Show detailed info about a specific village settlement",
+  privs = {interact = true},
+  func = function(name, param)
+    if not param or param == "" then
+      local player = minetest.get_player_by_name(name)
+      if not player then return false, "Player not found" end
+      local pos = player:get_pos()
+      if not pos then return false, "No position" end
+      local best_id, best_dist = nil, math.huge
+      for _, id in ipairs(perfectworld.settlements.list_ids()) do
+        local s = perfectworld.settlements.get(id)
+        if s and s.center_pos then
+          local dx = pos.x - s.center_pos.x
+          local dz = pos.z - s.center_pos.z
+          local d = math.sqrt(dx*dx + dz*dz)
+          if d < best_dist then
+            best_dist = d
+            best_id = id
+          end
+        end
+      end
+      if not best_id then return false, "No settlements found" end
+      param = best_id
+    end
+    local s = perfectworld.settlements.get(param)
+    if not s then return false, "Settlement not found: " .. param end
+    local lines = {
+      "settlement_id=" .. tostring(s.settlement_id),
+      "region_id=" .. tostring(s.region_id),
+      "archetype=" .. tostring(s.archetype),
+      "status=" .. tostring(s.status),
+      "center=" .. minetest.pos_to_string(s.center_pos or {}),
+      "env_family=" .. tostring(s.environment_profile and s.environment_profile.biome_family or "?"),
+      "fingerprint=" .. tostring(s.village_fingerprint),
+      "lot_count=" .. tostring(s.lot_count),
+      "structure_ids=" .. table.concat(s.structure_ids or {}, ","),
+      "road_ids=" .. table.concat(s.road_ids or {}, ","),
+      "generator=" .. tostring(s.generator_version),
+    }
+    return true, table.concat(lines, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_village_tp", {
+  params = "<settlement_id>",
+  description = "Teleport to a village settlement center",
+  privs = {teleport = true},
+  func = function(name, param)
+    if not param or param == "" then return false, "Usage: /pw_village_tp <id>" end
+    local s = perfectworld.settlements.get(param)
+    if not s then return false, "Settlement not found: " .. param end
+    local player = minetest.get_player_by_name(name)
+    if not player then return false, "Player not found" end
+    local cp = s.center_pos or {x = 0, y = 0, z = 0}
+    player:set_pos({x = cp.x, y = cp.y + 5, z = cp.z})
+    return true, "Teleported to " .. param
+  end,
+})
+
 minetest.log("action", "[pw_debug] loaded")
