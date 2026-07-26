@@ -38,7 +38,7 @@ integration.
 ## Quick Start
 
 ```bash
-git clone git@github.com:mirivlad/pw_luanti.git
+git clone https://github.com/mirivlad/pw_luanti.git
 cd pw_luanti
 python3 scripts/install-content.py
 docker compose build
