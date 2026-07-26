@@ -1,0 +1,43 @@
+# Runtime data
+data/*
+!data/worlds/
+data/worlds/*
+!data/worlds/perfectworld/
+data/worlds/perfectworld/*
+!data/worlds/perfectworld/world.mt
+data/worlds/perfectworld/*.sqlite
+data/worlds/perfectworld/ltk_report_*.json
+data/worlds/perfectworld/rc_cmd.json
+data/worlds/perfectworld/awbot_*.json
+data/debug.txt
+data/debug-test.txt
+data/mod_data/
+data/games/
+data/mods/
+
+# Secrets
+secrets/*
+!secrets/*.example
+
+# Logs
+logs/*
+*.log
+
+# Runtime
+run/
+artifacts/
+backups/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+.env

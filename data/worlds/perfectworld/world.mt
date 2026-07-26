@@ -1,0 +1,32 @@
+gameid = mineclonia
+backend = sqlite3
+player_backend = sqlite3
+auth_backend = sqlite3
+mod_storage_backend = sqlite3
+
+mg_name = carpathian
+seed = 5565029253200206738
+fixed_map_seed = 5565029253200206738 
+water_level = 1
+chunksize = 5
+
+# PerfectWorld modpack
+load_mod_pw_core = true
+load_mod_pw_compat_mcl = true
+load_mod_pw_structures = true
+load_mod_pw_planner = true
+load_mod_pw_roads = true
+load_mod_pw_settlements = true
+load_mod_pw_population = true
+load_mod_pw_debug = true
+load_mod_pw_tests = true
+
+# Test infrastructure
+load_mod_luanti_testkit = true
+
+# Remote control
+load_mod_pw_remote_control = true
+
+# External Mineclonia support mods.
+load_mod_mcl_decor = true
+load_mod_mcl_cozy = true

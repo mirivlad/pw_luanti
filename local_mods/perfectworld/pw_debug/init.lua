@@ -1,0 +1,803 @@
+perfectworld = rawget(_G, "perfectworld") or {}
+_G.perfectworld = perfectworld
+perfectworld.debug = perfectworld.debug or {}
+
+local function get_test_player()
+  return minetest.settings:get("perfectworld.test_player") or "pwbot"
+end
+
+local function safe_string(v)
+  if type(v) == "string" then return v end
+  if type(v) == "number" then return tostring(v) end
+  return tostring(v)
+end
+
+local function active_modules()
+  local modules = {}
+  for _, entry in ipairs({
+    {"core", perfectworld.core},
+    {"planner", perfectworld.planner},
+    {"structures", perfectworld.structures},
+    {"roads", perfectworld.roads},
+    {"settlements", perfectworld.settlements},
+    {"population", perfectworld.population},
+    {"compat_mcl", perfectworld.compat},
+    {"debug", perfectworld.debug},
+  }) do
+    if entry[2] then
+      table.insert(modules, entry[1])
+    end
+  end
+  table.sort(modules)
+  return modules
+end
+
+minetest.register_chatcommand("pw_status", {
+  params = "",
+  description = "Show PerfectWorld version and configuration",
+  privs = {interact = true},
+  func = function(name)
+    local structures = perfectworld.structures and perfectworld.structures.list() or {}
+    local info = {
+      "version=" .. safe_string(perfectworld.VERSION or "?"),
+      "api=perfectworld",
+      "planner_version=" .. safe_string(perfectworld.PLANNER_VERSION or "?"),
+      "region_size=" .. safe_string(perfectworld.REGION_SIZE or "?"),
+      "world_seed_masked=" .. (perfectworld.world_seed_string and (perfectworld.world_seed_string:sub(1, 8) .. "...") or "?"),
+      "world_format_version=" .. safe_string(perfectworld.WORLD_FORMAT_VERSION or "?"),
+      "materialization_enabled=" .. tostring(perfectworld.materialization_enabled ~= false),
+      "materialization_error=" .. safe_string(perfectworld.world_format_error or ""),
+      "structures=" .. #structures,
+      "modules=" .. table.concat(active_modules(), ","),
+    }
+    return true, table.concat(info, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_region", {
+  params = "",
+  description = "Show the region the calling player is standing in",
+  privs = {interact = true},
+  func = function(name)
+    local player = minetest.get_player_by_name(name)
+    if not player then return false, "Player not found" end
+    local pos = player:get_pos()
+    if not pos then return false, "No position" end
+    local rx, rz = perfectworld.get_region_coords(pos)
+    local rid = perfectworld.get_region_id(rx, rz)
+    local plan = perfectworld.planner and perfectworld.planner.plan_region(rx, rz)
+    local info = {
+      "region_id=" .. rid,
+      "rx=" .. rx,
+      "rz=" .. rz,
+      "minp=" .. (plan and minetest.pos_to_string(plan.minp) or "?"),
+      "maxp=" .. (plan and minetest.pos_to_string(plan.maxp) or "?"),
+      "settlement_candidates=" .. (plan and #(plan.settlement_candidates or {}) or 0),
+      "road_anchors=" .. (plan and #(plan.road_anchors or {}) or 0),
+    }
+    return true, table.concat(info, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_plan", {
+  params = "[rx] [rz]",
+  description = "Show the plan for current region or specified region",
+  privs = {interact = true},
+  func = function(name, params)
+    local rx, rz
+    if params and params ~= "" then
+      local rx_str, rz_str = params:match("^(%-?%d+)%s+(%-?%d+)$")
+      if not rx_str then return false, "Usage: /pw_plan <rx> <rz>" end
+      rx, rz = tonumber(rx_str), tonumber(rz_str)
+    else
+      local player = minetest.get_player_by_name(name)
+      if not player then return false, "Player not found" end
+      local pos = player:get_pos()
+      if not pos then return false, "No position" end
+      rx, rz = perfectworld.get_region_coords(pos)
+    end
+    local plan = perfectworld.planner and perfectworld.planner.plan_region(rx, rz)
+    if not plan then return false, "No plan available" end
+    local lines = {"plan_id=" .. plan.id}
+    table.insert(lines, "rx=" .. tostring(plan.rx))
+    table.insert(lines, "rz=" .. tostring(plan.rz))
+    table.insert(lines, "planner_version=" .. tostring(plan.planner_version))
+    table.insert(lines, "settlement_candidates=" .. #(plan.settlement_candidates or {}))
+    table.insert(lines, "road_anchors=" .. #(plan.road_anchors or {}))
+    for _, sc in ipairs(plan.settlement_candidates or {}) do
+      table.insert(lines, table.concat({
+        "candidate_id=" .. sc.id,
+        "type=" .. sc.type,
+        "x=" .. sc.x,
+        "z=" .. sc.z,
+        "priority=" .. sc.priority,
+        "structure_name=" .. tostring(sc.structure_name or ""),
+        "structure_id=" .. tostring(sc.structure_id or ""),
+        "rotation=" .. tostring(sc.rotation or 0),
+        "connection_required=" .. tostring(sc.connection_required == true),
+        "status=" .. sc.status,
+      }, " "))
+    end
+    return true, table.concat(lines, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_structure", {
+  params = "<structure_id>",
+  description = "Show a materialized PerfectWorld structure record",
+  privs = {interact = true},
+  func = function(name, params)
+    local structure_id = params and params:match("^(%S+)$")
+    if not structure_id then
+      return false, "Usage: /pw_structure <structure_id>"
+    end
+    local record = perfectworld.planner and perfectworld.planner.get_structure(structure_id)
+    if not record then
+      return false, "structure_not_found=" .. structure_id
+    end
+    local pos = record.position and minetest.pos_to_string(record.position) or "?"
+    return true, table.concat({
+      "structure_id=" .. tostring(record.structure_id),
+      "structure_name=" .. tostring(record.structure_name),
+      "definition_version=" .. tostring(record.definition_version),
+      "status=" .. tostring(record.status),
+      "position=" .. pos,
+      "rotation=" .. tostring(record.rotation),
+      "region_id=" .. tostring(record.region_id),
+      "settlement_id=" .. tostring(record.settlement_id),
+    }, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_prepare_shot", {
+  params = "[player] <structure_id> [yaw] [pitch]",
+  description = "Teleport a player near a PerfectWorld structure for development screenshots",
+  privs = {server = true},
+  func = function(name, params)
+    local first, second, third, fourth = (params or ""):match("^(%S+)%s*(%S*)%s*(%S*)%s*(%S*)$")
+    if not first then
+      return false, "Usage: /pw_prepare_shot [player] <structure_id>"
+    end
+    local player_name = second ~= "" and first or name
+    local structure_id = second ~= "" and second or first
+    local yaw = tonumber(third) or 3.9
+    local pitch = tonumber(fourth) or 0.75
+    if player_name == "" then
+      return false, "Usage from console: /pw_prepare_shot <player> <structure_id>"
+    end
+    local player = minetest.get_player_by_name(player_name)
+    if not player then
+      return false, "player_not_found=" .. tostring(player_name)
+    end
+    local record = perfectworld.planner and perfectworld.planner.get_structure(structure_id)
+    if not record or not record.position then
+      return false, "structure_not_found=" .. tostring(structure_id)
+    end
+    local pos = record.position
+    local camera = {x = pos.x + 14, y = pos.y + 12, z = pos.z + 14}
+    player:set_hp(20)
+    if player.set_armor_groups then
+      player:set_armor_groups({immortal = 1})
+    end
+    if player.set_physics_override then
+      player:set_physics_override({gravity = 0})
+    end
+    player:set_pos(camera)
+    if player.set_look_horizontal then
+      player:set_look_horizontal(yaw)
+    end
+    if player.set_look_vertical then
+      player:set_look_vertical(pitch)
+    end
+    minetest.set_timeofday(0.35)
+    return true, table.concat({
+      "prepared=true",
+      "player=" .. player_name,
+      "structure_id=" .. tostring(record.structure_id),
+      "camera=" .. minetest.pos_to_string(camera),
+      "target=" .. minetest.pos_to_string(pos),
+      "yaw=" .. tostring(yaw),
+      "pitch=" .. tostring(pitch),
+    }, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_materialize", {
+  params = "<rx> <rz> <index> [force]",
+  description = "Materialize a planned PerfectWorld structure for development checks",
+  privs = {server = true},
+  func = function(name, params)
+    local rx_s, rz_s, index_s, force_s = (params or ""):match("^(%-?%d+)%s+(%-?%d+)%s+(%d+)%s*(%S*)$")
+    if not rx_s then
+      return false, "Usage: /pw_materialize <rx> <rz> <index> [force]"
+    end
+    local rx = tonumber(rx_s)
+    local rz = tonumber(rz_s)
+    local index = tonumber(index_s)
+    local force = force_s == "force"
+    if force then
+      local plan = perfectworld.planner.plan_region(rx, rz)
+      local candidate = (plan.settlement_candidates or {})[(index or 0) + 1]
+      local def = candidate and perfectworld.structures.get(candidate.structure_name or "pw_farmstead_v1")
+      if candidate and def then
+        local minp, maxp = perfectworld.structures.get_footprint(def, {x = candidate.x, y = 0, z = candidate.z}, candidate.rotation or 0)
+        minp = {x = minp.x - 2, y = -8, z = minp.z - 2}
+        maxp = {x = maxp.x + 2, y = 256, z = maxp.z + 2}
+        if minetest.load_area then
+          pcall(minetest.load_area, minp, maxp)
+        end
+        local ground = perfectworld.compat.get_material("ground")
+        for x = minp.x, maxp.x do
+          for z = minp.z, maxp.z do
+            minetest.set_node({x = x, y = -1, z = z}, {name = ground})
+            for y = 0, 256 do
+              minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+            end
+          end
+        end
+      end
+    end
+    local ok, result = perfectworld.planner.materialize_region_candidate(
+      rx,
+      rz,
+      index,
+      {force = force}
+    )
+    if not ok then
+      return false, "materialized=false reason=" .. tostring(result)
+    end
+    if result.structure_id then
+      return true, table.concat({
+        "materialized=true",
+        "structure_id=" .. tostring(result.structure_id),
+        "structure_name=" .. tostring(result.structure_name),
+        "position=" .. (result.position and minetest.pos_to_string(result.position) or "nil"),
+        "rotation=" .. tostring(result.rotation),
+        "region_id=" .. tostring(result.region_id),
+        "settlement_id=" .. tostring(result.settlement_id),
+      }, "\n")
+    end
+    return true, "village_materialized=true settlement_id=" .. tostring(result.settlement_id)
+  end,
+})
+
+minetest.register_chatcommand("pw_run_tests", {
+	params = "",
+	description = "Run all PerfectWorld tests via Luanti TestKit (admin only)",
+	privs = {server = true},
+	func = function(name)
+		if not luanti_testkit or not luanti_testkit.run_all then
+			return false, "luanti_testkit not available"
+		end
+		local ok, err = pcall(luanti_testkit.run_all, {player_name = name})
+		if not ok then
+			return false, "test run failed: " .. tostring(err)
+		end
+		return true, "Tests triggered. See server log and ltk_report_*.json for results."
+	end,
+})
+
+minetest.register_chatcommand("pw_demo", {
+	params = "",
+	description = "Show coordinates of first village+farm demo slice",
+	privs = {interact = true},
+	func = function(name)
+		local settlements = perfectworld.planner.list_settlements()
+		local roads = perfectworld.planner.list_roads()
+
+		if #settlements == 0 then
+			return false, "No materialized settlements yet. Use /pw_materialize in a region with a village candidate."
+		end
+
+		local lines = {}
+		table.insert(lines, "=== PerfectWorld Demo Slice ===")
+
+		for _, sid in ipairs(settlements) do
+			local plan = perfectworld.planner.get_settlement_plan(sid)
+			if plan then
+				table.insert(lines, "settlement_id=" .. tostring(sid))
+				table.insert(lines, "  center=" .. minetest.pos_to_string({x = plan.center.x, y = 0, z = plan.center.z}))
+				table.insert(lines, "  type=" .. tostring(plan.type or "village"))
+				table.insert(lines, "  plots=" .. tostring(#(plan.plots or {})))
+				if plan.external_connector then
+					table.insert(lines, "  external_connector=" .. minetest.pos_to_string({x = plan.external_connector.x, y = 0, z = plan.external_connector.z}))
+				end
+
+				-- Find road from this settlement
+				for _, road in ipairs(roads) do
+					if road.from_settlement == sid then
+						table.insert(lines, "  road_id=" .. tostring(road.id))
+						table.insert(lines, "  road_length=" .. tostring(road.length or 0))
+						if road.path and road.path[1] then
+							table.insert(lines, "  road_start=" .. minetest.pos_to_string(road.path[1]))
+						end
+						if road.path and road.path[#road.path] then
+							table.insert(lines, "  road_end=" .. minetest.pos_to_string(road.path[#road.path]))
+						end
+					end
+				end
+
+				-- Find farm structure
+				local structures = perfectworld.planner.list_structures()
+				for _, s in ipairs(structures) do
+					if string.find(s.structure_id, "_farm") then
+						table.insert(lines, "  farm_structure_id=" .. tostring(s.structure_id))
+						table.insert(lines, "  farm_position=" .. minetest.pos_to_string(s.position))
+					end
+				end
+			end
+		end
+
+		if #roads == 0 then
+			table.insert(lines, "No roads yet.")
+		end
+
+		table.insert(lines, "Use /pw_prepare_shot <player> <structure_id> to teleport.")
+		return true, table.concat(lines, "\n")
+	end,
+})
+
+-- === Photo / Screenshot System ===
+-- Бессмертие test player (watchdog)
+local function test_player_immortal()
+  local pname = get_test_player()
+  local player = minetest.get_player_by_name(pname)
+  if player then
+    local hp = player:get_hp()
+    if hp < 20 then
+      player:set_hp(20)
+    end
+  end
+end
+
+local immortal_timer = 0
+minetest.register_globalstep(function(dtime)
+  immortal_timer = immortal_timer + dtime
+  if immortal_timer >= 5 then -- каждые 5 секунд
+    immortal_timer = 0
+    test_player_immortal()
+  end
+end)
+
+local function set_day()
+  minetest.set_timeofday(7000 / 24000)
+end
+
+local function is_solid_node(pos)
+  local node = minetest.get_node(pos)
+  if node.name == "air" or node.name == "ignore" then return false end
+  local def = minetest.registered_nodes[node.name]
+  if not def then return true end
+  if def.walkable == false then return false end
+  if def.buildable_to then return false end
+  return true
+end
+
+local function find_good_camera(center, radius)
+  local distance = math.max(radius * 2.5, 16)
+  -- берём фактическую высоту поверхности в центре, а не center.y
+  local ground_y = center.y
+  for y = 50, -10, -1 do
+    local node = minetest.get_node({x = center.x, y = y, z = center.z})
+    if node.name ~= "air" and node.name ~= "ignore" then
+      ground_y = y
+      break
+    end
+  end
+
+  local angles = {
+    {yaw = 0,         pitch = -0.3},
+    {yaw = math.pi,   pitch = -0.3},
+    {yaw = math.pi/2, pitch = -0.3},
+    {yaw = -math.pi/2,pitch = -0.3},
+    {yaw = math.pi/4, pitch = -0.4},
+    {yaw = -math.pi/4,pitch = -0.4},
+    {yaw = 3*math.pi/4,pitch = -0.4},
+    {yaw = -3*math.pi/4,pitch = -0.4},
+  }
+  local best = nil
+  local best_obstruction = math.huge
+
+  for _, angle in ipairs(angles) do
+    local cx = center.x + math.floor(math.cos(angle.yaw) * distance)
+    local cz = center.z + math.floor(math.sin(angle.yaw) * distance)
+
+    -- найти поверхность под camera pos
+    local surface_y = ground_y
+    for y = 50, -10, -1 do
+      local node = minetest.get_node({x = cx, y = y, z = cz})
+      if node.name ~= "air" and node.name ~= "ignore" then
+        surface_y = y
+        break
+      end
+    end
+    local camera_pos = {x = cx, y = surface_y + 3, z = cz}
+
+    -- raycast: camera -> центр на уровне земли
+    local target = {x = center.x, y = ground_y + 1, z = center.z}
+    local obstruction = 0
+    local ray = minetest.raycast(camera_pos, target, false, false)
+    for hit in ray do
+      local dist = vector.distance(camera_pos, hit.under)
+      if is_solid_node(hit.under) then
+        -- блок ближе чем 80% пути до центра — препятствие
+        if dist < distance * 0.8 then
+          obstruction = obstruction + (1 - dist / distance)
+        end
+      end
+    end
+
+    if obstruction == 0 then
+      -- идеально: нет препятствий
+      local yaw = angle.yaw + math.pi -- развернуть лицом к центру
+      return camera_pos, yaw, angle.pitch, true
+    end
+
+    if obstruction < best_obstruction then
+      best_obstruction = obstruction
+      best = {pos = camera_pos, yaw = angle.yaw + math.pi, pitch = angle.pitch}
+    end
+  end
+
+  if best then
+    return best.pos, best.yaw, best.pitch, false
+  end
+  return {x = center.x, y = ground_y + 20, z = center.z + 20}, 0, -0.5, false
+end
+
+local function get_structure_center_and_radius(struct_id)
+  -- Поиск по materialized structures
+  local records = perfectworld.planner and perfectworld.planner.list_structures()
+  if records then
+    for _, r in ipairs(records) do
+      if r.structure_id == struct_id or struct_id == "" then
+        local def = perfectworld.structures and perfectworld.structures.get(r.structure_name)
+        local size = def and def.size or {x = 10, y = 5, z = 10}
+        local radius = math.max(size.x, size.z) / 2
+        return r.position, radius, r.structure_id
+      end
+    end
+  end
+  -- Поиск по settlement plans
+  local settlements = perfectworld.planner and perfectworld.planner.list_settlements()
+  if settlements then
+    for _, sid in ipairs(settlements) do
+      if sid == struct_id or struct_id == "" then
+        local plan = perfectworld.planner.get_settlement_plan(sid)
+        if plan and plan.center then
+          local center = {x = plan.center.x, y = 0, z = plan.center.z}
+          return center, 25, sid
+        end
+      end
+    end
+  end
+  return nil, nil, nil
+end
+
+
+
+minetest.register_chatcommand("pw_photo_setup", {
+  params = "",
+  description = "Setup screenshot scene: time 7000, immortality, teleport safety",
+  privs = {server = true},
+  func = function(name)
+    set_day()
+    local player = minetest.get_player_by_name(get_test_player())
+    if not player then
+      return false, "test player not connected"
+    end
+    player:set_hp(20)
+    if player.set_armor_groups then
+      player:set_armor_groups({immortal = 1})
+    end
+    if player.set_physics_override then
+      player:set_physics_override({gravity = 0})
+    end
+    -- убрать интерфейс
+    player:hud_set_flags({
+      hotbar = false,
+      healthbar = false,
+      breathbar = false,
+      minimap = false,
+      crosshair = false,
+      wielditem = false,
+    })
+    -- закрыть любые открытые formspec (чат, help)
+    minetest.close_formspec(get_test_player(), "")
+    return true, "scene prepared"
+  end,
+})
+
+minetest.register_chatcommand("pw_photo_village", {
+  params = "",
+  description = "Flatten terrain and force-materialize village in (-2,0)",
+  privs = {server = true},
+  func = function(name)
+    if not perfectworld.materialization_enabled then
+      return false, "materialization disabled"
+    end
+    local ok, mat_result = perfectworld.planner.materialize_region_candidate(-2, 0, 1, {
+      force = true,
+      skip_terrain_check = true,
+    })
+    if not ok then
+      return false, "village materialization failed: " .. tostring(mat_result)
+    end
+    local sid = mat_result.settlement_id
+    local plan = perfectworld.planner.get_settlement_plan(sid)
+    if plan and plan.center then
+      return true, table.concat({
+        "settlement_id=" .. tostring(sid),
+        "center=" .. minetest.pos_to_string({x = plan.center.x, y = 0, z = plan.center.z}),
+        "plots=" .. tostring(#(plan.plots or {})),
+        "external_connector=" .. (plan.external_connector and minetest.pos_to_string(plan.external_connector) or "none"),
+      }, "\n")
+    end
+    return false, "village spawned but no plan found"
+  end,
+})
+
+minetest.register_chatcommand("pw_photo_structure", {
+  params = "<name> [rx] [rz] [index]",
+  description = "Flatten terrain and force-materialize a structure",
+  privs = {server = true},
+  func = function(name, params)
+    local struct_name, rx_s, rz_s, idx_s = (params or ""):match("^(%S+)%s*(%-?%d*)%s*(%-?%d*)%s*(%d*)$")
+    if not struct_name or struct_name == "" then
+      return false, "Usage: /pw_photo_structure <name> [rx] [rz] [index]"
+    end
+    if not perfectworld.materialization_enabled then
+      return false, "materialization disabled"
+    end
+    local rx = tonumber(rx_s) or -2
+    local rz = tonumber(rz_s) or -1
+    local index = tonumber(idx_s) or 0
+    local ok, result = perfectworld.planner.materialize_region_candidate(rx, rz, index, {
+      force = true,
+      skip_terrain_check = true,
+    })
+    if not ok then
+      return false, "spawn failed: " .. tostring(result)
+    end
+    if result.structure_id then
+      return true, table.concat({
+        "structure_id=" .. tostring(result.structure_id),
+        "structure_name=" .. tostring(struct_name),
+        "position=" .. (result.position and minetest.pos_to_string(result.position) or "nil"),
+      }, "\n")
+    end
+    return true, "village spawned settlement_id=" .. tostring(result.settlement_id or "?")
+  end,
+})
+
+minetest.register_chatcommand("pw_photo_camera", {
+  params = "<x> <y> <z> [radius]",
+  description = "Position camera at a good angle looking at (x,y,z)",
+  privs = {server = true},
+  func = function(name, params)
+    local x_s, y_s, z_s, rad_s = (params or ""):match("^(%-?%d+)%s+(%-?%d+)%s+(%-?%d+)%s*(%d*)$")
+    if not x_s then
+      return false, "Usage: /pw_photo_camera <x> <y> <z> [radius]"
+    end
+    local center = {x = tonumber(x_s), y = tonumber(y_s) or 0, z = tonumber(z_s)}
+    local radius = tonumber(rad_s) or 15
+    local player = minetest.get_player_by_name(get_test_player())
+    if not player then
+      return false, "test player not connected"
+    end
+    set_day()
+    local cam_pos, yaw, pitch, no_obstruction = find_good_camera(center, radius)
+    player:set_pos(cam_pos)
+    if player.set_look_horizontal then
+      player:set_look_horizontal(yaw)
+    end
+    if player.set_look_vertical then
+      player:set_look_vertical(pitch)
+    end
+    return true, table.concat({
+      "camera=" .. minetest.pos_to_string(cam_pos),
+      "target=" .. minetest.pos_to_string(center),
+      "yaw=" .. tostring(yaw),
+      "pitch=" .. tostring(pitch),
+      "no_obstruction=" .. tostring(no_obstruction),
+      "radius=" .. tostring(radius),
+    }, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_photo_shoot", {
+	params = "<target_type>",
+	description = "Validate, setup camera, and return machine-readable data for a screenshot target. target_type: farm, village, road",
+	privs = {server = true},
+	func = function(name, params)
+		local target_type = (params or ""):match("^%s*(%S+)%s*$")
+		if not target_type or (target_type ~= "farm" and target_type ~= "village" and target_type ~= "road") then
+			return false, "Usage: /pw_photo_shoot <farm|village|road>"
+		end
+
+		local player = minetest.get_player_by_name(get_test_player())
+		if not player then
+			return false, table.concat({
+				"target_type=" .. target_type,
+				"status=FAIL",
+				"reason=pwbot_not_connected",
+			}, "\n")
+		end
+
+		-- Resolve target
+		local center, bbox_min, bbox_max, radius, object_id, extra
+
+		if target_type == "farm" then
+			local structures = perfectworld.planner.list_structures()
+			local farm_rec
+			for _, s in ipairs(structures) do
+				if string.find(s.structure_id or "", "_farm") then
+					farm_rec = s
+					break
+				end
+			end
+			if not farm_rec or not farm_rec.position then
+				return false, table.concat({
+					"target_type=farm",
+					"status=FAIL",
+					"reason=farm_not_found",
+					"hint=Run pw_materialize first to spawn village+farm+road",
+				}, "\n")
+			end
+			object_id = farm_rec.structure_id
+			center = farm_rec.position
+			local def = perfectworld.structures and perfectworld.structures.get(farm_rec.structure_name or "pw_farmstead_v1")
+			local size = def and def.size or {x = 10, y = 7, z = 10}
+			radius = math.max(size.x, size.z) / 2 + 1
+			bbox_min = {x = center.x - radius, y = center.y, z = center.z - radius}
+			bbox_max = {x = center.x + radius, y = center.y + size.y, z = center.z + radius}
+			extra = {
+				structure_name = farm_rec.structure_name,
+				rotation = farm_rec.rotation,
+			}
+		elseif target_type == "village" then
+			local settlements = perfectworld.planner.list_settlements()
+			if #settlements == 0 then
+				return false, table.concat({
+					"target_type=village",
+					"status=FAIL",
+					"reason=no_settlements_found",
+					"hint=Run pw_materialize first to spawn village+farm+road",
+				}, "\n")
+			end
+			local sid = settlements[1]
+			object_id = sid
+			local plan = perfectworld.planner.get_settlement_plan(sid)
+			if not plan or not plan.center then
+				return false, table.concat({
+					"target_type=village",
+					"status=FAIL",
+					"reason=settlement_plan_incomplete",
+					"object_id=" .. tostring(sid),
+				}, "\n")
+			end
+			center = {x = plan.center.x, y = 0, z = plan.center.z}
+			radius = 25
+			local half = radius
+			bbox_min = {x = center.x - half, y = 30, z = center.z - half}
+			bbox_max = {x = center.x + half, y = 50, z = center.z + half}
+			extra = {
+				settlement_type = plan.type,
+				plots = #(plan.plots or {}),
+			}
+		elseif target_type == "road" then
+			local roads = perfectworld.planner.list_roads()
+			if #roads == 0 then
+				return false, table.concat({
+					"target_type=road",
+					"status=FAIL",
+					"reason=no_roads_found",
+					"hint=Run pw_materialize first to spawn village+farm+road",
+				}, "\n")
+			end
+			local road = roads[1]
+			object_id = road.id
+			if not road.path or #road.path < 2 then
+				return false, table.concat({
+					"target_type=road",
+					"status=FAIL",
+					"reason=road_path_empty",
+					"object_id=" .. tostring(road.id),
+				}, "\n")
+			end
+			local path = road.path
+			local mid_idx = math.floor(#path / 2)
+			center = path[mid_idx]
+			local min_x, min_z, max_x, max_z = center.x, center.z, center.x, center.z
+			for _, p in ipairs(path) do
+				if p.x < min_x then min_x = p.x end
+				if p.z < min_z then min_z = p.z end
+				if p.x > max_x then max_x = p.x end
+				if p.z > max_z then max_z = p.z end
+			end
+			local width = math.max(max_x - min_x, max_z - min_z)
+			radius = math.ceil(width / 2) + 5
+			bbox_min = {x = min_x - 3, y = 30, z = min_z - 3}
+			bbox_max = {x = max_x + 3, y = 40, z = max_z + 3}
+			extra = {
+				road_length = road.length or #path,
+				path_nodes = #path,
+				road_start = path[1],
+				road_end = path[#path],
+			}
+		end
+
+		-- Load chunks around target + camera area
+		local load_min = {x = bbox_min.x - 20, y = -10, z = bbox_min.z - 20}
+		local load_max = {x = bbox_max.x + 20, y = 60, z = bbox_max.z + 20}
+		pcall(minetest.load_area, load_min, load_max)
+
+		-- Check player not inside solid
+		local pos = player:get_pos()
+		if pos and is_solid_node(pos) then
+			player:set_pos({x = center.x, y = center.y + 15, z = center.z})
+		end
+
+		-- Set time and HUD
+		set_day()
+		player:set_hp(20)
+		if player.set_armor_groups then
+			player:set_armor_groups({immortal = 1})
+		end
+		if player.set_physics_override then
+			player:set_physics_override({gravity = 0})
+		end
+		player:hud_set_flags({
+			hotbar = false, healthbar = false, breathbar = false,
+			minimap = false, crosshair = false, wielditem = false,
+		})
+		minetest.close_formspec(get_test_player(), "")
+
+		-- Find camera position
+		local cam_pos, yaw, pitch, no_obstruction = find_good_camera(center, radius)
+
+		-- Teleport player to camera
+		player:set_pos(cam_pos)
+		if player.set_look_horizontal then
+			player:set_look_horizontal(yaw)
+		end
+		if player.set_look_vertical then
+			player:set_look_vertical(pitch)
+		end
+
+		-- Build machine-readable response
+		local lines = {
+			"target_type=" .. target_type,
+			"object_id=" .. tostring(object_id),
+			"status=READY",
+			"center=" .. minetest.pos_to_string(center),
+			"bbox_min=" .. minetest.pos_to_string(bbox_min),
+			"bbox_max=" .. minetest.pos_to_string(bbox_max),
+			"radius=" .. tostring(radius),
+			"camera=" .. minetest.pos_to_string(cam_pos),
+			"yaw=" .. tostring(yaw),
+			"pitch=" .. tostring(pitch),
+			"no_obstruction=" .. tostring(no_obstruction),
+			"time_of_day=7000",
+		}
+		if extra then
+			for k, v in pairs(extra) do
+				if type(v) == "table" then
+					table.insert(lines, k .. "=" .. minetest.pos_to_string(v))
+				else
+					table.insert(lines, k .. "=" .. tostring(v))
+				end
+			end
+		end
+
+		-- Verify target nodes exist in world (sample check)
+		local sample = minetest.get_node_or_nil(center)
+		if sample then
+			table.insert(lines, "center_node=" .. tostring(sample.name))
+		end
+
+		return true, table.concat(lines, "\n")
+	end,
+})
+
+minetest.log("action", "[pw_debug] loaded")

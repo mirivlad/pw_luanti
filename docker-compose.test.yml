@@ -1,0 +1,9 @@
+services:
+  luanti:
+    command: >
+      luantiserver
+      --config /config/.minetest/minetest.conf
+      --world /config/.minetest/worlds/perfectworld
+      --gameid mineclonia
+      --port 30000
+      --logfile /config/.minetest/debug-test.txt

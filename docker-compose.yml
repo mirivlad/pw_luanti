@@ -1,0 +1,29 @@
+services:
+  luanti:
+    image: perfectworld-luanti
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: perfectworld-dev
+    stdin_open: true
+    tty: true
+    environment:
+      - TZ=Europe/Amsterdam
+      - LUANTI_USER_PATH=/config/.minetest
+    volumes:
+      - ./data:/config/.minetest
+      - ./config/luanti.conf:/config/.minetest/minetest.conf
+      - /home/mirivlad/git/aliveworld/data/games/mineclonia:/config/.minetest/games/mineclonia
+      - ./local_mods/perfectworld:/config/.minetest/mods/perfectworld
+      - ./local_mods/luanti_testkit:/config/.minetest/mods/luanti_testkit
+      - ./local_mods/pw_remote_control:/config/.minetest/mods/pw_remote_control
+    ports:
+      - "30000:30000/udp"
+    restart: unless-stopped
+    command: >
+      luantiserver
+      --terminal
+      --config /config/.minetest/minetest.conf
+      --world /config/.minetest/worlds/perfectworld
+      --gameid mineclonia
+      --port 30000
