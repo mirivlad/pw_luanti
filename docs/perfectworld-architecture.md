@@ -244,6 +244,45 @@ For `pw_farmstead_v1`, the pipeline builds a flat terrace:
 - reject protected or blocked nodes;
 - roll back changes if preparation or generation fails.
 
+### Terrain Analysis Contract
+
+`analyze_terrain(def, origin, rotation)` checks the building footprint expanded
+by `modification_margin` on X/Z:
+
+1. **Missing surface** — any column without a solid surface node → rejected.
+2. **Slope too steep** — `max_y - min_y > max_slope` → rejected with `slope_too_steep`.
+3. **Excessive cut** — any column with `reference_y - surface_y > max_cut_depth` → rejected with `excessive_cut`.
+4. **Excessive fill** — any column with `surface_y - reference_y > max_fill_height` → rejected with `excessive_fill`.
+
+The checks run in order: slope first, then cut, then fill. If slope exceeds
+the limit, cut/fill are not evaluated. This is by design: slope is the primary
+terrain fitness signal, and a sloped site requires different handling (future
+slope-adaptive placement) regardless of cut/fill values.
+
+`reference_y = max_y` across the checked area.
+
+### Modification Margin Contract
+
+`modification_margin` (default 1) expands the checked and modified area beyond
+the building footprint on X and Z only. Y bounds are controlled by
+`foundation_depth` and `clearance_height`.
+
+- **Inside building footprint** (X/Z): full terrain modification — foundation
+  fill below surface, air clearance above.
+- **Inside margin zone** (footprint ± `modification_margin`): smooth blend
+  transition. The `edge_blend` function produces a linear fade from 1 (fully
+  inside footprint) to 0 (at distance = margin from footprint edge).
+- **Beyond margin**: no modification. Nodes at distance > margin from the
+  building footprint are not touched by `prepare_terrain`.
+
+The footprint bounds and margin are inclusive: a node exactly at
+`building_maxp.x + margin` is within the preparation loop and receives blend = 1
+(if inside footprint) or blend ∈ (0, 1) (if in blend zone). The first node at
+`building_maxp.x + margin + 1` is outside and unmodified.
+
+`prepare_terrain` is idempotent: calling it twice on the same prepared area
+produces the same result as calling it once.
+
 This is intentionally simple. It avoids partial buildings and floating parts but
 does not yet adapt individual building modules to slopes.
 

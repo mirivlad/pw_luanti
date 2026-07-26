@@ -208,11 +208,16 @@ T.register_test("perfectworld", "terrain_preparation_limits_modified_area", func
 	if minetest.load_area then
 		pcall(minetest.load_area, {x = origin.x - 18, y = origin.y - 4, z = origin.z - 18}, {x = origin.x + 18, y = origin.y + 16, z = origin.z + 18})
 	end
+	-- Fill a solid block of ground from below the foundation level up to the surface,
+	-- and clear everything above the surface. This ensures the quarry-check assertion
+	-- sees ground outside the modification zone rather than air/ignore from unmapped terrain.
 	for dx = -18, 18 do
 		for dz = -18, 18 do
-			local h = origin.y
-			minetest.set_node({x = origin.x + dx, y = h, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})
-			for y = h + 1, h + 8 do
+			local ground_y = origin.y
+			for y = ground_y - 8, ground_y do
+				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})
+			end
+			for y = ground_y + 1, ground_y + 8 do
 				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = "air"})
 			end
 		end
@@ -237,13 +242,15 @@ T.register_test("perfectworld", "terrain_preparation_limits_modified_area", func
 	local quarry_check_pos = {x = modified_maxp.x + 2, y = origin.y - 2, z = modified_maxp.z + 2}
 	ctx.assert.equal(minetest.get_node(quarry_check_pos).name, perfectworld.compat.get_material("ground"), "no quarry hole outside modified area")
 
-	-- verify smooth edges: the transition zone (margin area) should not have vertical cliffs
-	local edge_pos_inner = {x = building_maxp.x + 1, y = origin.y + 2, z = building_maxp.z + 1}
-	local edge_pos_outer = {x = building_maxp.x + 3, y = origin.y + 2, z = building_maxp.z + 3}
+	-- verify smooth edges: nodes inside the building footprint must be foundation,
+	-- nodes outside the margin must remain untouched.
+	-- Use building_maxp (inside footprint, blend=1) and building_maxp + margin + 1 (outside, blend=0).
+	local edge_pos_inner = {x = building_maxp.x, y = origin.y, z = building_maxp.z}
+	local edge_pos_outer = {x = building_maxp.x + margin + 1, y = origin.y, z = building_maxp.z + margin + 1}
 	local inner_node = minetest.get_node(edge_pos_inner).name
 	local outer_node = minetest.get_node(edge_pos_outer).name
-	ctx.assert.is_true(inner_node == "air" or inner_node == perfectworld.compat.get_material("foundation"), "inner margin should be cleared or founded")
-	ctx.assert.equal(outer_node, perfectworld.compat.get_material("ground"), "outside margin must remain original ground")
+	ctx.assert.equal(inner_node, perfectworld.compat.get_material("foundation"), "inside building footprint at surface must be foundation")
+	ctx.assert.equal(outer_node, perfectworld.compat.get_material("ground"), "outside margin at surface must remain original ground")
 end)
 
 T.register_test("perfectworld", "terrain_analysis_rejects_steep_slope", function(ctx)
@@ -272,13 +279,17 @@ T.register_test("perfectworld", "terrain_analysis_rejects_excessive_cut", functi
 	if minetest.load_area then
 		pcall(minetest.load_area, {x = origin.x - 16, y = origin.y - 10, z = origin.z - 16}, {x = origin.x + 16, y = origin.y + 16, z = origin.z + 16})
 	end
-	-- create a flat area with a deep pit in the middle (exceeding max_cut_depth=3)
+	-- create a flat area with a deep pit ONLY inside the building footprint (3×3).
+	-- The margin area (-2, 2) must stay at normal height so the checked area
+	-- has both flat reference nodes and deep-cut nodes, producing an excessive_cut
+	-- without triggering slope_too_steep first.
 	for dx = -10, 10 do
 		for dz = -10, 10 do
 			local h = origin.y
-			-- dig a hole of depth 6 in the center (max_cut is 3)
-			if math.abs(dx) <= 2 and math.abs(dz) <= 2 then
-				h = origin.y - 6
+			-- building_footprint is {min_x=-1, max_x=1, min_z=-1, max_z=1}.
+			-- Only dig the hole inside this 3×3 footprint, leaving the margin untouched.
+			if math.abs(dx) <= 1 and math.abs(dz) <= 1 then
+				h = origin.y - 6  -- depth=6 exceeds max_cut_depth=3
 			end
 			minetest.set_node({x = origin.x + dx, y = h, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})
 			for y = h + 1, h + 12 do
@@ -315,6 +326,145 @@ T.register_test("perfectworld", "terrain_analysis_rejects_excessive_cut", functi
 	local ok2, result = perfectworld.structures.analyze_terrain(def, origin, 0)
 	ctx.assert.is_false(ok2, "terrain with excessive cut must be rejected")
 	ctx.assert.contains(result.reason, "excessive_cut", "excessive cut reason")
+end)
+
+T.register_test("perfectworld", "terrain_analysis_separates_slope_and_cut_checks", function(ctx)
+	-- Verify the order: slope is checked first (design choice — the structure definition
+	-- sets max_slope, and cut/fill are secondary. A slope failure implies the terrain is
+	-- unsuitable regardless of cut/fill.)
+	local origin = {x = -1280, y = 30, z = -1280}
+	if minetest.load_area then
+		pcall(minetest.load_area, {x = origin.x - 16, y = origin.y - 10, z = origin.z - 16}, {x = origin.x + 16, y = origin.y + 16, z = origin.z + 16})
+	end
+	-- Create terrain with max_slope=8; use a steep linear gradient across the checked area.
+	-- The checked area is building_footprint (x: -1..1) + margin 1 = world x: -1282..-1278.
+	-- h = 30 + (dx + 10) * 4 → at dx=-2 (world -1282): h=62, at dx=2 (world -1278): h=78, slope=16 > max_slope=8.
+	-- Clear ALL nodes above surface to avoid leftover terrain from previous tests.
+	for dx = -10, 10 do
+		for dz = -10, 10 do
+			local h = origin.y + (dx + 10) * 4
+			minetest.set_node({x = origin.x + dx, y = h, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})
+			for y = h + 1, 100 do
+				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = "air"})
+			end
+		end
+	end
+	local ok, err = perfectworld.structures.register("pw_test_slope_order", {
+		version = 1,
+		size = {x = 5, y = 4, z = 5},
+		origin = {x = 2, y = 0, z = 2},
+		categories = {"test"},
+		weight = 1,
+		allowed_settlement_types = {"farm"},
+		rotations = {0},
+		terrain = {
+			max_slope = 8,
+			foundation_depth = 2,
+			clearance_height = 4,
+			max_cut_depth = 3,
+			max_fill_height = 3,
+			modification_margin = 1,
+			building_footprint = {min_x = -1, max_x = 1, min_z = -1, max_z = 1},
+		},
+		connectors = {},
+		placement = {type = "lua", generator = function(ctx) return true end},
+	})
+	ctx.assert.is_true(ok, "slope order test structure must register: " .. tostring(err))
+	local def = perfectworld.structures.get("pw_test_slope_order")
+	local ok2, result = perfectworld.structures.analyze_terrain(def, origin, 0)
+	ctx.assert.is_false(ok2, "steep terrain must be rejected regardless of cut")
+	ctx.assert.contains(result.reason, "slope", "slope check fires first by design")
+end)
+
+T.register_test("perfectworld", "terrain_preparation_idempotent", function(ctx)
+	local def = perfectworld.structures.get("pw_farmstead_v1")
+	local origin = {x = -1200, y = 40, z = -1200}
+	if minetest.load_area then
+		pcall(minetest.load_area, {x = origin.x - 18, y = origin.y - 10, z = origin.z - 18}, {x = origin.x + 18, y = origin.y + 16, z = origin.z + 18})
+	end
+	-- Create a solid flat terrain block
+	for dx = -18, 18 do
+		for dz = -18, 18 do
+			for y = origin.y - 8, origin.y do
+				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})
+			end
+			for y = origin.y + 1, origin.y + 8 do
+				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = "air"})
+			end
+		end
+	end
+	local ok, analysis = perfectworld.structures.analyze_terrain(def, origin, 0)
+	ctx.assert.is_true(ok, "analysis must succeed: " .. tostring(analysis and analysis.reason or analysis))
+
+	-- First preparation
+	local prep_ok, prep = perfectworld.structures.prepare_terrain(def, origin, 0, analysis)
+	ctx.assert.is_true(prep_ok, "first preparation must succeed: " .. tostring(prep and prep.reason or prep))
+
+	-- Sample a node inside the modified area to snapshot after first pass
+	local sample_pos = {x = origin.x, y = origin.y, z = origin.z}
+	local sample_after_first = minetest.get_node(sample_pos).name
+
+	-- Second preparation on the same area — must be idempotent
+	local prep2_ok, prep2 = perfectworld.structures.prepare_terrain(def, origin, 0, analysis)
+	ctx.assert.is_true(prep2_ok, "second preparation must succeed: " .. tostring(prep2 and prep2.reason or prep2))
+	local sample_after_second = minetest.get_node(sample_pos).name
+	ctx.assert.equal(sample_after_first, sample_after_second, "prepare_terrain must be idempotent at center")
+end)
+
+T.register_test("perfectworld", "terrain_preparation_respects_modification_margin", function(ctx)
+	-- Verify exact boundaries: inside footprint → modified, inside margin → modified,
+	-- first position beyond margin → untouched.
+	local origin = {x = -1350, y = 40, z = -1350}
+	if minetest.load_area then
+		pcall(minetest.load_area, {x = origin.x - 18, y = origin.y - 4, z = origin.z - 18}, {x = origin.x + 18, y = origin.y + 16, z = origin.z + 18})
+	end
+	for dx = -18, 18 do
+		for dz = -18, 18 do
+			for y = origin.y - 8, origin.y do
+				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})
+			end
+			for y = origin.y + 1, origin.y + 8 do
+				minetest.set_node({x = origin.x + dx, y = y, z = origin.z + dz}, {name = "air"})
+			end
+		end
+	end
+
+	local ok, err = perfectworld.structures.register("pw_test_margin_boundary", {
+		version = 1,
+		size = {x = 5, y = 4, z = 5},
+		origin = {x = 2, y = 0, z = 2},
+		categories = {"test"},
+		weight = 1,
+		allowed_settlement_types = {"farm"},
+		rotations = {0},
+		terrain = {
+			max_slope = 8,
+			foundation_depth = 2,
+			clearance_height = 4,
+			modification_margin = 1,
+			max_cut_depth = 3,
+			max_fill_height = 3,
+			building_footprint = {min_x = -1, max_x = 1, min_z = -1, max_z = 1},
+		},
+		connectors = {},
+		placement = {type = "lua", generator = function(ctx) return true end},
+	})
+	ctx.assert.is_true(ok, "margin boundary test structure must register: " .. tostring(err))
+
+	local def = perfectworld.structures.get("pw_test_margin_boundary")
+	local ok_a, analysis = perfectworld.structures.analyze_terrain(def, origin, 0)
+	ctx.assert.is_true(ok_a, "analysis must succeed: " .. tostring(analysis and analysis.reason or analysis))
+
+	-- Position just beyond the modification margin (margin=1, building_max=+1, so max = +2)
+	local beyond_margin = {x = origin.x + 3, y = origin.y, z = origin.z}
+	local node_before = minetest.get_node(beyond_margin).name
+	ctx.assert.equal(node_before, perfectworld.compat.get_material("ground"), "precondition: beyond margin must be ground")
+
+	local prep_ok = perfectworld.structures.prepare_terrain(def, origin, 0, analysis)
+	ctx.assert.is_true(prep_ok, "preparation must succeed")
+
+	local node_after = minetest.get_node(beyond_margin).name
+	ctx.assert.equal(node_after, node_before, "node beyond modification margin must remain untouched")
 end)
 
 T.register_test("perfectworld", "farmstead_materializes_once_and_records_state", function(ctx)
