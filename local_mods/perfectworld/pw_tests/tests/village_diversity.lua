@@ -136,6 +136,33 @@ T.register_test("perfectworld", "village_palette_reaches_the_building_generator"
     "an unregistered palette node must fall back to the generic material")
 end)
 
+T.register_test("perfectworld", "biome_ids_resolve_to_families", function(ctx)
+  -- Regression: minetest.get_biome_data returns a numeric biome *id*, but the
+  -- resolver indexed minetest.registered_biomes (keyed by *name*) with it. The
+  -- lookup always missed, so every biome in the world resolved to "temperate"
+  -- and the whole palette system was dead in practice.
+  ctx.assert.not_nil(minetest.get_biome_name, "minetest.get_biome_name must exist")
+
+  local families = {}
+  local resolved_ids = 0
+  for name in pairs(minetest.registered_biomes or {}) do
+    local id = minetest.get_biome_id(name)
+    if id then
+      resolved_ids = resolved_ids + 1
+      ctx.assert.equal(perfectworld.compat.resolve_biome_name(id), name,
+        "biome id " .. id .. " must resolve back to " .. name)
+      families[perfectworld.compat.get_biome_family(id)] = true
+    end
+  end
+  ctx.assert.is_true(resolved_ids > 10,
+    "expected the game to register more than 10 biomes, got " .. resolved_ids)
+
+  local distinct = 0
+  for _ in pairs(families) do distinct = distinct + 1 end
+  ctx.assert.is_true(distinct >= 4, string.format(
+    "resolving every registered biome id must reach at least 4 families, got %d", distinct))
+end)
+
 T.register_test("perfectworld", "village_unknown_biome_gets_fallback", function(ctx)
   local family = perfectworld.compat.get_biome_family("nonexistent_biome_xyz")
   ctx.assert.equal(family, "temperate", "unknown biome must fall back to temperate")

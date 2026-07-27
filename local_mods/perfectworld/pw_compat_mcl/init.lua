@@ -131,12 +131,24 @@ local biome_families = {
   ["mcl_biomes:frozen_ocean"] = "cold",
 }
 
-local function get_biome_family(biome_name)
-  if type(biome_name) == "number" then
-    -- Resolve numeric biome ID to name via registry
-    local bdef = minetest.registered_biomes and minetest.registered_biomes[biome_name]
-    biome_name = bdef and bdef.name or "unknown"
+--- Resolve whatever minetest.get_biome_data() handed us into a biome name.
+-- `biome_data.biome` is a numeric biome *id*; minetest.registered_biomes is
+-- keyed by biome *name*, so indexing it with the id always missed and every
+-- biome in the world silently resolved to "temperate".
+local function resolve_biome_name(biome)
+  if type(biome) == "number" then
+    if minetest.get_biome_name then
+      return minetest.get_biome_name(biome) or "unknown"
+    end
+    return "unknown"
   end
+  return biome
+end
+
+perfectworld.compat.resolve_biome_name = resolve_biome_name
+
+local function get_biome_family(biome_name)
+  biome_name = resolve_biome_name(biome_name)
   if type(biome_name) ~= "string" then
     return "temperate"
   end
@@ -159,7 +171,8 @@ end
 function perfectworld.compat.get_environment(pos)
   local x, z = pos.x, pos.z
   local biome_data = minetest.get_biome_data({x = x, y = pos.y, z = z})
-  local biome_name = biome_data and biome_data.biome or "unknown"
+  local biome_id = biome_data and biome_data.biome
+  local biome_name = resolve_biome_name(biome_id or "unknown")
   local heat = biome_data and biome_data.heat or 50
   local humidity = biome_data and biome_data.humidity or 50
   local family = get_biome_family(biome_name)
@@ -228,7 +241,7 @@ function perfectworld.compat.get_environment(pos)
   local vegetation_density = veg_samples > 0 and math.floor(veg_count / veg_samples * 100) or 0
 
   return {
-    biome_id = biome_name,
+    biome_id = biome_id,
     biome_name = biome_name,
     biome_family = family,
     heat = heat,
