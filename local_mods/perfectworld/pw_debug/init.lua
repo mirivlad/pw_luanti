@@ -992,6 +992,46 @@ minetest.register_chatcommand("pw_village_validate_all", {
   end,
 })
 
+-- === Deferred player placement ===
+--
+-- A player who is offline when they are assigned a village cannot simply be
+-- moved: on the next login the engine restores their saved position. Remember
+-- the assignment and apply it when they join.
+
+local PLACEMENT_KEY = "pw_pending_placements"
+local debug_storage = minetest.get_mod_storage()
+
+function perfectworld.debug.pending_placements()
+  local raw = debug_storage:get_string(PLACEMENT_KEY)
+  if raw and raw ~= "" then
+    local ok, data = pcall(minetest.parse_json, raw)
+    if ok and type(data) == "table" then return data end
+  end
+  return {}
+end
+
+function perfectworld.debug.save_pending_placements(pending)
+  debug_storage:set_string(PLACEMENT_KEY, minetest.write_json(pending))
+end
+
+minetest.register_on_joinplayer(function(player)
+  local name = player:get_player_name()
+  local pending = perfectworld.debug.pending_placements()
+  local spot = pending[name]
+  if not spot then return end
+  -- One tick later: the client has to have received the mapblocks first.
+  minetest.after(0.5, function()
+    local online = minetest.get_player_by_name(name)
+    if not online then return end
+    online:set_pos({x = spot.x, y = spot.y, z = spot.z})
+    online:set_hp(20)
+    pending[name] = nil
+    perfectworld.debug.save_pending_placements(pending)
+    minetest.log("action", string.format("[pw_debug] placed %s at %s on join",
+      name, minetest.pos_to_string(spot)))
+  end)
+end)
+
 --- Put a real player into a finished village, with privileges and a spawn
 -- point there, so the world can be handed over ready to inspect.
 minetest.register_chatcommand("pw_setup_player", {
@@ -1053,8 +1093,13 @@ minetest.register_chatcommand("pw_setup_player", {
       if player.set_physics_override then
         player:set_physics_override({gravity = 1, speed = 1})
       end
+    else
+      -- Offline players load their last saved position on login, so record
+      -- the placement and apply it when they next join.
+      local pending = perfectworld.debug.pending_placements()
+      pending[player_name] = spot
+      perfectworld.debug.save_pending_placements(pending)
     end
-    -- Spawn here on every future login, too.
     minetest.settings:set("static_spawnpoint",
       string.format("%d,%d,%d", spot.x, spot.y, spot.z))
 

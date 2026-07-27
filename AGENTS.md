@@ -109,7 +109,7 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 
 ### Текущий baseline
 
-114 total | 114 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+118 total | 118 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 Baseline должен оставаться зелёным. Отчёт печатается через
 `python3 scripts/report-summary.py`.

@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 114 total | 114 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 118 total | 118 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 ## Implemented Modules
 
@@ -10,11 +10,11 @@
 | `pw_core` | ✅ Complete | API, composite IDs, world format lock, exact 32-bit hashing, stable variation contract |
 | `pw_compat_mcl` | ✅ Complete | Material mappings, biome id/name resolution, 7 biome families, environment profiles, palettes |
 | `pw_planner` | ✅ Complete | Region planning, village grammar (3 archetypes), terrain sampler, validation, diversity analysis, persistence |
-| `pw_structures` | ✅ Complete | 5 registered structures, terrain analysis, palette-aware placement, plinths, rollback |
+| `pw_structures` | ✅ Complete | 7 registered structures, pitched roofs, palette-aware placement, plinths, rollback |
 | `pw_roads` | ✅ Complete | Road persistence API, delegates to pw_planner storage |
 | `pw_settlements` | ✅ Complete | Type definitions, settlement record API |
 | `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
-| `pw_tests` | ✅ Complete | 114 tests across core, planner, structures, variation, fingerprints, village, diversity |
+| `pw_tests` | ✅ Complete | 118 tests across core, planner, structures, variation, fingerprints, village, diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
 | `pw_remote_control` | ✅ Complete | JSON remote control |
 
@@ -70,21 +70,36 @@ The only ERROR lines in a clean server log come from
 mismatched lock record on purpose, and from Mineclonia's own redstone event
 queue. Neither is a PerfectWorld fault.
 
+## Buildings
+
+Modelled on the vanilla plains village houses
+([Minecraft Wiki, Village/Structure/Blueprints](https://minecraft.wiki/w/Village/Structure/Blueprints)):
+cobble plinth, timber corner posts, plank infill, glass-pane windows on every
+wall, a pitched roof of stairs with a slab ridge and one-block eaves, and a
+porch step at the door.
+
+Seven structures: four dwelling shapes, a barn, a farmstead and a well. Each
+biome family carries its own wood and stone — oak, birch, spruce, acacia, dark
+oak, jungle — so two villages in different biomes share no materials.
+
+Every door is checked with the engine's pathfinder from the street, on foot,
+with a walker's limits. Unreachable lots are rejected at plan time; anything
+that still cannot be reached gets a stepped way cut to it and, failing that,
+keeps the settlement out of `complete`.
+
 ## Known Visual Defects
 
-Found by reviewing 21 screenshots of 7 settlements; none of them break the
-physical contract, all of them are honest limitations of the current build.
+Reviewed against 21 screenshots of 7 settlements plus a walk-through of every
+door in one village.
 
 | Defect | Cause | Effect |
 |--------|-------|--------|
-| Streets are ragged: holes, offset blocks, stepped edges | `place_road_strip` writes one node per column at that column's own surface height, and skips columns whose surface is water | A street reads as a street but not as a built road surface |
-| Buildings inside one village look like the same box at different sizes | Only four structures exist, all flat-roofed rectangles from one generator | A village reads as a settlement, but not as a place with distinct buildings |
-| The `rocky` palette is monochrome | stone walls + stone roof + gravel path on stone terrain | Rocky villages are legible in silhouette only |
-| Many `hillside` settlements stand on flat ground | The hillside fallback fires whenever a flat archetype finds no viable layout, which is common on the `carpathian` mapgen | On flat ground hillside is visually indistinguishable from linear |
+| Streets are patchy where the ground undulates | The carriageway is one node per column at a smoothed height; cells whose surface is water are skipped | The street reads as a street, but the edges are ragged |
+| 3 of 11 settlements have one door the pathfinder cannot reach | The approach check is per-lot; it cannot see a neighbour that will later be built across the only route | Those settlements stay `partial`, which is the honest status |
+| Most settlements come out `hillside` on this mapgen | The hillside fallback fires whenever a flat archetype finds no viable layout, which is common on `carpathian` | On flat ground hillside looks like linear |
 
-Fix directions, in order of visual return: give the road builder a smoothed
-profile and let it bridge one-block gaps; add roof shapes and a second wall
-material per palette; give `rocky` a contrasting roof.
+Fix directions: order lots by approach quality before accepting them; widen the
+carriageway smoothing to bridge one-block gaps.
 
 ## Missing Systems
 
