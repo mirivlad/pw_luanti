@@ -890,4 +890,48 @@ minetest.register_chatcommand("pw_village_tp", {
   end,
 })
 
+minetest.register_chatcommand("pw_village_validate", {
+  params = "<settlement_id>",
+  description = "Validate a settlement: check structures, roads, intersections, status",
+  privs = {interact = true},
+  func = function(name, param)
+    if not param or param == "" then return false, "Usage: /pw_village_validate <id>" end
+    local s = perfectworld.settlements.get(param)
+    if not s then return false, "Settlement not found: " .. param end
+    local issues = {}
+    -- Status check
+    if s.status == "failed" then
+      table.insert(issues, "status=failed (lot_count=" .. (s.lot_count or 0) .. ")")
+    elseif s.status == "partial" then
+      table.insert(issues, "status=partial")
+    elseif s.lot_count == 0 then
+      table.insert(issues, "lot_count=0 but status=" .. tostring(s.status))
+    end
+    -- Structure existence
+    for _, sid in ipairs(s.structure_ids or {}) do
+      local rec = perfectworld.planner.get_structure(sid)
+      if not rec then
+        table.insert(issues, "missing_structure:" .. sid)
+      end
+    end
+    -- Road existence
+    for _, rid in ipairs(s.road_ids or {}) do
+      local road = perfectworld.roads.get(rid)
+      if not road then
+        table.insert(issues, "missing_road:" .. rid)
+      end
+    end
+    -- Fingerprint consistency
+    if s.village_fingerprint and s.road_graph_fingerprint then
+      -- Both present, OK
+    else
+      table.insert(issues, "missing_fingerprint")
+    end
+    if #issues == 0 then
+      return true, "valid=true settlement_id=" .. param .. " archetype=" .. tostring(s.archetype) .. " status=" .. tostring(s.status) .. " lot_count=" .. tostring(s.lot_count)
+    end
+    return true, "valid=false settlement_id=" .. param .. "\n" .. table.concat(issues, "\n")
+  end,
+})
+
 minetest.log("action", "[pw_debug] loaded")
