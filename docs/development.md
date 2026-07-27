@@ -47,11 +47,34 @@ Plans depend ONLY on:
 - `planner_version`
 - `region_size`
 
+Use `perfectworld.core.choice` for every planning decision:
+
+```lua
+local choice = perfectworld.core.choice
+local seed_key = perfectworld.planner.village_seed_key(candidate)
+
+profile.archetype = choice.weighted(seed_key, "archetype", weights)
+lot.rotation      = choice.pick(seed_key, "lot:" .. i .. ":rotation", def.rotations)
+```
+
+Each decision is an independent hash of `(seed_key, label)`, so adding a new
+decision never shifts the existing ones. Labels must be stable strings —
+changing one moves every existing world's layout.
+
 Do NOT use:
-- `math.random()` — use `det_prng(seed)`
+- `math.random()`
+- a sequential PRNG of any kind (see the LCG post-mortem in
+  `docs/perfectworld-architecture.md`: double rounding collapsed the previous
+  one to a 10466-long cycle)
 - Wall-clock time
 - Player positions
 - Order of chunk generation
+
+### Integer arithmetic
+
+Lua numbers here are IEEE-754 doubles and only exact up to `2^53`. Any product
+above that silently loses low bits. Use `perfectworld.core.mul32` for 32-bit
+multiplication and keep hand-written arithmetic below `2^53`.
 
 ### Idempotency Rules
 
@@ -92,6 +115,20 @@ perfectworld.structures.register("pw_my_building_v1", {
 })
 ```
 
+## Running the Test Suite
+
+```bash
+scripts/run-testkit.sh
+```
+
+Starts the test server, connects `pwbot`, grants privileges, triggers the full
+run and prints the report summary. `--keep` reuses a running server;
+`--no-client` skips the client. To re-print the latest report:
+
+```bash
+python3 scripts/report-summary.py
+```
+
 ## Adding a Test
 
 1. Create file `local_mods/perfectworld/pw_tests/tests/my_feature.lua`
@@ -120,10 +157,18 @@ Checks: file existence, no aliveworld references, basic structure.
 
 ```bash
 bash -n scripts/*.sh
-python3 -m py_compile scripts/install-content.py
+python3 -m py_compile scripts/*.py
 git diff --check
 bash scripts/smoke-test.sh
 # If Lua changed: full test suite
+scripts/run-testkit.sh
+```
+
+Lua syntax can be checked without a server:
+
+```bash
+docker run --rm --entrypoint luajit -v "$PWD/local_mods:/m" perfectworld-luanti \
+  -e "local f,e=loadfile('/m/perfectworld/pw_planner/init.lua') print(f and 'OK' or e)"
 ```
 
 ## Mod Storage Keys

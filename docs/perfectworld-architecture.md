@@ -118,9 +118,12 @@ Plans must depend only on:
 - planner version;
 - PerfectWorld configuration.
 
-The current seed mixer hashes those values as strings into a local 31-bit seed.
-It does not use the global random generator and does not use a simple sum, so
-regions such as `(0, 1)` and `(1, 0)` do not collide through commutative mixing.
+Seed keys are strings built from those values; every decision is an independent
+`hash32(seed_key .. "#" .. label)`. Nothing uses the global random generator,
+and nothing uses a simple sum, so regions such as `(0, 1)` and `(1, 0)` do not
+collide through commutative mixing. See
+[Stable Variation Contract](#stable-variation-contract) for why a stream PRNG
+was not usable here.
 
 The following calls must return equivalent plans:
 
@@ -344,11 +347,11 @@ with a biome-aware, multi-archetype grammar pipeline.
 
 ```lua
 environment = {
-  biome_id       -- raw biome identifier
-  biome_name     -- resolved string name (from numeric registry)
+  biome_id       -- numeric biome id as returned by minetest.get_biome_data
+  biome_name     -- resolved string name (minetest.get_biome_name)
   biome_family   -- one of: temperate, forest, cold, dry, rocky, wet, coastal
-  heat           -- 0–100 heat point
-  humidity       -- 0–100 humidity point
+  heat           -- 0-100 heat point
+  humidity       -- 0-100 humidity point
   elevation      -- Y coordinate
   roughness      -- sampled surface height variation (0 = flat)
   average_slope  -- alias for roughness
@@ -362,55 +365,84 @@ Biome family mapping lives in `pw_compat_mcl` only — no `if biome_name == ...`
 checks in planner code. Unknown biomes fall back to `"temperate"` via
 heuristic name matching.
 
-### Village Profile
+`minetest.get_biome_data().biome` is a numeric biome **id**, while
+`minetest.registered_biomes` is keyed by **name**. Resolution must therefore go
+through `minetest.get_biome_name(id)`; indexing the registry with an id silently
+misses and collapses every biome in the world to `"temperate"`.
 
-`perfectworld.planner.create_village_profile(candidate, environment)` produces
-a deterministic profile:
+### Stable Variation Contract
 
-```lua
-profile = {
-  village_id          = candidate.id
-  generator_version   = PLANTER_VERSION
-  environment         = { ... }
-  seed_key            = stable_hash("village_v2" | region_seed | candidate.id | biome_family | roughness | planner_version)
-  archetype           = "linear" | "compact" | "hillside"
-  size_class          = "small"(3-5) | "medium"(5-8) | "large"(8-12)
-  target_lots
-  density
-  road_character      = { main_length, branches, curve, crossing }
-  lot_spacing         = { min_gap, max_gap, depth, set_back }
-  structure_roles     = ["dwelling", "farm", "utility", "central", ...]
-  material_palette    = { foundation, wall_primary, wall_secondary, roof, path, fence }
-  variation_parameters = { dwelling_variant, orientation_noise, spacing_jitter }
-}
+Planning decisions are **not** drawn from a sequential PRNG. Each decision is an
+independent hash of a seed key and a label:
+
+```text
+hash32(seed_key | "archetype")
+hash32(seed_key | "size_class")
+hash32(seed_key | "road:main:direction")
+hash32(seed_key | "lot:5:variant")
+hash32(seed_key | "lot:5:rotation")
 ```
+
+`perfectworld.core.choice` provides `unit`, `index`, `int`, `range`, `pick`,
+`bool`, `weighted` and `shuffle` on top of `perfectworld.core.hash32`.
+
+Properties a stream generator cannot offer:
+
+- adding a new decision anywhere leaves every other decision untouched;
+- decisions can be evaluated in any order, or skipped entirely;
+- a single decision is reproducible in isolation, which makes golden tests cheap.
+
+`hash32` splits every multiplication into 16-bit limbs, so the largest
+intermediate is `2^48`. Lua numbers here are IEEE-754 doubles, exact only up to
+`2^53`; the previous LCG multiplied a 31-bit state by 1103515245, reaching
+`2.37e18` — 263x above the exact range — and lost the low ~9 bits of every
+step. Measured in the shipped LuaJIT build, that collapsed the generator to a
+single cycle of length **10466** with states quantised to multiples of 64.
+
+Seed keys depend only on world seed, region coordinates, candidate id, planner
+version and region size. Terrain influences the plan through decision
+**weights**, never through the seed.
 
 ### Three Archetypes
 
 | Archetype | Terrain | Road Graph | Characteristics |
 |-----------|---------|------------|-----------------|
-| `linear` | Flat valley, shore, narrow corridor | One curved main street | Lots on one or both sides, variable spacing, possible gaps |
-| `compact` | Open flat area, low roughness | Crossroads + branches | Denser, central public lot, multiple short streets |
-| `hillside` | Sloped, rocky, high roughness | Contour-following road | Lateral shifts to maintain gentle grade, stepped lots |
+| `linear` | Flat valley, shore, narrow corridor | One main street, optionally curved | Lots on both sides, variable spacing |
+| `compact` | Open flat area, low roughness | Crossroads plus branches | Denser, central public lot, multiple streets |
+| `hillside` | Sloped, rocky, high roughness | Contour-following street plus spur | Lateral shifts to hold a gentle grade, terraced lots |
 
-Archetype selection uses weighted random with modifiers: roughness, water
-proximity, and biome family all influence the weights.
+Archetype selection is weighted by roughness, water proximity and biome family.
+Main streets snap to one of eight compass directions: a free angle turns into
+staircase noise on a block grid.
+
+**Documented fallback.** The archetype is chosen from the environment profile
+before any lot has been tested against the ground. If a flat archetype produces
+no viable layout, the planner retries once as `hillside` with the same seed key
+and records `archetype_fallback_from`. This is deterministic.
 
 ### Grammar Pipeline
 
-Each village is built through an 11-step grammar, not from a fixed template:
+1. Emerge the site (a village spans ~110 blocks; the mapchunk holding its
+   centre is never enough terrain to plan on).
+2. Read the environment profile at the real surface.
+3. Build the profile: archetype, size class, target lots, road character, lot
+   spacing, role composition, palette.
+4. Build the road skeleton for the archetype.
+5. Generate lot anchors along every road, both sides.
+6. For each anchor, in role order: pick the structure variant, orient it so its
+   road connector faces the street, then push it away from the kerb until its
+   footprint clears the carriageway and every neighbour.
+7. Validate the ground under the **building footprint** with the structure's own
+   slope limit — the same limit `analyze_terrain` will apply at placement time.
+8. Compute bounds, role counts and the three fingerprints.
+9. Materialize structures first (terrain preparation reshapes the surface and
+   would otherwise bury the roads).
+10. Lay roads perpendicular to their direction of travel, then a driveway from
+    every placed door to its road point.
+11. Save the settlement record and mark the candidate placed.
 
-1. Select archetype (weighted by terrain)
-2. Build road skeleton (points along angles, with curves and branches)
-3. Allocate lots along roads (with spacing jitter, terrain suitability checks)
-4. Filter lots by terrain (water avoidance, max slope 4)
-5. Assign roles to lots (dwelling, farm, utility, central, optional)
-6. Select structure variants per role
-7. Orient structures toward road
-8. Check footprint overlaps and filter
-9. Form immutable materialization plan
-10. Materialize: roads first, then structures (each via `structures.place`)
-11. Save settlement record with fingerprint
+Setback is a property of the building, not a constant: a nine-block barn stands
+further back from the kerb than a three-block well.
 
 ### Material Palettes
 
@@ -426,50 +458,140 @@ Seven palettes provide biome-appropriate materials:
 | wet | cobble | wood | oak slab | dirt |
 | coastal | stone | wood | oak slab | sand |
 
-### Settlement Record
+The palette is passed to `structures.place` as `context.palette` and reaches
+`prepare_terrain` (foundation) and every building generator (walls, roof,
+floor, paths, fences) through `perfectworld.structures.palette_material`.
+Joinery — doors, glass, torches, furniture — stays on the generic material
+table. An unregistered palette node falls back to the generic role.
 
-Saved via `pw_planner` mod_storage under the settlement plan key:
+### Terrain Adaptation
+
+`context.terrain_overrides` relaxes a structure's terrain contract for one
+placement. Hillside villages use
+`{max_slope = 5, max_cut_depth = 5, max_fill_height = 4, foundation_depth = 4}`
+so they terrace into a slope instead of being rejected.
+
+Terrain preparation writes only inside the building footprint plus
+`modification_margin` (1 block), so a settlement can never carve a large
+artificial platform. Where the downhill side of a footprint would sit above
+open air, the foundation is carried down as a plinth until it meets solid
+ground, bounded by `max_plinth_depth` (default 12).
+
+### Completeness Contract
+
+| Status | Meaning |
+|--------|---------|
+| `complete` | Every planned lot built, no placement errors, at least `MIN_DWELLINGS` (2) dwellings |
+| `partial` | Something was built, but a lot failed or a required role is missing |
+| `failed` | Nothing was built |
+
+A plan with no viable layout is persisted as `failed` and never materialized.
+"The map is not generated here yet" is a transient condition, not a verdict:
+it returns `terrain_not_ready` and leaves the candidate unplaced.
+
+### Settlement Record
 
 ```lua
 settlement = {
-  settlement_id       = candidate.id
-  candidate_id        = candidate.id
-  region_id
-  generator_version
-  status              = "complete" | "partial"
-  center_pos
-  bounds              = { min_x, max_x, min_z, max_z }
-  environment_profile = { ... }
-  archetype
-  village_fingerprint  = stable_hash
-  structure_ids        = [ ... ]
-  road_ids             = [ ... ]
-  lot_count
-  created_at           = game_time
+  settlement_id, candidate_id, region_id, generator_version, seed_key,
+  status                = "complete" | "partial" | "failed",
+  center_pos, bounds    = { min_x, max_x, min_z, max_z },
+  environment_profile, biome_name, biome_family,
+  archetype, size_class, palette_id, material_palette,
+  required_roles, optional_roles, missing_required_roles, role_counts,
+  exact_plan_fingerprint, structural_fingerprint, road_graph_fingerprint,
+  village_fingerprint   -- legacy alias for exact_plan_fingerprint
+  structure_ids, structure_variants,
+  road_ids, road_segment_count,
+  lot_count, planned_lot_count, errors, created_at,
 }
 ```
 
 API: `pw_settlements.get(id)`, `.list_ids()`, `.list()`, `.get_by_candidate(id)`.
 
-### Deterministic Variation
+### Fingerprints
 
-All randomness flows from `village_prng_new(seed_key)` where seed_key depends on:
-`region_seed + candidate.id + biome_family + roughness + planner_version`.
-Same inputs always produce the same plan, profile, and fingerprint. Different
-regions produce different results — not clones with shifted coordinates.
+Three fingerprints answer three different questions.
 
-### Fingerprint
+**`exact_plan_fingerprint`** — is this literally the same plan?
+Full normalised geometry with no quantisation: every lot (relative position,
+role, structure name, rotation, road point) and every road (kind, width, every
+point relative to the centre), each sorted canonically. A one-block difference
+changes it.
 
-`stable_hash("v2" | archetype | biome_family | road_count | lot_count | size_class | [role, name, rotation, x, z for each lot] | [road_kind, point_count, first_point for each road])`
+**`structural_fingerprint`** — does this look like the same village?
+Positions quantised to a 4-block grid, plus archetype, size class, palette, lot
+and road counts, segment count and the role/structure multisets. Two plans that
+differ by a one-block nudge share a structural fingerprint on purpose.
 
-Used for determinism verification, save diagnostics, and cross-region comparison.
+**`road_graph_fingerprint`** — is this the same street network?
+Canonical, with an explicit contract:
+
+- coordinates are relative to the settlement centre, so absolute world position
+  never creates false uniqueness;
+- a segment is **undirected**: written from either end it yields the same token,
+  because the lexicographically smaller endpoint is emitted first;
+- segments are sorted, so Lua table order and the order in which independent
+  roads were generated do not matter;
+- per-node degrees are appended, so two graphs over the same point set but with
+  different connections differ;
+- every intermediate point is kept, so different bends differ;
+- road ids, kinds and names are excluded — this is geometry and topology only.
+
+### Validation
+
+`perfectworld.planner.validate_settlement(id)` checks the record **and the real
+world**. A record in mod_storage is not evidence that anything was built.
+
+| Check | What it proves |
+|-------|----------------|
+| `complete_has_lots`, `complete_has_required_roles`, `complete_has_no_errors`, `complete_fully_materialized` | the completeness contract holds |
+| `failed_has_no_lots` | a failed settlement really built nothing |
+| `has_fingerprints` | all three fingerprints are recorded |
+| `structures_resolve`, `roads_resolve` | every referenced id exists |
+| `footprints_disjoint` | buildings do not intersect |
+| `terrain_prep_isolated` | preparing one lot cannot damage its neighbour |
+| `roads_avoid_buildings` | no carriageway crosses a building |
+| `lots_connected_to_road` | every building reaches the network (driveways count) |
+| `doors_accessible` | the node outside each door is passable |
+| `bounds_contain_all` | bounds cover every structure and road cell |
+| `structures_present_in_world` | the nodes are actually there |
+| `no_floating_buildings` | solid ground under every footprint corner |
+| `nodes_registered` | no unknown nodes were placed |
+| `no_oversized_platform` | terrain modification margin stays within contract |
+| `no_duplicate_structures` | re-materialization did not clone anything |
+
+### Diversity Analysis
+
+`perfectworld.planner.build_analysis_sample{mode, count}` builds a
+deterministic sample of >= 100 planning inputs; `analyze_input(input)` plans one
+and returns a flat row.
+
+- `synthetic` mode drives `make_synthetic_terrain`, which produces coherent
+  value-noise relief on a lattice. It covers flat lowland and upland, gentle and
+  steep slopes, rolling and rough ground, shoreline, submerged and cliff sites,
+  crossed with every biome family, several world seeds and the fallback biome.
+  It needs no map generation, so it also runs inside the test suite.
+- `world` mode plans against the live map and emerges each site first.
+
+Metrics: input/valid/rejected/empty counts, archetype, biome family, palette,
+size class and lot count distributions, unique exact / structural / road graph
+fingerprints, unique lot layouts, role and structure compositions, duplicate
+groups and rejection reasons.
 
 ### Debug Commands
 
 - `/pw_village_list` — list all materialized settlements
-- `/pw_village_info [id]` — detailed info (archetype, fingerprint, lots, roads)
-- `/pw_village_tp <id>` — teleport to settlement center
-
+- `/pw_village_info [id]` — full settlement contract (nearest one if omitted)
+- `/pw_village_tp <id>` — teleport to settlement centre
+- `/pw_village_validate [id]` — run the physical validator
+- `/pw_village_validate_all` — validate every record and summarise failures
+- `/pw_village_batch [count] [region_radius]` — materialize planned villages,
+  spread across biome families
+- `/pw_village_analyze [synthetic|world] [count]` — write a diversity report
+- `/pw_village_export` — write every record plus its validation report
+- `/pw_village_shotlist` — write camera setups and metadata for screenshots
+- `/pw_photo_at <x> <y> <z> <tx> <ty> <tz>` — exact reproducible camera
 ## Future Roads
 
 `pw_roads` currently defines the API boundary only. Future work should add:

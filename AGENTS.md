@@ -26,7 +26,7 @@ PerfectWorld — самостоятельный модпак для Luanti/Minec
 |--------|------|---------|-----------------|
 | **pw_core** | `perfectworld/pw_core/` | — | API, settings, world seed, composite IDs, world format lock |
 | **pw_compat_mcl** | `perfectworld/pw_compat_mcl/` | pw_core | Mineclonia material compatibility |
-| **pw_planner** | `perfectworld/pw_planner/` | pw_core (opt: pw_structures) | Детерминированное планирование, materialization |
+| **pw_planner** | `perfectworld/pw_planner/` | pw_core (opt: pw_structures) | Детерминированное планирование, village grammar, validation, materialization |
 | **pw_structures** | `perfectworld/pw_structures/` | pw_core (opt: pw_compat_mcl) | Registry, terrain prep, rotation, placement |
 | **pw_roads** | `perfectworld/pw_roads/` | pw_core, pw_planner | Road network API |
 | **pw_settlements** | `perfectworld/pw_settlements/` | pw_core | Settlement type definitions (skeleton) |
@@ -84,11 +84,19 @@ xvfb-run --auto-servernum luanti --go --address 127.0.0.1 --port 30000 \
 
 ### Запуск тестов
 
-```bash
-# Выдать права
-docker exec perfectworld-dev sh -c 'echo "/grant pwbot all" > /proc/1/fd/0'
+Полный цикл одной командой (сервер, pwbot, привилегии, запуск, отчёт):
 
-# Автоматический запуск (pw_tests auto_run) или вручную:
+```bash
+scripts/run-testkit.sh
+```
+
+Флаги: `--keep` (использовать уже запущенный сервер), `--no-client`
+(не запускать pwbot).
+
+Вручную:
+
+```bash
+docker exec perfectworld-dev sh -c 'echo "/grant pwbot all" > /proc/1/fd/0'
 echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
   > data/worlds/perfectworld/rc_cmd.json
 ```
@@ -101,27 +109,46 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 
 ### Текущий baseline
 
-61 total | 57 PASS | 2 FAIL | 2 ERROR | 0 SKIP
+112 total | 112 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
-FAIL и ERROR — известные проблемы, не связанные с миграцией (см. `docs/status.md`).
+Baseline должен оставаться зелёным. Отчёт печатается через
+`python3 scripts/report-summary.py`.
 
 ---
 
 ## 4. Обязательные проверки перед завершением
 
 - `bash -n scripts/*.sh`
-- `python3 -m py_compile scripts/install-content.py`
+- `python3 -m py_compile scripts/*.py`
 - `git diff --check`
 - `bash scripts/smoke-test.sh`
-- Полный тестовый запуск (если вносились изменения в Lua-код)
-- Проверка `ERROR\|ModError\|LuaError` в логах сервера
+- Полный тестовый запуск (`scripts/run-testkit.sh`), если менялся Lua-код
+- Проверка `ERROR\|FATAL\|ModError\|LuaError\|AsyncErr\|stack traceback`
+  в логах сервера и клиента
+
+Быстрая проверка синтаксиса Lua без сервера:
+
+```bash
+docker run --rm --entrypoint luajit -v "$PWD/local_mods:/m" perfectworld-luanti \
+  -e "local f,e=loadfile('/m/perfectworld/pw_planner/init.lua') print(f and 'OK' or e)"
+```
 
 ---
 
 ## 5. Правила разработки
 
 ### Детерминированность
-Планы зависят только от: world seed + region coordinates + planner version + PerfectWorld configuration.
+Планы зависят только от: world seed + region coordinates + planner version +
+PerfectWorld configuration.
+
+Каждое решение — независимый хеш `hash32(seed_key .. "#" .. label)` через
+`perfectworld.core.choice`. Последовательные PRNG запрещены: числа в Lua —
+double, произведение выше `2^53` теряет младшие биты (предыдущий LCG вырождался
+в цикл длиной 10466). Добавление нового решения не должно сдвигать существующие,
+поэтому метки должны быть стабильными строками.
+
+Арифметика: используйте `perfectworld.core.mul32` для 32-битного умножения;
+любые промежуточные произведения держите ниже `2^53`.
 
 ### Идемпотентность
 Повторный запуск materialization не дублирует объекты.
@@ -139,13 +166,38 @@ FAIL и ERROR — известные проблемы, не связанные �
 
 ### Тесты
 - Не ослаблять тесты ради зелёного результата
+- Запрещены тавтологии вида `assert.is_true(true)` и `assert.is_true(x or true)`
 - При отсутствии предусловия — SKIP, не FAIL
 - Изолировать изменения мира (snapshot/restore)
+- Тесты планировки используют `perfectworld.planner.make_synthetic_terrain`,
+  чтобы не зависеть от того, какие mapblock уже сгенерированы
+
+### Валидация поселений
+`perfectworld.planner.validate_settlement(id)` проверяет запись **и реальный
+мир**. Запись в mod_storage не является доказательством того, что что-то
+построено.
 
 ---
 
-## 6. Известные ограничения
+## 6. Скриншоты
 
-- Изображения не просматриваются моделью — визуальная проверка только вручную
-- Не коммитить: secrets, worlds, logs, reports, runtime-data
+Скриншоты снимаются с работающего headless-клиента:
+
+```bash
+# 1. поднять сервер и pwbot
+scripts/run-testkit.sh
+# 2. посчитать камеры и метаданные
+#    (/pw_village_shotlist пишет pw_shotlist_*.json в каталог мира)
+# 3. снять кадры
+python3 scripts/capture-screenshots.py \
+  --shotlist data/worlds/perfectworld/pw_shotlist_<stamp>.json \
+  --out /path/outside/git --limit 6
+```
+
+Скрипт находит DISPLAY/XAUTHORITY запущенного клиента, ведёт камеру через
+`pw_remote_control` и снимает root-окно Xvfb через ImageMagick `import`.
+
+## 7. Известные ограничения
+
+- Не коммитить: secrets, worlds, logs, reports, screenshots, runtime-data
 - FAIL/ERROR в тестах: см. `docs/status.md`

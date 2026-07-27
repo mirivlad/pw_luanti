@@ -1,21 +1,20 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 79 total | 78 PASS | 1 FAIL | 0 SKIP | 0 ERROR
-(FAIL: fingerprint geometry test — fix committed, pending --force-recreate retest)
+**Test baseline:** 112 total | 112 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 ## Implemented Modules
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `pw_core` | ✅ Complete | API, composite IDs, world format lock, seed handling |
-| `pw_compat_mcl` | ✅ Complete | Material mappings, biome families (7), environment profiles, material palettes |
-| `pw_planner` | ✅ Complete | Region planning, village generation (3 archetypes), grammar pipeline, persistence |
-| `pw_structures` | ✅ Complete | 5 registered structures, terrain analysis, placement pipeline, rollback |
+| `pw_core` | ✅ Complete | API, composite IDs, world format lock, exact 32-bit hashing, stable variation contract |
+| `pw_compat_mcl` | ✅ Complete | Material mappings, biome id/name resolution, 7 biome families, environment profiles, palettes |
+| `pw_planner` | ✅ Complete | Region planning, village grammar (3 archetypes), terrain sampler, validation, diversity analysis, persistence |
+| `pw_structures` | ✅ Complete | 5 registered structures, terrain analysis, palette-aware placement, plinths, rollback |
 | `pw_roads` | ✅ Complete | Road persistence API, delegates to pw_planner storage |
-| `pw_settlements` | ✅ Complete | Type definitions, settlement record API (get/list/get_by_candidate) |
-| `pw_debug` | ✅ Complete | 16 chat commands including /pw_village_list, /pw_village_info, /pw_village_tp |
-| `pw_tests` | ✅ Complete | 53 PerfectWorld tests + 10 TestKit built-in + 6 smoke + 6 player = 75 total |
+| `pw_settlements` | ✅ Complete | Type definitions, settlement record API |
+| `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
+| `pw_tests` | ✅ Complete | 112 tests across core, planner, structures, variation, fingerprints, village, diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
 | `pw_remote_control` | ✅ Complete | JSON remote control |
 
@@ -23,63 +22,67 @@
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `pw_settlements` | 🟡 Skeleton | Types defined (farm/hamlet/village/town/city), not used by planner |
 | `pw_population` | 🟡 Skeleton | Table declared, no functionality |
 
-## New: Village Generation System (v2)
+## Village Generation System (v2)
 
-Biome-aware, multi-archetype settlement pipeline replacing the old single-template village:
+Biome-aware, multi-archetype settlement pipeline. See
+`docs/perfectworld-architecture.md` for the full contracts.
 
 - **Environment profiles**: 7 biome families via `pw_compat_mcl.get_environment()`
-- **3 archetypes**: linear (shore/valley), compact (open plains), hillside (rough)
-- **Grammar pipeline**: road network → lots → roles → structures → overlap filter → materialize
-- **Material palettes**: different foundation, wall, roof, path per biome family
-- **Deterministic PRNG**: LCG seeded by region + candidate + environment + planner version
-- **Settlement records**: persisted with fingerprint, archetype, structure/road IDs
-- **Debug commands**: `/pw_village_list`, `/pw_village_info`, `/pw_village_tp`
+- **3 archetypes**: linear, compact, hillside, with a documented hillside fallback
+- **Grammar pipeline**: emerge → environment → profile → roads → lots → structures → materialize
+- **Material palettes**: applied to foundations, walls, roofs, floors and paths
+- **Stable variation**: independent labelled hash decisions, not a PRNG stream
+- **Three fingerprints**: exact plan, structural, road graph
+- **Physical validation**: 15 checks against the record *and* the real world
+- **Diversity analysis**: >= 100 deterministic inputs, full metric set
 
-See `docs/perfectworld-architecture.md` for detailed contracts.
+## Resolved in This Cycle
+
+| Defect | Impact |
+|--------|--------|
+| LCG lost 9 bits per step to double rounding | Generator collapsed to a 10466-long cycle; replaced with exact hash-based choices |
+| `get_biome_data` returns a numeric id, resolver indexed `registered_biomes` by name | Every biome in the world resolved to `temperate`; the palette system was dead |
+| Material palettes computed but never passed to a generator | Every village was built out of oak regardless of biome |
+| Wells declare only rotation 0, planner picked from `{0,90,180,270}` | 3 of 4 wells failed to place |
+| Road width applied along +x regardless of heading | North-south streets were one block wide |
+| Roads materialized before structures | Terrain preparation buried the streets it had just laid |
+| Fixed lot setback smaller than building footprints | Dominant rejection reason; lots could not clear the carriageway |
+| Lot terrain check used a different area and slope limit than placement | Settlements landed in `partial` for lots the placer then rejected |
+| Villages materialized inline from `on_generated` | Planned against terrain that did not exist yet and burned the candidate |
+| `minetest.load_area` does not generate | Plans near the edge of the generated world produced zero lots |
+| Downhill footprint corners sat above open air | Buildings floated on slopes; foundations now carry down as a bounded plinth |
+| Settlement bounds hardcoded to ±50 | Did not contain the settlement |
+| `complete` status ignored required roles and unbuilt lots | Contract now enforced and validated |
+| Driveways were drawn but never recorded | Nothing proved a lot was reachable |
+| Single fingerprint quantised coordinates by 2 | One-block differences were invisible |
 
 ## Known Test Issues
 
-None. All 75 tests pass (75 PASS, 0 FAIL, 0 SKIP, 0 ERROR).
-
-## Fingerprint v3
-
-Village fingerprint now includes:
-- `road_graph_fingerprint` — normalized geometry (all road points relative to center, /2)
-- Normalized lot positions (relative to center, /2)
-- All structure variants, roles, rotations
-- Archetype, biome_family, size_class
-
-Empty settlements (lot_count=0) get `status = "failed"`, never `"complete"`.
+None. 112 PASS, 0 FAIL, 0 SKIP, 0 ERROR.
 
 ## Missing Systems
 
 - NPCs and villagers
 - Economy and trading
-- Roads between settlements (only village-to-farm local roads)
+- Roads between settlements (only local village roads and driveways)
 - Bridges and tunnels
 - Global route pathfinding
-- Slope-following building adaptation (flat terrace only)
 - Building interiors beyond minimal
 - Save migration between planner versions
 
-## Known Test Issues
-
-One known ERROR: biome_name type mismatch (numeric ID vs string) in get_biome_family — fix pending verification.
-
 ## Immediate Technical Tasks
 
-- Fix `prepare_candidate_area` to skip or handle village candidates
-- Fix terrain analysis test assertions to match actual return values
-- Integrate `pw_settlements` type definitions into `pw_planner` (replace hardcoded probabilities)
-- Implement basic population that spawns at materialized settlements
-- Add save migration framework for world format changes
+- Integrate `pw_settlements` type definitions into `pw_planner`
+  (replace the hardcoded candidate-type weights)
+- Add a save migration framework for world format changes
+- Widen the structure catalogue: five structures limits how different two
+  villages of the same archetype can look
 
 ## Supported Platforms
 
 - Linux with Docker
 - Luanti 5.16.1 server and client
 - Mineclonia game
-- Xvfb for headless testing
+- Xvfb for headless testing and screenshots
