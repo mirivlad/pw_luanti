@@ -101,6 +101,19 @@ def grab(display, xauth, window, path):
     subprocess.run(["import", "-window", window, path], env=env, check=True)
 
 
+def hide_chat(display, xauth, window):
+    """Toggle the chat overlay off (F2).
+
+    The client prints a wall of locale-loading errors on startup and they sit
+    in the chat HUD across the top of every shot. This assumes a freshly
+    started client, i.e. that the chat is currently visible — run this script
+    right after scripts/run-testkit.sh.
+    """
+    env = dict(os.environ, DISPLAY=display, XAUTHORITY=xauth)
+    subprocess.run(["xdotool", "key", "--window", window, "F2"], env=env, check=False)
+    time.sleep(1.0)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--shotlist", required=True)
@@ -136,6 +149,7 @@ def main() -> int:
 
     rc("pw_photo_setup")
     time.sleep(3)
+    hide_chat(display, xauth, window)
 
     metadata = []
     for index, settlement in enumerate(settlements, start=1):

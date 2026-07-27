@@ -1461,9 +1461,29 @@ minetest.register_chatcommand("pw_village_shotlist", {
             {x = (bounds.min_x or center.x) - 8, y = -32, z = (bounds.min_z or center.z) - 8},
             {x = (bounds.max_x or center.x) + 8, y = 200, z = (bounds.max_z or center.z) + 8})
         end
+        -- Frame on the built extent (the lots), not on the plan bounds: the
+        -- street can run well past the last building and would push the whole
+        -- village into a corner of the shot.
+        local lot_min_x, lot_max_x, lot_min_z, lot_max_z
+        for _, lot in ipairs(plan.lots or {}) do
+          if lot.status == "materialized" then
+            lot_min_x = math.min(lot_min_x or lot.center.x, lot.center.x)
+            lot_max_x = math.max(lot_max_x or lot.center.x, lot.center.x)
+            lot_min_z = math.min(lot_min_z or lot.center.z, lot.center.z)
+            lot_max_z = math.max(lot_max_z or lot.center.z, lot.center.z)
+          end
+        end
+        if lot_min_x then
+          center = {
+            x = math.floor((lot_min_x + lot_max_x) / 2),
+            y = center.y,
+            z = math.floor((lot_min_z + lot_max_z) / 2),
+          }
+        end
         local extent = math.max(
-          (bounds.max_x or center.x) - (bounds.min_x or center.x),
-          (bounds.max_z or center.z) - (bounds.min_z or center.z), 30)
+          (lot_max_x or bounds.max_x or center.x) - (lot_min_x or bounds.min_x or center.x),
+          (lot_max_z or bounds.max_z or center.z) - (lot_min_z or bounds.min_z or center.z),
+          28)
         local center_y = ground(center.x, center.z, center.y)
         local shots = {}
 
