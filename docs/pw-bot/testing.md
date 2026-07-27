@@ -1,14 +1,15 @@
-# Testing the bridge
+# Testing the bridge and the brain
 
-The bridge registers its own TestKit suite, `pw_bot_bridge`, so a normal
-`pw_test_all` run covers it and the project keeps one baseline number.
+Both mods register their own TestKit suite — `pw_bot_bridge` and
+`pw_player_bot` — so a normal `pw_test_all` run covers them and the project keeps
+one baseline number.
 
 ```bash
 scripts/run-testkit.sh
 ```
 
-Current: **204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR**, of which 86 are
-bridge tests.
+Current: **258 total | 258 PASS | 0 FAIL | 0 SKIP | 0 ERROR**, of which 86 are
+bridge tests and 54 are brain tests.
 
 ## Layout
 
@@ -22,6 +23,14 @@ local_mods/perfectworld/pw_bot_bridge/tests/
 ├── unit_transport.lua path safety, round trip, malformed input
 ├── scenes.lua         scenes A–E against the real world
 └── integration.lua    end to end on a live server with a live player
+
+local_mods/perfectworld/pw_player_bot/tests/
+├── init.lua           registers the suite, loads the rest
+├── support.lua        synthetic observations and hand-built memories
+├── unit_memory.lua    what is learned, bounded, decayed, persisted, and what is not
+├── unit_navigation.lua routing over remembered ground only
+├── unit_decisions.lua needs, goals, utility, intent documents
+└── integration.lua    the brain end to end against the real bridge
 ```
 
 ## Integration tests use a real server
@@ -130,6 +139,27 @@ steps a real restart performs. A genuine `docker compose restart` was also run b
 hand and confirmed the same contract: modes survived, sequence numbers restarted,
 event queues were empty.
 
+## The brain's own tests
+
+Unit tests run on hand-built memories and synthetic observations, so a claim
+about scoring can be made without a world getting in the way. The integration
+tests run the real brain against the real bridge and a real connected player.
+
+| Area | What is pinned down |
+|------|--------------------|
+| Memory | Only what an observation reported is learned; confidence falls with distance; features and objects are separate; staleness is reported rather than corrected; the store is bounded and says how much it forgot; contradictions are counted; a restart keeps knowledge and drops session state; corrupt storage yields a bot that knows nothing rather than one that invents |
+| Beliefs | Standable is not traversable; steps too high or too deep are refused; the frontier is the edge of knowledge and the middle of a known plateau is not; frontier order does not depend on Lua's hash walk; exploration counts where the bot stood, not what it saw |
+| Navigation | Routes cross remembered ground only; an unknown goal and an unreachable one are different answers; water and hazards are avoided; step limits hold; a road beats bare ground; the expansion cap binds; two identical plans are identical; simplification keeps turns and drops straights; an approach lands on the doorstep, not in the door; a route faces before it walks |
+| Needs | Bounded, named and explained; safety dominates when something can hurt; curiosity falls as the neighbourhood is walked; recovery rises when the bot stops moving; standing still on purpose is not being stuck |
+| Utility | Danger outranks curiosity; near beats far; the edge that teaches more wins; a doorway outranks a fence; the same state produces the same choice with no randomness; every score is explained |
+| Intent | Versioned and valid; the action vocabulary is closed; rejected alternatives are carried; yaw faces the way it means to go; encoding is canonical |
+| The brain | Refuses to start unless the bridge granted perception; lifecycle needs authorisation; only ever asks for player-mode operations; thinks end to end against the real bridge; **never moves, turns or damages the player**; holds a fresh intent instead of dithering; survives a bridge refusal without inventing a world; memory grows across ticks and survives a restart; routes only over ground it observed; explains itself; stays inside its tick budget; capabilities declare what it does and does not do |
+
+`brain_never_moves_turns_or_damages_the_player` is the one that matters most: it
+records the player's position, look direction and health, runs a full tick, and
+asserts that all three are untouched. The smoke test enforces the same rule
+statically; this one enforces it at runtime.
+
 ## Chatcommands
 
 All require `pw_bot_admin`. None prints a large document into chat; full
@@ -153,12 +183,34 @@ one-screen summary.
 `/pwbot_bridge` is the shortcut for the project's own test player: it registers
 it if needed and reports on it in one call.
 
+The brain's commands follow the same rule and the same privilege:
+
+```
+/pw_player_bot_status [player]
+/pw_player_bot_start <player>
+/pw_player_bot_stop <player>
+/pw_player_bot_think <player>
+/pw_player_bot_explain <player>
+/pw_player_bot_route <player> <x> <y> <z>
+/pw_player_bot_memory <player> [forget]
+/pw_player_bot_capabilities
+/pwbot_brain [think|status|stop]
+```
+
+`/pwbot_brain think` is the fastest way to watch one decision: it registers the
+test player with the bridge if needed, starts thinking, runs a single tick, and
+prints the goal, the drives and the first few lines of the rationale.
+
 Artifacts land in the world directory, which is gitignored:
 
 ```
 pw_bot_bridge_capabilities_<stamp>.json
 pw_bot_bridge_observe_<stamp>.json
 pw_bot_bridge_selftest_<stamp>.json
+pw_player_bot_intent_<stamp>.json
+pw_player_bot_explain_<stamp>.json
+pw_player_bot_memory_<stamp>.json
+pw_player_bot_capabilities_<stamp>.json
 ```
 
 ## Driving the transport by hand
@@ -197,7 +249,15 @@ git diff --check
 bash scripts/smoke-test.sh
 ```
 
-The smoke test checks more than file presence for this mod: it fails if the
-bridge ever gains a call that moves, turns or attaches a player or writes a node,
-if it grows a screenshot or image dependency, or if anyone adds
-`request_insecure_environment()`.
+The smoke test checks more than file presence for these two mods. It fails if:
+
+* either mod gains a call that moves, turns, attaches or damages a player, or
+  writes a node, outside its own tests
+* either mod grows a screenshot or image-pipeline dependency
+* the bridge adds `request_insecure_environment()`
+* `pw_player_bot` reads the map directly — `get_node`, `VoxelManip`,
+  `get_objects_inside_radius` — instead of going through the bridge
+* `pw_player_bot` calls `math.random`, `math.randomseed` or `PseudoRandom`
+
+The last two are the guards that keep the brain honest. A bot that can read the
+map does not need to look, and a bot that rolls dice cannot be tested.

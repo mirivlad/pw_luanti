@@ -9,6 +9,7 @@ TestKit (luanti_testkit)  ←  universal framework
     ↑
 pw_tests                  ←  PerfectWorld-specific tests
 pw_bot_bridge/tests       ←  bot bridge suite (registers into the same TestKit)
+pw_player_bot/tests       ←  bot brain suite (registers into the same TestKit)
     ↑
 pwbot (test client)       ←  connects to server, runs chat commands
     ↑
@@ -21,6 +22,7 @@ Two suites run in one pass:
 |-------|--------|
 | `perfectworld` | core, planner, structures, variation, fingerprints, village, diversity |
 | `pw_bot_bridge` | protocol, registry, permissions, perception, semantics, events, transport, scenes A–E, live integration |
+| `pw_player_bot` | memory, beliefs, navigation, needs, goals, utility scoring, intent documents, live brain integration |
 
 The bridge suite is documented in detail in
 [docs/pw-bot/testing.md](pw-bot/testing.md).
@@ -161,7 +163,7 @@ directory. The default `data/worlds/perfectworld/` is for development.
 
 204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
-118 in the `perfectworld` suite, 86 in `pw_bot_bridge`.
+118 in the `perfectworld` suite, 86 in `pw_bot_bridge`, 54 in `pw_player_bot`.
 
 The baseline must stay green. See `docs/status.md` for the current state and
 `python3 scripts/report-summary.py <report.json>` to print a summary.

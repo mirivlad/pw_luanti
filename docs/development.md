@@ -18,6 +18,8 @@ pw_core  ←  (root, no dependencies)
   ├── pw_debug       (depends: pw_core, opt: pw_planner, pw_structures)
   ├── pw_bot_bridge  (depends: pw_core, opt: pw_compat_mcl, pw_planner,
   │                    pw_structures, pw_roads, pw_settlements, luanti_testkit)
+  ├── pw_player_bot  (depends: pw_core, pw_bot_bridge, opt: pw_compat_mcl,
+  │                    pw_planner, luanti_testkit)
   └── pw_tests       (depends: luanti_testkit, pw_core, pw_planner, pw_structures, pw_compat_mcl)
 
 luanti_testkit  ←  (no game dependencies)
@@ -57,6 +59,24 @@ pw_bot_bridge.register_node_semantics("pw_ports:pier_deck", {"dock", "road_surfa
 ```
 
 Never add a node-name check inside the perception code instead.
+
+**Bot brain** — `pw_player_bot` is the decision half. It asks the bridge, in
+player mode only, what its player can perceive; keeps a bounded, decaying,
+persisted memory of the answers; derives beliefs about what is walkable and
+where the edge of its knowledge lies; turns its condition into five needs;
+scores seven kinds of goal against them; plans a route across remembered
+columns only; and writes an intent document. It decides and stops — moving,
+turning and interacting belong to a future runtime driving a real client, which
+does not exist. It never reads the map directly and never calls `math.random`;
+`scripts/smoke-test.sh` enforces both. See
+[docs/pw-bot/player-bot.md](pw-bot/player-bot.md).
+
+A subsystem that adds something the bot should walk over to look at registers
+its interest rather than editing `goals.lua`:
+
+```lua
+pw_player_bot.set_feature_interest("dock", 0.7)
+```
 
 ### Determinism Rules
 

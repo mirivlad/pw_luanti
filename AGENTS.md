@@ -33,6 +33,7 @@ PerfectWorld — самостоятельный модпак для Luanti/Minec
 | **pw_population** | `perfectworld/pw_population/` | pw_core | Population API (skeleton) |
 | **pw_debug** | `perfectworld/pw_debug/` | pw_core (opt: pw_planner, pw_structures) | Debug commands, screenshot system |
 | **pw_bot_bridge** | `perfectworld/pw_bot_bridge/` | pw_core (opt: pw_compat_mcl, pw_planner, pw_structures, pw_roads, pw_settlements, luanti_testkit) | Серверное восприятие мира для будущего PW Bot: режимы `player`/`oracle`, protocol `pw_bot_bridge/v1` |
+| **pw_player_bot** | `perfectworld/pw_player_bot/` | pw_core, pw_bot_bridge (opt: pw_compat_mcl, pw_planner, luanti_testkit) | Решающий слой бота: ограниченная память, убеждения, маршруты, потребности, цели, протокол намерений `pw_player_bot/v1`. Только решает, никогда не действует |
 | **pw_tests** | `perfectworld/pw_tests/` | luanti_testkit, pw_* | TestKit-based tests |
 | **luanti_testkit** | `luanti_testkit/` | — | Universal server-side test framework |
 | **pw_remote_control** | `pw_remote_control/` | — | JSON remote control |
@@ -110,7 +111,7 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 
 ### Текущий baseline
 
-204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+258 total | 258 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 Baseline должен оставаться зелёным. Отчёт печатается через
 `python3 scripts/report-summary.py`.
@@ -204,19 +205,21 @@ ImageMagick `import`.
 экран пользователя, а не игру. При несовпадении скрипт отказывается работать,
 а не угадывает.
 
-## 7. PW Bot и `pw_bot_bridge` — обязательные правила
+## 7. PW Bot, `pw_bot_bridge` и `pw_player_bot` — обязательные правила
 
 Подробности: [`docs/pw-bot/`](docs/pw-bot/README.md).
 
-PW Bot **ещё не существует**. Реализованы только его «органы чувств» —
-серверный мод `pw_bot_bridge`. Не заявляйте в документации или коммитах, что
-бот готов.
+PW Bot **ещё не ходит**. Реализованы две его части из трёх: «органы чувств»
+(`pw_bot_bridge`) и «решающий слой» (`pw_player_bot`). Того, что исполняет
+намерение через настоящий клиент, не существует. Не заявляйте в документации
+или коммитах, что бот готов или что он что-то делает в мире.
 
 Главный принцип:
 
 ```text
-Bridge observes and explains.
-The real client acts.
+pw_bot_bridge     perceives    -- never acts
+pw_player_bot     decides      -- never acts
+a real client     acts         -- not written
 ```
 
 Правила, обязательные для любого будущего изменения:
@@ -248,9 +251,31 @@ The real client acts.
 - **`request_insecure_environment()` запрещён** без доказанной необходимости и
   отдельного решения пользователя. Сейчас он не нужен.
 - **Не коммитить runtime spool и отчёты**: `data/worlds/*/pw_bot_bridge/`,
-  `pw_bot_bridge_*.json`.
+  `pw_bot_bridge_*.json`, `pw_player_bot_*.json`.
 
 External transport выключен по умолчанию. Oracle выключен для обычных игроков.
+
+Правила, относящиеся именно к `pw_player_bot`:
+
+- **Мозг решает, но не действует.** Ни движения, ни поворота головы, ни
+  взаимодействия, ни изменения нод. На выходе — документ `intent`, и всё.
+  `scripts/smoke-test.sh` проверяет это grep-ом.
+- **Мозг не читает карту напрямую.** Ни `minetest.get_node`, ни `VoxelManip`,
+  ни `get_objects_inside_radius`. Единственный источник знаний о мире —
+  ответы `pw_bot_bridge` в режиме `player`. Это тоже проверяется grep-ом.
+- **Мозг не использует oracle-данные**, даже если бот зарегистрирован в
+  режиме `oracle`. Список разрешённых операций — `brain.ALLOWED_OPERATIONS`.
+- **Никакой случайности.** `math.random`, `math.randomseed`, `PseudoRandom`
+  запрещены; ничьи разрешаются хешем через `perfectworld.core.choice`.
+  Контракт: одна и та же память и одно и то же наблюдение дают одно и то же
+  намерение.
+- **Маршрут строится только по запомненным клеткам.** Путь через место,
+  которое бот не видел, — это не маршрут, а выдумка.
+- **Память ограничена, устаревает и честно об этом сообщает.** Не сохранять
+  то, что принадлежит сессии моста: `observation_id`, счётчики застревания,
+  текущее намерение, убеждения.
+- **Изменение протокола `pw_player_bot/v1` требует версионирования**, как и у
+  моста.
 
 ## 8. Известные ограничения
 

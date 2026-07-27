@@ -637,7 +637,10 @@ pw_bot_bridge
 player / oracle observation
         |
         v
-future pw_bot memory and logic        <- not implemented
+pw_player_bot memory and decisions
+        |
+        v
+intent document (pw_player_bot/v1)
         |
         v
 future real-client controller          <- not implemented
@@ -672,6 +675,46 @@ The protocol is `pw_bot_bridge/v1`. Any incompatible change to it requires a new
 version, not a silent edit.
 
 Full documentation: [docs/pw-bot/](pw-bot/README.md).
+
+## Bot Brain
+
+`pw_player_bot` is the second half. It consumes the bridge in `player` mode only
+and produces an intent document; between those two points there is nothing that
+touches the world.
+
+```
+observe -> remember -> believe -> feel -> propose -> score -> plan -> intend
+```
+
+What it keeps is a **bounded memory of what was observed**, one record per
+surface column, with a confidence that separates standing on a block from
+glimpsing it twelve nodes away. What it derives, fresh every tick, are beliefs:
+which columns are traversable, where the hazards are, and where the frontier —
+the edge of what has been seen — lies. Routes are planned by A* across
+remembered columns and nowhere else, which means the bot's failures are
+informative: `goal_not_remembered` says the generator built somewhere the bot has
+had no chance to see, and that is a fact about the world, not about the bot.
+
+Decisions come from five needs (safety, recovery, orientation, curiosity,
+interest) scored against seven goal kinds. No goal has an intrinsic priority; a
+doorway outranks a frontier only when interest outranks curiosity. Above a
+safety of 0.5 a fear gate suppresses the exploratory drives outright, because a
+bot that can be talked into sightseeing beside a lava flow is not a model of
+anything.
+
+The whole thing is deterministic — `math.random` is never called, and ties break
+on the same `perfectworld.core.choice` hashing the generator uses. The same
+memory and the same observation produce the same intent, which is what makes a
+regression in the bot's judgement testable at all.
+
+This is also where the generator gets a second kind of feedback. Oracle mode
+answers "is this road physically sound"; the brain answers "can something that
+only knows what it saw actually get anywhere in this village". Those are
+different questions, and the second one is the one a player asks.
+
+The protocol is `pw_player_bot/v1`, versioned on the same terms as the bridge.
+
+Full documentation: [docs/pw-bot/player-bot.md](pw-bot/player-bot.md).
 
 ## Future AliveWorld Integration
 

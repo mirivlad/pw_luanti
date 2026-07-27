@@ -5,18 +5,18 @@ that reports less.
 
 ## Not implemented
 
-PW Bot does not exist. None of this is built:
+PW Bot cannot yet do anything. None of this is built:
 
-* client control of any kind
+* client control of any kind — nothing executes an intent
 * Xvfb, Xephyr, a `--visible` mode
-* movement, navigation, route planning
-* bot memory
-* utility AI, behaviour, decision making
-* building, NPCs
+* actual movement: the bot plans routes and never walks one
+* building, crafting, fighting, trading, NPCs
 * any LLM integration
 * computer vision, screenshot analysis
 
-What exists is `pw_bot_bridge`: the server-side senses, and nothing else.
+What exists is two halves of a bot that is missing its third: `pw_bot_bridge`,
+the server-side senses, and `pw_player_bot`, the decision layer that reads them.
+Neither acts, and nothing between them and a running client is written.
 
 ## Screenshots are not vision
 
@@ -111,10 +111,33 @@ what it strikes. A feature small enough to fall between rays can be missed. It i
 a perception primitive, not a database query — which is the honest shape for
 something claiming to model sight.
 
-## No pathfinding
+## No pathfinding in the bridge
 
 The bridge answers "where is the road, where is the door, can the threshold be
-stood in". It does not answer "how do I get there". Routing belongs to `pw_bot`.
+stood in". It does not answer "how do I get there". Routing lives in
+`pw_player_bot`, over remembered cells only.
+
+## The brain: what it cannot do
+
+* **It never acts.** No movement, no turning, no interaction, no node change. It
+  writes an intent and stops. Nothing reads that intent yet.
+* **It routes over belief, not over the world.** A route crosses only columns the
+  bot personally observed. Where the belief is wrong — because someone dug a
+  hole, or because a glimpse was misread — the route is wrong with it. The usual
+  answer to "why did it not go there" is `goal_not_remembered`: it has never seen
+  the way.
+* **Memory is approximate.** Eviction is a one-pass approximate LRU, not an exact
+  one. Staleness is reported, never corrected: memory says when it last looked,
+  not what is there now.
+* **It has no goals beyond seven.** Explore, approach, retreat, leave liquid,
+  look, unstick, stand still. No errands, no schedule, no social behaviour, no
+  long-horizon plan. There is no task queue and no notion of a day.
+* **It has no model of other agents.** Objects are remembered as things at
+  places. It does not predict, avoid or cooperate with anything that moves.
+* **Interaction is in the vocabulary and unused.** `interact` and `jump_to` exist
+  as actions a controller must understand; no goal in this version emits them.
+* **Tested with one bot.** The design is per-bot throughout, but several have not
+  been run.
 
 ## Persistence boundary
 

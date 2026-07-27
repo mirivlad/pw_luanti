@@ -15,6 +15,8 @@ integration.
 - Divides the world into 1024×1024 deterministic regions
 - Exposes a server-side perception API (`pw_bot_bridge`) so an automated player
   and the test kit can inspect what was built
+- Decides what such a player would do (`pw_player_bot`): bounded memory, beliefs,
+  needs, goals and routes — written down as an intent, never executed
 - Plans settlement candidates (farms, hamlets, villages) per region
 - Places 5 structure types: farmstead, two house variants, barn, well
 - Generates village layouts: main street, plots, building assignment
@@ -88,7 +90,7 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 ls -t data/worlds/perfectworld/ltk_report_*.json | head -1
 ```
 
-Current: **204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR**
+Current: **258 total | 258 PASS | 0 FAIL | 0 SKIP | 0 ERROR**
 
 See [docs/testing.md](docs/testing.md) for full test documentation.
 
@@ -117,6 +119,7 @@ PerfectWorld/
 │   │   ├── pw_population/        # Population (skeleton)
 │   │   ├── pw_debug/             # Chat commands, screenshots
 │   │   ├── pw_bot_bridge/        # Server-side perception for the future PW Bot
+│   │   ├── pw_player_bot/        # The bot's decision layer: memory, needs, goals, intents
 │   │   └── pw_tests/             # TestKit-based tests
 │   ├── luanti_testkit/           # Universal test framework
 │   └── pw_remote_control/        # JSON remote controller

@@ -1,30 +1,49 @@
 # PW Bot
 
 PW Bot is the planned automated inhabitant of PerfectWorld: a program that
-connects to the server as an ordinary player, looks around, and walks. It does
-not exist yet.
+connects to the server as an ordinary player, looks around, and walks.
 
-What exists today is its first half — **`pw_bot_bridge`**, the server mod that
-gives such a program senses.
+Two of its three parts exist:
 
 ```
-Bridge observes and explains.
-The real client acts.
+pw_bot_bridge     perceives    -- never acts
+pw_player_bot     decides      -- never acts
+a real client     acts         -- not written
 ```
+
+The bridge answers structured questions about what a connected player could
+know. The brain reads those answers, remembers them, and writes down what it has
+decided to do. Nothing yet reads that decision and presses a key.
 
 ## Documents
+
+### The bridge — senses
 
 | Document | Covers |
 |----------|--------|
 | [architecture.md](architecture.md) | Why the bridge lives inside PerfectWorld, and how the pieces fit |
-| [bridge-api.md](bridge-api.md) | The internal Lua API a future `pw_bot` may depend on |
+| [bridge-api.md](bridge-api.md) | The internal Lua API a consumer may depend on |
 | [protocol-v1.md](protocol-v1.md) | `pw_bot_bridge/v1`: envelopes, operations, error codes, determinism |
 | [player-perception.md](player-perception.md) | What `player` mode reports, and the exact contract behind it |
 | [oracle-perception.md](oracle-perception.md) | What `oracle` mode reports, and what it is for |
 | [semantics.md](semantics.md) | The central semantic registry and normalised node properties |
 | [security.md](security.md) | Privileges, mode assignment, the transport, and what is not defended |
+
+### The brain — decisions
+
+| Document | Covers |
+|----------|--------|
+| [player-bot.md](player-bot.md) | The decision loop, modules, settings, commands |
+| [player-bot-memory.md](player-bot-memory.md) | Bounded memory, confidence, staleness, beliefs, the frontier |
+| [player-bot-decisions.md](player-bot-decisions.md) | Needs, the fear gate, goals, utility scoring, tie-breaks |
+| [intent-v1.md](intent-v1.md) | `pw_player_bot/v1`: the document a controller executes |
+
+### Both
+
+| Document | Covers |
+|----------|--------|
 | [testing.md](testing.md) | Scenes, unit tests, integration tests, how to run them |
-| [limitations.md](limitations.md) | Everything the bridge cannot do, stated plainly |
+| [limitations.md](limitations.md) | Everything neither mod can do, stated plainly |
 
 ## Status
 
@@ -33,13 +52,26 @@ The real client acts.
 | `pw_bot_bridge` server mod | implemented, tested, documented |
 | `pw_bot_bridge/v1` protocol | implemented |
 | External file transport | implemented, **off by default** |
-| PW Bot itself | **not implemented** |
-| Client control, movement, navigation, memory, behaviour | **not implemented** |
+| `pw_player_bot` brain | implemented, tested, documented |
+| `pw_player_bot/v1` intent protocol | implemented |
+| Client control — anything that executes an intent | **not implemented** |
+| Actual movement, building, NPCs, LLM integration | **not implemented** |
 
-Nothing in this directory should be read as a claim that PW Bot exists. It
-describes the interface the bot will be built on.
+Nothing in this directory should be read as a claim that PW Bot walks. It
+decides, in writing, and stops.
 
-## The one-paragraph version
+## The one-paragraph version — the brain
+
+`pw_player_bot` asks the bridge, in player mode only, what its player can
+perceive; folds the answer into a bounded memory with a confidence per fact;
+derives beliefs about what is walkable and where the edge of its knowledge is;
+turns its condition into five drives; scores every goal those beliefs make
+possible; plans a route across remembered columns only; and writes an intent
+document saying what a controller should do. It never moves, turns, interacts,
+reads the map, or uses oracle data — and it never calls `math.random`, so the
+same memory and the same observation always produce the same intent.
+
+## The one-paragraph version — the bridge
 
 `pw_bot_bridge` watches a connected, ordinary player and answers structured
 questions about what that player could know. In `player` mode the answers are
