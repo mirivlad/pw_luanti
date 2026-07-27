@@ -330,11 +330,13 @@ perfectworld.planner.ROLE_ORDER = ROLE_ORDER
 perfectworld.planner.MIN_DWELLINGS = MIN_DWELLINGS
 
 local ROLE_VARIANTS = {
-  dwelling = {"pw_house_small_v1", "pw_house_small_v2"},
-  farm = {"pw_farmstead_v1"},
-  utility = {"pw_barn_v1", "pw_well_v1"},
+  dwelling = {"pw_house_small_v1", "pw_house_small_v2",
+              "pw_house_long_v1", "pw_house_tall_v1"},
+  farm = {"pw_farmstead_v1", "pw_barn_v1"},
+  utility = {"pw_barn_v1", "pw_house_small_v2"},
   central = {"pw_well_v1"},
-  optional = {"pw_house_small_v1", "pw_house_small_v2", "pw_barn_v1", "pw_well_v1"},
+  optional = {"pw_house_small_v1", "pw_house_small_v2", "pw_house_long_v1",
+              "pw_house_tall_v1", "pw_barn_v1", "pw_well_v1"},
 }
 
 -- === Terrain sampling ===
@@ -386,6 +388,14 @@ local function make_world_terrain()
       if below == "air" or below == "ignore" then break end
     end
     return false
+  end
+
+  --- Soil, sand or snow-covered soil: ground a village would be built on.
+  function terrain.is_livable(x, z)
+    local y = terrain.surface_y(x, z)
+    if not y then return false end
+    return perfectworld.compat.is_livable_ground(
+      minetest.get_node({x = x, y = y, z = z}).name)
   end
 
   function terrain.reset()
@@ -455,6 +465,10 @@ function perfectworld.planner.make_synthetic_terrain(spec)
   function terrain.is_liquid(x, z)
     if not water_line then return false end
     return terrain.surface_y(x, z) <= water_line
+  end
+
+  function terrain.is_livable(x, z)
+    return not terrain.is_liquid(x, z)
   end
 
   function terrain.reset() end
@@ -968,6 +982,7 @@ end
 local function terrain_verdict(fp_min, fp_max, max_slope, terrain)
   local margin = 1
   local min_y, max_y = nil, nil
+  local livable, total = 0, 0
   for x = fp_min.x - margin, fp_max.x + margin do
     for z = fp_min.z - margin, fp_max.z + margin do
       if terrain.is_liquid(x, z) then return false, "water" end
@@ -975,10 +990,15 @@ local function terrain_verdict(fp_min, fp_max, max_slope, terrain)
       if not y then return false, "no_surface" end
       min_y = min_y and math.min(min_y, y) or y
       max_y = max_y and math.max(max_y, y) or y
+      total = total + 1
+      if terrain.is_livable(x, z) then livable = livable + 1 end
     end
   end
   local slope = (max_y or 0) - (min_y or 0)
   if slope > max_slope then return false, "slope" end
+  -- Barren ground: flat naked rock passes every geometric test and still
+  -- makes a village that nobody could live in.
+  if total > 0 and livable / total < 0.7 then return false, "barren" end
   return true, nil, min_y, slope
 end
 
@@ -1153,7 +1173,7 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
   -- so planning and placement agree on what counts as buildable.
   local hillside = profile.archetype == "hillside"
   local terrain_overrides = hillside
-    and {max_slope = 5, max_cut_depth = 5, max_fill_height = 4, foundation_depth = 4}
+    and {max_slope = 6, max_cut_depth = 6, max_fill_height = 5, foundation_depth = 4}
     or nil
 
   local anchors = lot_anchors(seed_key, roads, profile)
@@ -1230,6 +1250,48 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
             terrain_verdict(building_min, building_max, lot_max_slope, terrain)
           if not terrain_ok then
             blocked, reason = true, terrain_reason
+          else
+            -- The plot has to be reachable from its own street on foot.
+            -- A stepped way can climb one block per cell and no more, so the
+            -- approach has to be short enough for the height it has to gain.
+            local road_y = terrain.surface_y(anchor.road_point.x, anchor.road_point.z)
+            local lot_y = terrain.surface_y(cx, cz)
+            if not road_y or not lot_y then
+              blocked, reason = true, "no_surface"
+            elseif math.abs(lot_y - road_y) > 6 then
+              blocked, reason = true, "too_far_above_street"
+            else
+              -- Walk the approach line and check it can be terraced.
+              local door = {x = cx, z = cz}
+              for _, c in ipairs(def.connectors or {}) do
+                if c.type == "road" and c.offset_pos then
+                  local r = perfectworld.structures.rotate_point(c.offset_pos, rotation)
+                  door = {x = cx + r.x, z = cz + r.z}
+                  break
+                end
+              end
+              local ddx = anchor.road_point.x - door.x
+              local ddz = anchor.road_point.z - door.z
+              local span = math.max(math.abs(ddx), math.abs(ddz), 1)
+              local climb = math.abs(lot_y - road_y)
+              if climb > span then
+                blocked, reason = true, "approach_too_steep"
+              else
+                for step = 0, span do
+                  local t = step / span
+                  local px = math.floor(door.x + ddx * t + 0.5)
+                  local pz = math.floor(door.z + ddz * t + 0.5)
+                  if terrain.is_liquid(px, pz) then
+                    blocked, reason = true, "approach_over_water"
+                    break
+                  end
+                  if not terrain.surface_y(px, pz) then
+                    blocked, reason = true, "no_surface"
+                    break
+                  end
+                end
+              end
+            end
           end
         end
 
@@ -1386,15 +1448,39 @@ end
 -- minetest.load_area only loads already-generated blocks, so a village planned
 -- near the edge of the generated world would see no terrain at all.
 function perfectworld.planner.emerge_village_area(candidate, callback)
-  local radius = 72
-  local minp = {x = candidate.x - radius, y = -16, z = candidate.z - radius}
-  local maxp = {x = candidate.x + radius, y = 144, z = candidate.z + radius}
   if not minetest.emerge_area then
     callback()
     return
   end
+
+  -- Keep the request well under emergequeue_limit_total. Asking for more
+  -- mapblocks than the queue accepts gets the surplus dropped silently, the
+  -- final callback never fires, and the caller waits forever. get_spawn_level
+  -- is noise-based, so the surface height is known before generating anything.
+  local radius = 64
+  local surface = (minetest.get_spawn_level
+    and minetest.get_spawn_level(candidate.x, candidate.z)) or 32
+  local minp = {x = candidate.x - radius, y = surface - 24, z = candidate.z - radius}
+  local maxp = {x = candidate.x + radius, y = surface + 32, z = candidate.z + radius}
+
+  local done = false
+  local function finish()
+    if done then return end
+    done = true
+    callback()
+  end
+
   minetest.emerge_area(minp, maxp, function(_, _, calls_remaining)
-    if calls_remaining == 0 then callback() end
+    if calls_remaining == 0 then finish() end
+  end)
+
+  -- Watchdog: a stalled emerge must not stall the whole run.
+  minetest.after(45, function()
+    if not done then
+      minetest.log("warning", "[pw_planner] emerge timed out for "
+        .. tostring(candidate.id or "site") .. ", continuing with what is loaded")
+      finish()
+    end
   end)
 end
 
@@ -1640,7 +1726,67 @@ function perfectworld.planner.analyze_input(input)
 end
 -- === Village Materialization ===
 
---- Lay a road surface strip perpendicular to the direction of travel.
+--- Ground level of a column, ignoring the loose cover that sits on top of it.
+--
+-- Snow layers, grass and flowers are all "the surface" as far as a downward
+-- scan is concerned. Paving at that level leaves the path standing a block
+-- proud of the ground it is supposed to be part of.
+local function paving_level(x, z, hint_y)
+  local y
+  if hint_y then
+    -- Scan from a known reference instead of from the sky: a roof eave or a
+    -- tree above the column would otherwise be mistaken for the ground.
+    for probe = hint_y + 2, hint_y - 6, -1 do
+      local name = minetest.get_node({x = x, y = probe, z = z}).name
+      if name ~= "air" and name ~= "ignore" then
+        y = probe
+        break
+      end
+    end
+  end
+  y = y or world_terrain.surface_y(x, z)
+  if not y then return nil end
+  for depth = 0, 3 do
+    local name = minetest.get_node({x = x, y = y - depth, z = z}).name
+    local def = minetest.registered_nodes[name]
+    local groups = (def and def.groups) or {}
+    local loose = groups.snow_cover or groups.flora or groups.plant
+      or groups.flower or groups.leaves or (def and def.buildable_to)
+      or name:find("^mcl_core:snow") or name:find("^mcl_flowers:")
+    if not loose then
+      return y - depth
+    end
+  end
+  return y
+end
+
+--- Pave one column flush with the ground and clear what stands on it.
+local function pave_cell(x, z, material_name)
+  local y = paving_level(x, z)
+  if not y then return false end
+  local existing = minetest.get_node({x = x, y = y, z = z}).name
+  if perfectworld.compat.is_liquid_node(existing) then return false end
+  if existing ~= material_name then
+    minetest.set_node({x = x, y = y, z = z}, {name = material_name})
+  end
+  -- Head-room: a path you cannot walk down is not a path.
+  for above = 1, 2 do
+    local pos = {x = x, y = y + above, z = z}
+    local name = minetest.get_node(pos).name
+    if name ~= "air" and name ~= "ignore" then
+      local def = minetest.registered_nodes[name]
+      local groups = (def and def.groups) or {}
+      if (def and def.buildable_to) or groups.snow_cover or groups.flora
+        or groups.plant or groups.flower or name:find("^mcl_core:snow") then
+        minetest.set_node(pos, {name = "air"})
+      end
+    end
+  end
+  return true
+end
+
+--- Lay a road surface strip perpendicular to the direction of travel, with a
+-- smoothed height profile so the carriageway does not step block by block.
 local function place_road_strip(p1, p2, width, material_name)
   local dx, dz = p2.x - p1.x, p2.z - p1.z
   local length = math.sqrt(dx * dx + dz * dz)
@@ -1649,24 +1795,288 @@ local function place_road_strip(p1, p2, width, material_name)
   local half_w = math.floor(width / 2)
   local steps = math.max(math.abs(dx), math.abs(dz), 1)
   local placed = 0
+
+  -- Centreline profile first, limited to one block of rise per step.
+  local centre = {}
   for s = 0, steps do
     local t = s / steps
-    local bx = p1.x + dx * t
-    local bz = p1.z + dz * t
-    for w = -half_w, half_w do
-      local px = math.floor(bx + perp_x * w + 0.5)
-      local pz = math.floor(bz + perp_z * w + 0.5)
-      local y = world_terrain.surface_y(px, pz)
-      if y then
-        local node = minetest.get_node({x = px, y = y, z = pz})
-        if node.name ~= material_name and not node.name:find("water") then
+    local cx = math.floor(p1.x + dx * t + 0.5)
+    local cz = math.floor(p1.z + dz * t + 0.5)
+    centre[s] = {x = cx, z = cz, y = paving_level(cx, cz)}
+  end
+  for s = 1, steps do
+    local previous, current = centre[s - 1], centre[s]
+    if previous.y and current.y then
+      if current.y > previous.y + 1 then current.y = previous.y + 1 end
+      if current.y < previous.y - 1 then current.y = previous.y - 1 end
+    end
+  end
+
+  for s = 0, steps do
+    local cell = centre[s]
+    if cell.y then
+      for w = -half_w, half_w do
+        local px = math.floor(cell.x + perp_x * w + 0.5)
+        local pz = math.floor(cell.z + perp_z * w + 0.5)
+        local y = cell.y
+        local existing = minetest.get_node({x = px, y = y, z = pz}).name
+        if not perfectworld.compat.is_liquid_node(existing) then
+          -- Cut anything above the carriageway, fill anything missing below.
+          for above = 1, 3 do
+            local pos = {x = px, y = y + above, z = pz}
+            local name = minetest.get_node(pos).name
+            if name ~= "air" and name ~= "ignore"
+              and not perfectworld.compat.is_liquid_node(name) then
+              minetest.set_node(pos, {name = "air"})
+            end
+          end
           minetest.set_node({x = px, y = y, z = pz}, {name = material_name})
+          local below = minetest.get_node({x = px, y = y - 1, z = pz}).name
+          if below == "air" or below == "ignore" then
+            minetest.set_node({x = px, y = y - 1, z = pz},
+              {name = perfectworld.compat.get_material("ground", {required = false})})
+          end
           placed = placed + 1
         end
       end
     end
   end
   return placed
+end
+
+--- Build a walkable way from `from` to `to`, stepping at most one block per
+-- cell and cutting head-room, so a villager on foot can actually use it.
+local function carve_walkway(from, to, material_name, blocked)
+  local dx, dz = to.x - from.x, to.z - from.z
+  local steps = math.max(math.abs(dx), math.abs(dz), 1)
+  local target_y = from.y or paving_level(from.x, from.z)
+  local hint = target_y
+  local cells = {}
+  for s = 0, steps do
+    local t = s / steps
+    cells[s] = {
+      x = math.floor(from.x + dx * t + 0.5),
+      z = math.floor(from.z + dz * t + 0.5),
+    }
+  end
+
+  local previous_y = target_y
+  for s = 0, steps do
+    local cell = cells[s]
+    local natural = paving_level(cell.x, cell.z, hint)
+    local y = natural or previous_y
+    if previous_y then
+      if y > previous_y + 1 then y = previous_y + 1 end
+      if y < previous_y - 1 then y = previous_y - 1 end
+    end
+    if y and blocked and blocked(cell.x, cell.z) then
+      -- Never cut through a building to reach another one.
+      previous_y = y
+      hint = y
+    elseif y then
+      minetest.set_node({x = cell.x, y = y, z = cell.z}, {name = material_name})
+      local below = minetest.get_node({x = cell.x, y = y - 1, z = cell.z}).name
+      if below == "air" or below == "ignore" then
+        minetest.set_node({x = cell.x, y = y - 1, z = cell.z},
+          {name = perfectworld.compat.get_material("ground", {required = false})})
+      end
+      for above = 1, 3 do
+        local pos = {x = cell.x, y = y + above, z = cell.z}
+        local name = minetest.get_node(pos).name
+        if name ~= "air" and name ~= "ignore"
+          and not perfectworld.compat.is_liquid_node(name) then
+          minetest.set_node(pos, {name = "air"})
+        end
+      end
+      previous_y = y
+      hint = y
+    end
+  end
+  return previous_y
+end
+
+--- A cell a walker can actually occupy: the air above the first solid node,
+--- with head-room. Pathfinding from inside a block always fails.
+local function standing_spot(x, z, hint_y)
+  local top = (hint_y or 64) + 10
+  local bottom = (hint_y or 64) - 12
+  for y = top, bottom, -1 do
+    local name = minetest.get_node({x = x, y = y, z = z}).name
+    if name ~= "air" and name ~= "ignore" then
+      local head = minetest.get_node({x = x, y = y + 1, z = z}).name
+      local head2 = minetest.get_node({x = x, y = y + 2, z = z}).name
+      if (head == "air" or head == "ignore") and (head2 == "air" or head2 == "ignore") then
+        return {x = x, y = y + 1, z = z}
+      end
+    end
+  end
+  return nil
+end
+
+perfectworld.planner._standing_spot = standing_spot
+perfectworld.planner._paving_level = paving_level
+perfectworld.planner._carve_walkway = carve_walkway
+
+--- Make a door usable from the street.
+--
+-- The sill is levelled with the building floor, then a stepped way is cut
+-- down to the road. Vanilla villages do the same thing: "a building spawned
+-- above street level has stairs leading straight out from its entrance down
+-- to the street level".
+local function build_door_approach(door, floor_y, road_point, material_name, profile, blocked)
+  if not floor_y then
+    carve_walkway(door, road_point, material_name)
+    return
+  end
+
+  local foundation = perfectworld.structures.palette_material(
+    profile.material_palette, "foundation", "foundation")
+  minetest.set_node({x = door.x, y = floor_y - 1, z = door.z}, {name = foundation})
+  minetest.set_node({x = door.x, y = floor_y, z = door.z}, {name = material_name})
+  -- Head-room only up to two blocks: the porch eave above the doorstep is
+  -- part of the house and must survive.
+  for above = 1, 2 do
+    local pos = {x = door.x, y = floor_y + above, z = door.z}
+    local name = minetest.get_node(pos).name
+    if name ~= "air" and name ~= "ignore" then
+      minetest.set_node(pos, {name = "air"})
+    end
+  end
+
+  carve_walkway({x = door.x, y = floor_y, z = door.z}, road_point, material_name, blocked)
+end
+
+--- Dress the ground around a lot: crop plots, a fenced garden, an animal pen,
+-- a work spot. An empty yard is what makes a settlement read as scenery
+-- rather than as a place somebody lives in.
+local function build_yard(lot, profile, seed_key)
+  local palette = profile.material_palette
+  local fence = perfectworld.structures.palette_material(palette, "fence", "fence")
+  local gate = palette and palette.fence_gate
+  if gate and not minetest.registered_nodes[gate] then gate = nil end
+  local soil = perfectworld.compat.get_material("garden_soil", {required = false})
+  local crop = (palette and palette.crop) or perfectworld.compat.get_material("crop", {required = false})
+  if crop ~= "air" and not minetest.registered_nodes[crop] then
+    crop = perfectworld.compat.get_material("crop", {required = false})
+  end
+  local path = perfectworld.structures.palette_material(palette, "path", "road")
+
+  local label = "yard:" .. tostring(lot.structure_id)
+  local kinds = {"garden", "crops", "pen", "workspot", "flowers"}
+  if lot.role == "farm" then
+    kinds = {"crops", "pen", "crops", "garden"}
+  elseif lot.role == "central" then
+    kinds = {"flowers", "workspot"}
+  end
+  local kind = choice.pick(seed_key, label .. ":kind", kinds)
+
+  -- Put the yard on the far side of the building from the street.
+  local dir_x = lot.center.x - lot.road_point.x
+  local dir_z = lot.center.z - lot.road_point.z
+  local length = math.max(math.sqrt(dir_x * dir_x + dir_z * dir_z), 0.001)
+  dir_x, dir_z = dir_x / length, dir_z / length
+  local fp_w = math.max(lot.footprint_max.x - lot.footprint_min.x,
+    lot.footprint_max.z - lot.footprint_min.z)
+  local origin = {
+    x = math.floor(lot.center.x + dir_x * (fp_w / 2 + 4) + 0.5),
+    z = math.floor(lot.center.z + dir_z * (fp_w / 2 + 4) + 0.5),
+  }
+
+  local radius = choice.int(seed_key, label .. ":radius", 2, 3)
+  local placed = 0
+
+  local function ground_at(x, z)
+    return paving_level(x, z)
+  end
+
+  local function put(x, z, y, node_name)
+    if node_name == "air" or not node_name then return end
+    if minetest.get_node({x = x, y = y, z = z}).name == "ignore" then return end
+    minetest.set_node({x = x, y = y, z = z}, {name = node_name})
+    placed = placed + 1
+  end
+
+  for dx = -radius, radius do
+    for dz = -radius, radius do
+      local x, z = origin.x + dx, origin.z + dz
+      local y = ground_at(x, z)
+      if y then
+        local edge = math.abs(dx) == radius or math.abs(dz) == radius
+        -- Never build a yard on top of the building or the street.
+        local inside_lot = x >= lot.footprint_min.x - 1 and x <= lot.footprint_max.x + 1
+          and z >= lot.footprint_min.z - 1 and z <= lot.footprint_max.z + 1
+        if not inside_lot and not perfectworld.compat.is_liquid_node(
+            minetest.get_node({x = x, y = y, z = z}).name) then
+          for above = 1, 2 do
+            local pos = {x = x, y = y + above, z = z}
+            local name = minetest.get_node(pos).name
+            local def = minetest.registered_nodes[name]
+            if name ~= "air" and name ~= "ignore" and def and def.buildable_to then
+              minetest.set_node(pos, {name = "air"})
+            end
+          end
+
+          if kind == "crops" then
+            if edge then
+              if fence ~= "air" then put(x, z, y + 1, fence) end
+            else
+              put(x, z, y, soil)
+              put(x, z, y + 1, crop)
+            end
+          elseif kind == "garden" then
+            if edge then
+              if fence ~= "air" then put(x, z, y + 1, fence) end
+            elseif (dx + dz) % 2 == 0 then
+              put(x, z, y, soil)
+              put(x, z, y + 1, crop)
+            else
+              put(x, z, y, path)
+            end
+          elseif kind == "pen" then
+            if edge and fence ~= "air" then
+              put(x, z, y + 1, fence)
+            end
+          elseif kind == "flowers" then
+            if (dx + dz) % 2 == 0 then
+              put(x, z, y + 1, choice.pick(seed_key,
+                label .. ":flower:" .. dx .. ":" .. dz,
+                {"mcl_flowers:poppy", "mcl_flowers:dandelion",
+                 "mcl_flowers:oxeye_daisy", "mcl_flowers:cornflower"}))
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- A gate in the fence, facing the building, so the yard is enterable.
+  if (kind == "crops" or kind == "garden" or kind == "pen") and gate then
+    local gx = math.floor(origin.x - dir_x * radius + 0.5)
+    local gz = math.floor(origin.z - dir_z * radius + 0.5)
+    local gy = ground_at(gx, gz)
+    if gy then
+      minetest.set_node({x = gx, y = gy + 1, z = gz},
+        {name = gate, param2 = minetest.dir_to_facedir({x = dir_x, y = 0, z = dir_z})})
+    end
+  end
+
+  -- Something to work at, next to the building.
+  local props = {}
+  for _, node_name in ipairs({"mcl_crafting_table:crafting_table",
+    "mcl_barrels:barrel_closed", "mcl_composters:composter",
+    "mcl_farming:hay_block", "mcl_lanterns:lantern_floor"}) do
+    if minetest.registered_nodes[node_name] then table.insert(props, node_name) end
+  end
+  if #props > 0 then
+    local px = math.floor(lot.center.x + dir_z * (fp_w / 2 + 2) + 0.5)
+    local pz = math.floor(lot.center.z - dir_x * (fp_w / 2 + 2) + 0.5)
+    local py = ground_at(px, pz)
+    if py then
+      put(px, pz, py + 1, choice.pick(seed_key, label .. ":prop", props))
+    end
+  end
+
+  return kind, placed
 end
 
 local function materialize_village_plan(plan, profile, candidate)
@@ -1712,6 +2122,7 @@ local function materialize_village_plan(plan, profile, candidate)
           rotation = lot.rotation,
           footprint_min = lot.footprint_min,
           footprint_max = lot.footprint_max,
+          road_point = lot.road_point,
           region_id = ctx.region_id,
           settlement_id = candidate.id,
         })
@@ -1763,8 +2174,23 @@ local function materialize_village_plan(plan, profile, candidate)
           break
         end
       end
-      place_road_strip(door, lot.road_point, 1, road_material)
-      lot.door = door
+      -- The threshold must sit at floor level, and the way down to the street
+      -- must be walkable. Anything else strands the building: a villager on
+      -- foot cannot climb into a door hanging above the ground.
+      local floor_y = (lot.position and lot.position.y) or paving_level(door.x, door.z)
+      lot.door = {x = door.x, y = floor_y, z = door.z}
+      build_door_approach(door, floor_y, lot.road_point, road_material, profile,
+        function(x, z)
+          for _, other in ipairs(plan.lots) do
+            if other ~= lot and other.footprint_min then
+              if x >= other.footprint_min.x - 1 and x <= other.footprint_max.x + 1
+                and z >= other.footprint_min.z - 1 and z <= other.footprint_max.z + 1 then
+                return true
+              end
+            end
+          end
+          return false
+        end)
       -- The driveway is part of the road network: without a record for it
       -- nothing proves the lot is reachable, and validation cannot tell a
       -- connected lot from a stranded one.
@@ -1781,6 +2207,107 @@ local function materialize_village_plan(plan, profile, candidate)
       }
       perfectworld.planner.save_road(driveway)
       table.insert(placed_roads, driveway)
+
+      local yard_kind = build_yard(lot, profile, profile.seed_key)
+      lot.yard = yard_kind
+    end
+  end
+
+  -- The centre of a settlement is the middle of what was built, not the
+  -- nominal candidate point: on broken ground the candidate can sit at the
+  -- foot of a cliff while every house stands on the plateau above it.
+  local settlement_center
+  do
+    local sum_x, sum_z, count = 0, 0, 0
+    for _, s in ipairs(placed_structures) do
+      if s.position then
+        sum_x = sum_x + s.position.x
+        sum_z = sum_z + s.position.z
+        count = count + 1
+      end
+    end
+    if count > 0 then
+      local cx = math.floor(sum_x / count + 0.5)
+      local cz = math.floor(sum_z / count + 0.5)
+      settlement_center = {x = cx, y = paving_level(cx, cz) or 0, z = cz}
+    else
+      settlement_center = {
+        x = candidate.x,
+        y = world_terrain.surface_y(candidate.x, candidate.z) or 0,
+        z = candidate.z,
+      }
+    end
+  end
+
+  -- A point on the village's own street: the honest starting point for
+  -- "can a villager walk from the street to this door".
+  local street_anchor = settlement_center
+  do
+    local best, best_distance = nil, math.huge
+    for _, road in ipairs(placed_roads) do
+      if road.kind ~= "driveway" then
+        for _, point in ipairs(road.path or {}) do
+          local dx = point.x - settlement_center.x
+          local dz = point.z - settlement_center.z
+          local distance = dx * dx + dz * dz
+          if distance < best_distance then
+            best_distance = distance
+            best = point
+          end
+        end
+      end
+    end
+    if best then
+      street_anchor = {x = best.x, y = paving_level(best.x, best.z) or settlement_center.y, z = best.z}
+    end
+  end
+
+  -- Guarantee that every door can be walked to.
+  --
+  -- The planned driveway is a straight line and terrain does not always
+  -- cooperate. Anything still unreachable gets a stepped way cut to it, one
+  -- block of rise per cell, which is a staircase by construction. A door
+  -- nobody can reach is a house nobody can live in.
+  local unreachable = {}
+  if minetest.find_path then
+    local origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y)
+      or {x = street_anchor.x, y = street_anchor.y + 1, z = street_anchor.z}
+    for _, lot in ipairs(plan.lots) do
+      if lot.status == "materialized" and lot.door then
+        local target = standing_spot(lot.door.x, lot.door.z, lot.door.y)
+          or {x = lot.door.x, y = (lot.door.y or 0) + 1, z = lot.door.z}
+        local kerb = standing_spot(lot.road_point.x, lot.road_point.z, lot.door.y)
+        local path = minetest.find_path(origin, target, 128, 1, 2, "A*_noprefetch")
+          or (kerb and minetest.find_path(kerb, target, 64, 1, 2, "A*_noprefetch"))
+        -- Anything a walkway must not cut through: every other building.
+        local function blocked_by_building(x, z)
+          for _, other in ipairs(plan.lots) do
+            if other ~= lot and other.footprint_min then
+              if x >= other.footprint_min.x - 1 and x <= other.footprint_max.x + 1
+                and z >= other.footprint_min.z - 1 and z <= other.footprint_max.z + 1 then
+                return true
+              end
+            end
+          end
+          return false
+        end
+
+        for _, destination in ipairs({lot.road_point, street_anchor}) do
+          if path then break end
+          carve_walkway({x = lot.door.x, y = lot.door.y, z = lot.door.z},
+            destination, road_material, blocked_by_building)
+          origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y) or origin
+          target = standing_spot(lot.door.x, lot.door.z, lot.door.y) or target
+          kerb = standing_spot(lot.road_point.x, lot.road_point.z, lot.door.y) or kerb
+          path = minetest.find_path(origin, target, 160, 1, 2, "A*_noprefetch")
+            or (kerb and minetest.find_path(kerb, target, 64, 1, 2, "A*_noprefetch"))
+        end
+        if not path then
+          table.insert(unreachable, lot.structure_id)
+          minetest.log("warning", "[pw_planner] no walkable route to "
+            .. tostring(lot.structure_id) .. " in " .. tostring(candidate.id))
+        end
+      end
     end
   end
 
@@ -1792,6 +2319,9 @@ local function materialize_village_plan(plan, profile, candidate)
   local missing_required = {}
   if (placed_roles.dwelling or 0) < MIN_DWELLINGS then
     table.insert(missing_required, "dwelling<" .. MIN_DWELLINGS)
+  end
+  for _, structure_id in ipairs(unreachable) do
+    table.insert(errors, "unreachable_door:" .. structure_id)
   end
 
   local settlement_status
@@ -1824,7 +2354,8 @@ local function materialize_village_plan(plan, profile, candidate)
     generator_version = profile.generator_version,
     seed_key = profile.seed_key,
     status = settlement_status,
-    center_pos = {x = candidate.x, y = world_terrain.surface_y(candidate.x, candidate.z) or 0, z = candidate.z},
+    center_pos = settlement_center,
+    street_anchor = street_anchor,
     bounds = bounds,
     environment_profile = profile.environment,
     biome_name = profile.environment and profile.environment.biome_name,
@@ -1981,6 +2512,15 @@ function perfectworld.planner.validate_settlement(settlement_id)
     return report
   end
   local plan = stored.plan or {}
+  -- Mapblocks are unloaded once nobody is nearby and get_node then reports
+  -- "ignore", so every world-reading check below — including the pathfinder —
+  -- needs the area pulled back in first.
+  if minetest.load_area and settlement.bounds then
+    local b = settlement.bounds
+    pcall(minetest.load_area,
+      {x = b.min_x - 8, y = -32, z = b.min_z - 8},
+      {x = b.max_x + 8, y = 200, z = b.max_z + 8})
+  end
   report.status = settlement.status
   report.archetype = settlement.archetype
   report.lot_count = settlement.lot_count
@@ -2142,6 +2682,58 @@ function perfectworld.planner.validate_settlement(settlement_id)
     check("doors_accessible", blocked_door == nil, blocked_door)
   end
 
+  -- 4b. Can somebody actually walk there?
+  --
+  -- Proximity to a road cell is not reachability. This runs the engine's own
+  -- pathfinder on foot from the village centre to every door, with the step
+  -- and drop limits a walking villager has. A door nobody can reach is a
+  -- house nobody can live in.
+  if #boxes > 0 and minetest.find_path then
+    local centre = settlement.street_anchor or settlement.center_pos
+    local origin = standing_spot(centre.x, centre.z, centre.y)
+      or {x = centre.x, y = centre.y + 1, z = centre.z}
+    local unwalkable = nil
+    local reached = 0
+    for _, box in ipairs(boxes) do
+      local record = box.record
+      local target = record.position
+      if box.def then
+        for _, c in ipairs(box.def.connectors or {}) do
+          if c.type == "road" and c.offset_pos then
+            local rotated = perfectworld.structures.rotate_point(c.offset_pos, record.rotation or 0)
+            -- Stand *on* the threshold, not inside it: the connector cell
+            -- itself is the solid step in front of the door.
+            local tx = record.position.x + rotated.x
+            local tz = record.position.z + rotated.z
+            target = standing_spot(tx, tz, record.position.y)
+              or {x = tx, y = record.position.y + 1, z = tz}
+            break
+          end
+        end
+      end
+      -- Try from the village street and from the kerb outside this very
+      -- house: either counts as "you can walk there from the street".
+      local origins = {origin}
+      if record.road_point then
+        local kerb = standing_spot(record.road_point.x, record.road_point.z,
+          record.position.y)
+        if kerb then table.insert(origins, kerb) end
+      end
+      local path = nil
+      for _, from in ipairs(origins) do
+        path = path or minetest.find_path(from, target, 128, 1, 2, "A*_noprefetch")
+      end
+      if path then
+        reached = reached + 1
+      else
+        unwalkable = (unwalkable and (unwalkable .. ",") or "") .. record.structure_id
+      end
+    end
+    report.doors_reached_on_foot = reached
+    report.doors_total = #boxes
+    check("doors_reachable_on_foot", unwalkable == nil, unwalkable)
+  end
+
   -- 5. bounds contain everything
   local bounds = settlement.bounds
   if bounds then
@@ -2166,13 +2758,6 @@ function perfectworld.planner.validate_settlement(settlement_id)
   end
 
   -- 6. the world actually contains the buildings.
-  -- Mapblocks are unloaded once nobody is nearby, and get_node reports
-  -- "ignore" for those, so the area has to be pulled back in first.
-  if #boxes > 0 and minetest.load_area and bounds then
-    pcall(minetest.load_area,
-      {x = bounds.min_x - 2, y = -32, z = bounds.min_z - 2},
-      {x = bounds.max_x + 2, y = 200, z = bounds.max_z + 2})
-  end
   local missing_in_world, floating, unregistered_node = nil, nil, nil
   for _, box in ipairs(boxes) do
     local origin = box.record.position
