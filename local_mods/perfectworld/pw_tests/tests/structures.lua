@@ -91,7 +91,7 @@ end)
 T.register_test("perfectworld", "structure_registry_validates_schema_and_returns_copy", function(ctx)
   local def = perfectworld.structures.get("pw_farmstead_v1")
   ctx.assert.not_nil(def, "pw_farmstead_v1 must be registered")
-  ctx.assert.equal(def.version, 1, "farmstead version")
+  ctx.assert.equal(def.version, 2, "farmstead version")
   ctx.assert.equal(def.placement.type, "lua", "farmstead placement type")
   ctx.assert.is_true(perfectworld.structures.validate(def), "registered farmstead definition must validate")
   def.size.x = 999
@@ -133,13 +133,19 @@ end)
 T.register_test("perfectworld", "farmstead_footprint_rotates_dimensions", function(ctx)
   local def = perfectworld.structures.get("pw_farmstead_v1")
   local pos = {x = 100, y = 10, z = 200}
+  -- Rotation swaps the two horizontal extents; assert that relationship
+  -- rather than the dimensions of one particular building model.
   local min0, max0 = perfectworld.structures.get_footprint(def, pos, 0)
-  ctx.assert.equal(max0.x - min0.x + 1, 15, "rotation 0 footprint width")
-  ctx.assert.equal(max0.z - min0.z + 1, 14, "rotation 0 footprint depth")
+  ctx.assert.equal(max0.x - min0.x + 1, def.size.x, "rotation 0 footprint width")
+  ctx.assert.equal(max0.z - min0.z + 1, def.size.z, "rotation 0 footprint depth")
 
   local min90, max90 = perfectworld.structures.get_footprint(def, pos, 90)
-  ctx.assert.equal(max90.x - min90.x + 1, 14, "rotation 90 footprint width")
-  ctx.assert.equal(max90.z - min90.z + 1, 15, "rotation 90 footprint depth")
+  ctx.assert.equal(max90.x - min90.x + 1, def.size.z, "rotation 90 footprint width")
+  ctx.assert.equal(max90.z - min90.z + 1, def.size.x, "rotation 90 footprint depth")
+
+  local min180, max180 = perfectworld.structures.get_footprint(def, pos, 180)
+  ctx.assert.equal(max180.x - min180.x + 1, def.size.x, "rotation 180 footprint width")
+  ctx.assert.equal(max180.z - min180.z + 1, def.size.z, "rotation 180 footprint depth")
 end)
 
 T.register_test("perfectworld", "compat_materials_resolve_required_and_optional_fallbacks", function(ctx)

@@ -992,6 +992,253 @@ minetest.register_chatcommand("pw_village_validate_all", {
   end,
 })
 
+--- Put a real player into a finished village, with privileges and a spawn
+-- point there, so the world can be handed over ready to inspect.
+minetest.register_chatcommand("pw_setup_player", {
+  params = "<player> [settlement_id]",
+  description = "Grant privileges and place a player in a finished village",
+  privs = {server = true},
+  func = function(name, param)
+    local player_name, settlement_id = (param or ""):match("^%s*(%S+)%s*(%S*)%s*$")
+    if not player_name or player_name == "" then
+      return false, "Usage: /pw_setup_player <player> [settlement_id]"
+    end
+
+    -- Pick the largest fully valid settlement when none is named.
+    if settlement_id == "" then
+      local best, best_score = nil, -1
+      for _, id in ipairs(perfectworld.settlements.list_ids()) do
+        local stored = perfectworld.planner.get_settlement_plan(id)
+        local settlement = stored and stored.settlement
+        if settlement and (settlement.lot_count or 0) > 0 then
+          local report = perfectworld.planner.validate_settlement(id)
+          local score = (settlement.lot_count or 0) + (report.ok and 100 or 0)
+          if score > best_score then best_score, best = score, id end
+        end
+      end
+      settlement_id = best
+    end
+    if not settlement_id then return false, "no built settlement to place the player in" end
+
+    local stored = perfectworld.planner.get_settlement_plan(settlement_id)
+    local settlement = stored and stored.settlement
+    if not settlement then return false, "Settlement not found: " .. settlement_id end
+
+    local bounds = settlement.bounds or {}
+    if minetest.load_area then
+      pcall(minetest.load_area,
+        {x = (bounds.min_x or 0) - 8, y = -32, z = (bounds.min_z or 0) - 8},
+        {x = (bounds.max_x or 0) + 8, y = 200, z = (bounds.max_z or 0) + 8})
+    end
+
+    local anchor = settlement.street_anchor or settlement.center_pos
+    local ground = anchor.y
+    for probe = 4, -4, -1 do
+      local node = minetest.get_node({x = anchor.x, y = anchor.y + probe, z = anchor.z})
+      if node.name ~= "air" and node.name ~= "ignore" then
+        ground = anchor.y + probe
+        break
+      end
+    end
+    local spot = {x = anchor.x, y = ground + 1, z = anchor.z}
+
+    local all_privs = {}
+    for priv in pairs(minetest.registered_privileges) do all_privs[priv] = true end
+    minetest.set_player_privs(player_name, all_privs)
+
+    local player = minetest.get_player_by_name(player_name)
+    if player then
+      player:set_pos(spot)
+      player:set_hp(20)
+      if player.set_physics_override then
+        player:set_physics_override({gravity = 1, speed = 1})
+      end
+    end
+    -- Spawn here on every future login, too.
+    minetest.settings:set("static_spawnpoint",
+      string.format("%d,%d,%d", spot.x, spot.y, spot.z))
+
+    minetest.log("action", string.format(
+      "[pw_debug] player %s placed in %s at %s", player_name, settlement_id,
+      minetest.pos_to_string(spot)))
+    return true, table.concat({
+      "player=" .. player_name,
+      "settlement_id=" .. settlement_id,
+      "archetype=" .. tostring(settlement.archetype),
+      "biome_family=" .. tostring(settlement.biome_family),
+      "lots=" .. tostring(settlement.lot_count),
+      "spawn=" .. minetest.pos_to_string(spot),
+      "online=" .. tostring(player ~= nil),
+    }, "\n")
+  end,
+})
+
+--- Walk the test player through a settlement on foot, along a real path.
+--
+-- No teleporting between viewpoints: the bot is put on the ground at the
+-- village centre and then moved along the engine's own pathfinder route to
+-- each door, one waypoint at a time. If the route does not exist, neither
+-- does the house, as far as anyone living there is concerned.
+minetest.register_chatcommand("pw_village_walk", {
+  params = "<settlement_id> [door_index]",
+  description = "Walk the test player from the village centre to a door on foot",
+  privs = {server = true},
+  func = function(name, param)
+    local settlement_id, index = (param or ""):match("^%s*(%S+)%s*(%d*)%s*$")
+    if not settlement_id then return false, "Usage: /pw_village_walk <id> [door_index]" end
+    index = tonumber(index) or 1
+
+    local stored = perfectworld.planner.get_settlement_plan(settlement_id)
+    local settlement = stored and stored.settlement
+    if not settlement then return false, "Settlement not found: " .. settlement_id end
+    local player = minetest.get_player_by_name(get_test_player())
+    if not player then return false, "test player not connected" end
+
+    local bounds = settlement.bounds or {}
+    if minetest.load_area then
+      pcall(minetest.load_area,
+        {x = (bounds.min_x or settlement.center_pos.x) - 8, y = -32,
+         z = (bounds.min_z or settlement.center_pos.z) - 8},
+        {x = (bounds.max_x or settlement.center_pos.x) + 8, y = 200,
+         z = (bounds.max_z or settlement.center_pos.z) + 8})
+    end
+
+    local centre = settlement.street_anchor or settlement.center_pos
+    local origin = perfectworld.planner._standing_spot(centre.x, centre.z, centre.y)
+      or {x = centre.x, y = centre.y + 1, z = centre.z}
+
+    local structure_id = (settlement.structure_ids or {})[index]
+    if not structure_id then
+      return false, "no structure " .. index .. " in " .. settlement_id
+    end
+    local record = perfectworld.planner.get_structure(structure_id)
+    if not record then return false, "structure record missing: " .. structure_id end
+    local def = perfectworld.structures.get(record.structure_name)
+    local target = record.position
+    for _, c in ipairs((def and def.connectors) or {}) do
+      if c.type == "road" and c.offset_pos then
+        local rotated = perfectworld.structures.rotate_point(c.offset_pos, record.rotation or 0)
+        local tx = record.position.x + rotated.x
+        local tz = record.position.z + rotated.z
+        target = perfectworld.planner._standing_spot(tx, tz, record.position.y)
+          or {x = tx, y = record.position.y + 1, z = tz}
+        break
+      end
+    end
+
+    local function describe(label, pos)
+      minetest.log("action", string.format(
+        "[pw_debug] walk %s %s at=%s below=%s above=%s", label,
+        minetest.pos_to_string(pos),
+        minetest.get_node(pos).name,
+        minetest.get_node({x = pos.x, y = pos.y - 1, z = pos.z}).name,
+        minetest.get_node({x = pos.x, y = pos.y + 1, z = pos.z}).name))
+    end
+    describe("origin", origin)
+    describe("target", target)
+
+    local path = minetest.find_path(origin, target, 96, 1, 2, "A*_noprefetch")
+    if not path then
+      minetest.log("action", string.format(
+        "[pw_debug] walk no path %s -> %s (structure %s)",
+        minetest.pos_to_string(origin), minetest.pos_to_string(target), structure_id))
+      player:set_pos(origin)
+      return true, table.concat({
+        "walk=FAILED",
+        "settlement_id=" .. settlement_id,
+        "structure_id=" .. structure_id,
+        "from=" .. minetest.pos_to_string(origin),
+        "to=" .. minetest.pos_to_string(target),
+        "reason=no_walkable_path",
+      }, "\n")
+    end
+
+    -- Follow the route: one waypoint per server step, feet on the ground.
+    player:set_pos(origin)
+    player:set_physics_override({gravity = 1, speed = 1})
+    local step = 0
+    local function advance()
+      step = step + 1
+      local point = path[step]
+      if not point then
+        minetest.log("action", "[pw_debug] walk finished at door of " .. structure_id)
+        return
+      end
+      player:set_pos({x = point.x, y = point.y + 0.5, z = point.z})
+      if step < #path then minetest.after(0.18, advance) end
+    end
+    minetest.after(0.1, advance)
+
+    return true, table.concat({
+      "walk=OK",
+      "settlement_id=" .. settlement_id,
+      "structure_id=" .. structure_id,
+      "structure_name=" .. tostring(record.structure_name),
+      "from=" .. minetest.pos_to_string(origin),
+      "to=" .. minetest.pos_to_string(target),
+      "path_length=" .. #path,
+    }, "\n")
+  end,
+})
+
+--- List registered nodes matching a pattern. Building against node names that
+-- do not exist in this game is the fastest way to produce invisible houses.
+minetest.register_chatcommand("pw_nodes", {
+  params = "<lua pattern> [limit]",
+  description = "List registered node names matching a pattern",
+  privs = {server = true},
+  func = function(name, param)
+    local pattern, limit = (param or ""):match("^%s*(%S+)%s*(%d*)%s*$")
+    if not pattern then return false, "Usage: /pw_nodes <pattern> [limit]" end
+    limit = tonumber(limit) or 60
+    local matches = {}
+    for node_name in pairs(minetest.registered_nodes) do
+      if node_name:find(pattern) then table.insert(matches, node_name) end
+    end
+    table.sort(matches)
+    local shown = {}
+    for i = 1, math.min(#matches, limit) do table.insert(shown, matches[i]) end
+    minetest.log("action", "[pw_debug] pw_nodes " .. pattern .. " -> " ..
+      #matches .. " matches: " .. table.concat(shown, " "))
+    return true, #matches .. " matches (see server log)"
+  end,
+})
+
+--- Show what every abstract material and every palette entry actually resolves
+-- to in this game. Aliases are not in minetest.registered_nodes, so a name that
+-- works with set_node can still look "missing" to the resolver and be silently
+-- downgraded to air.
+minetest.register_chatcommand("pw_materials", {
+  params = "",
+  description = "Report resolved materials and palette entries",
+  privs = {server = true},
+  func = function()
+    local lines = {}
+    for _, role in ipairs({"foundation", "wall", "roof", "floor", "road", "fence",
+      "door", "door_top", "window", "light", "container", "garden_soil", "crop",
+      "ground", "cobble", "stone", "sandstone", "sand", "gravel", "tree", "water"}) do
+      local resolved = perfectworld.compat.get_material(role, {required = false})
+      lines[#lines + 1] = string.format("%-13s -> %-34s registered=%s",
+        role, tostring(resolved), tostring(minetest.registered_nodes[resolved] ~= nil))
+    end
+    for _, family in ipairs(perfectworld.compat.list_families()) do
+      local palette = perfectworld.compat.get_family_palette(family)
+      local keys = {}
+      for key in pairs(palette) do keys[#keys + 1] = key end
+      table.sort(keys)
+      for _, key in ipairs(keys) do
+        lines[#lines + 1] = string.format("palette %-9s %-14s -> %-34s registered=%s",
+          family, key, tostring(palette[key]),
+          tostring(palette[key] == "air" or minetest.registered_nodes[palette[key]] ~= nil))
+      end
+    end
+    for _, line in ipairs(lines) do
+      minetest.log("action", "[pw_debug] material " .. line)
+    end
+    return true, #lines .. " entries (see server log)"
+  end,
+})
+
 -- === Diversity Analysis ===
 
 local analysis_running = false

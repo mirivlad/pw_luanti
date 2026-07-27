@@ -442,3 +442,101 @@ T.register_test("perfectworld", "village_same_input_gives_same_plan", function(c
       "road graph fingerprint must be reproducible for " .. input.input_id)
   end
 end)
+
+-- === Buildings people can live in ===
+
+T.register_test("perfectworld", "palettes_declare_a_full_building_kit", function(ctx)
+  -- A palette that is missing its stairs or posts silently degrades every
+  -- house in that biome back to a flat-lidded box.
+  local required = {"foundation", "wall_primary", "wall_secondary", "wall_post",
+    "floor_block", "roof_stair", "roof_slab", "window", "path", "fence", "fence_gate"}
+  local roof_materials, wall_materials = {}, {}
+  for _, family in ipairs(perfectworld.compat.list_families()) do
+    local palette = perfectworld.compat.get_family_palette(family)
+    ctx.assert.not_nil(palette, "palette missing for " .. family)
+    for _, key in ipairs(required) do
+      local node_name = palette[key]
+      ctx.assert.not_nil(node_name, family .. " palette is missing " .. key)
+      ctx.assert.is_true(node_name == "air" or minetest.registered_nodes[node_name] ~= nil,
+        string.format("%s.%s = %s is not a registered node", family, key, tostring(node_name)))
+    end
+    roof_materials[palette.roof_stair] = true
+    wall_materials[palette.wall_primary] = true
+  end
+  local distinct_roofs, distinct_walls = 0, 0
+  for _ in pairs(roof_materials) do distinct_roofs = distinct_roofs + 1 end
+  for _ in pairs(wall_materials) do distinct_walls = distinct_walls + 1 end
+  ctx.assert.is_true(distinct_roofs >= 5,
+    "biomes must not all share one roof material, got " .. distinct_roofs)
+  ctx.assert.is_true(distinct_walls >= 5,
+    "biomes must not all share one wall material, got " .. distinct_walls)
+end)
+
+T.register_test("perfectworld", "dwellings_have_a_porch_clear_of_the_eaves", function(ctx)
+  -- Regression: the road connector used to sit directly under the roof
+  -- overhang, so every downward surface scan found the roof instead of the
+  -- ground and the door became unreachable.
+  local checked = 0
+  for _, name in ipairs(perfectworld.structures.list()) do
+    local def = perfectworld.structures.get(name)
+    local connector
+    for _, c in ipairs(def.connectors or {}) do
+      if c.type == "road" and c.offset_pos then connector = c.offset_pos end
+    end
+    if connector then
+      checked = checked + 1
+      local eave = math.floor(def.size.z / 2)
+      ctx.assert.is_true(connector.z >= eave, string.format(
+        "%s connector at z=%d is under its own %d-deep roof", name, connector.z, def.size.z))
+      local footprint = def.terrain.building_footprint
+      ctx.assert.is_true(footprint.max_z >= connector.z, string.format(
+        "%s connector at z=%d is outside the prepared ground (max_z=%d)",
+        name, connector.z, footprint.max_z))
+    end
+  end
+  ctx.assert.is_true(checked >= 4, "expected at least 4 structures with a road connector")
+end)
+
+T.register_test("perfectworld", "bare_rock_and_ice_are_not_livable_ground", function(ctx)
+  -- A village on naked andesite or on a glacier passes every geometric test
+  -- and still looks absurd, because nothing could grow there.
+  for _, name in ipairs({"mcl_core:stone", "mcl_core:andesite", "mcl_core:granite",
+    "mcl_core:diorite", "mcl_core:gravel", "mcl_core:ice", "mcl_core:packed_ice",
+    "mcl_core:water_source", "mcl_core:cobble"}) do
+    if minetest.registered_nodes[name] then
+      ctx.assert.is_false(perfectworld.compat.is_livable_ground(name),
+        name .. " must not count as livable ground")
+    end
+  end
+  for _, name in ipairs({"mcl_core:dirt", "mcl_core:dirt_with_grass", "mcl_core:podzol",
+    "mcl_core:sand", "mcl_core:coarse_dirt", "mcl_core:dirt_with_grass_snow"}) do
+    if minetest.registered_nodes[name] then
+      ctx.assert.is_true(perfectworld.compat.is_livable_ground(name),
+        name .. " must count as livable ground")
+    end
+  end
+end)
+
+T.register_test("perfectworld", "structures_offer_more_than_one_house_shape", function(ctx)
+  -- Four identical boxes at different sizes is what made every village read
+  -- as the same village.
+  local dwellings = {}
+  for _, name in ipairs(perfectworld.structures.list()) do
+    local def = perfectworld.structures.get(name)
+    for _, category in ipairs(def.categories or {}) do
+      if category == "residential" then
+        dwellings[name] = {x = def.size.x, y = def.size.y, z = def.size.z}
+      end
+    end
+  end
+  local shapes, count = {}, 0
+  for _, size in pairs(dwellings) do
+    local key = size.x .. "x" .. size.y .. "x" .. size.z
+    if not shapes[key] then
+      shapes[key] = true
+      count = count + 1
+    end
+  end
+  ctx.assert.is_true(count >= 4,
+    "expected at least 4 distinct dwelling shapes, got " .. count)
+end)

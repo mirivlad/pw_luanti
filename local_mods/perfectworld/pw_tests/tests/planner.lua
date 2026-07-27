@@ -221,8 +221,25 @@ T.register_test("perfectworld", "materialize_chunk_places_complete_farmstead_acr
   )
   if not record then return end
 
-  local roof_node = minetest.get_node({x = record.position.x + 4, y = record.position.y + 4, z = record.position.z + 4}).name
-  ctx.assert.equal(roof_node, perfectworld.compat.get_material("roof"), "roof outside owner mini-chunk must be present")
+  -- The point of this test is that the structure is built whole even though
+  -- the owning mini-chunk is a single column: check a corner of the building
+  -- that lies well outside it, whatever the current model happens to be.
+  local def = perfectworld.structures.get(record.structure_name)
+  local fp_min, fp_max = perfectworld.structures.get_footprint(
+    def, record.position, record.rotation or 0)
+  ctx.assert.is_true(fp_max.x - record.position.x >= 2,
+    "the structure must extend beyond the owning column")
+  local built = 0
+  for x = fp_min.x, fp_max.x do
+    for z = fp_min.z, fp_max.z do
+      for y = record.position.y, record.position.y + def.size.y do
+        local name = minetest.get_node({x = x, y = y, z = z}).name
+        if name ~= "air" and name ~= "ignore" then built = built + 1 end
+      end
+    end
+  end
+  ctx.assert.is_true(built > 40, string.format(
+    "the whole structure must be present outside the owner mini-chunk, found %d nodes", built))
 
   local placed_before = #perfectworld.planner.list_structures()
   perfectworld.planner.materialize_chunk(owner_minp, owner_maxp)
