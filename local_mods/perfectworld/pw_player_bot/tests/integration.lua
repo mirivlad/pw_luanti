@@ -245,17 +245,36 @@ test("brain_routes_only_over_ground_it_has_observed", function(ctx)
     ctx.assert.equal(route_reason, "goal_not_remembered",
       "and says so plainly rather than guessing")
 
-    -- Somewhere it has just looked at is a different matter.
+    -- Somewhere it has just looked at *and can step to* is a different matter.
+    --
+    -- Any traversable cell will not do. Memory is a set of glimpses, and two
+    -- traversable columns twenty nodes apart with unseen ground between them
+    -- are genuinely unroutable — refusing that is the planner working, not
+    -- failing. So the target is a neighbour of the bot's own column, which by
+    -- construction is one remembered step away.
     local mind = brain.get(name)
+    local origin = mind.memory.last_position
+    local here = origin and memory.get_cell(mind.memory, origin.x, origin.z)
     local reachable
-    for _, cell in pairs(mind.memory.cells) do
-      if P.impl.beliefs.is_traversable(cell) then reachable = cell break end
+    if here then
+      for _, offset in ipairs(P.impl.beliefs.NEIGHBOURS) do
+        local cell = memory.get_cell(mind.memory, here.x + offset[1], here.z + offset[2])
+        if cell and P.impl.beliefs.can_step(here, cell) then
+          reachable = cell
+          break
+        end
+      end
     end
-    if reachable then
-      local near = P.plan_route(name, mind.memory.last_position,
-        {x = reachable.x, y = reachable.ground_y + 1, z = reachable.z})
-      ctx.assert.not_nil(near, "but it can route across ground it has observed")
+    if not reachable then
+      -- Standing somewhere with no remembered step out of it is a legitimate
+      -- state, and asserting nothing about it beats asserting something false.
+      return
     end
+    local near = P.plan_route(name, origin,
+      {x = reachable.x, y = reachable.ground_y + 1, z = reachable.z})
+    ctx.assert.not_nil(near,
+      string.format("but it can route to the ground beside it: %d,%d -> %d,%d",
+        here.x, here.z, reachable.x, reachable.z))
   end)
 end)
 
