@@ -1159,4 +1159,327 @@ minetest.register_chatcommand("pw_village_analyze", {
   end,
 })
 
+-- === Batch village materialization ===
+--
+-- Walks the real region plans, picks the composite (village) candidates and
+-- materializes them through the normal pipeline, emerging each site first.
+
+local batch_running = false
+
+minetest.register_chatcommand("pw_village_batch", {
+  params = "[count] [region_radius]",
+  description = "Materialize the next N planned villages from the region plans",
+  privs = {server = true},
+  func = function(name, param)
+    if batch_running then return false, "batch already running" end
+    local count, radius = (param or ""):match("^%s*(%d*)%s*(%d*)%s*$")
+    count = tonumber(count) or 12
+    radius = tonumber(radius) or 6
+
+    -- Collect village candidates, nearest regions first.
+    local cells = {}
+    for rx = -radius, radius do
+      for rz = -radius, radius do
+        table.insert(cells, {rx = rx, rz = rz})
+      end
+    end
+    table.sort(cells, function(a, b)
+      local da, db = a.rx * a.rx + a.rz * a.rz, b.rx * b.rx + b.rz * b.rz
+      if da ~= db then return da < db end
+      if a.rx ~= b.rx then return a.rx < b.rx end
+      return a.rz < b.rz
+    end)
+
+    local found = {}
+    for _, cell in ipairs(cells) do
+      local plan = perfectworld.planner.plan_region(cell.rx, cell.rz)
+      for _, candidate in ipairs(plan.settlement_candidates or {}) do
+        if perfectworld.planner.is_composite_candidate(candidate)
+          and not perfectworld.planner.is_placed(candidate.id) then
+          candidate.region_id = plan.id
+          -- get_spawn_level and get_biome_data are both noise-based, so the
+          -- surface height and biome of a site are known before the site is
+          -- generated. Use them to spread the batch across families instead of
+          -- taking whatever happens to be nearest to spawn.
+          local probe_y = (minetest.get_spawn_level
+            and minetest.get_spawn_level(candidate.x, candidate.z)) or 8
+          local biome = minetest.get_biome_data({x = candidate.x, y = probe_y, z = candidate.z})
+          candidate.expected_family = perfectworld.compat.get_biome_family(
+            biome and biome.biome or "unknown")
+          table.insert(found, candidate)
+        end
+      end
+    end
+
+    if #found == 0 then
+      return false, "no unplaced village candidates found within region radius " .. radius
+    end
+
+    -- Round-robin over families so the batch covers as many as the map offers.
+    local by_family, family_order = {}, {}
+    for _, candidate in ipairs(found) do
+      local family = candidate.expected_family or "unknown"
+      if not by_family[family] then
+        by_family[family] = {}
+        table.insert(family_order, family)
+      end
+      table.insert(by_family[family], candidate)
+    end
+    table.sort(family_order)
+    local queue = {}
+    local round = 0
+    while #queue < #found do
+      round = round + 1
+      local added = false
+      for _, family in ipairs(family_order) do
+        local candidate = by_family[family][round]
+        if candidate then
+          table.insert(queue, candidate)
+          added = true
+        end
+      end
+      if not added then break end
+    end
+    minetest.log("action", "[pw_debug] batch candidate families: " ..
+      minetest.write_json((function()
+        local counts = {}
+        for family, list in pairs(by_family) do counts[family] = #list end
+        return counts
+      end)()))
+
+    batch_running = true
+    local results = {}
+    local index = 0
+    minetest.log("action", string.format(
+      "[pw_debug] village batch started: %d candidates available, target %d", #queue, count))
+
+    local function step()
+      if index >= #queue or #results >= count then
+        batch_running = false
+        local built = 0
+        for _, r in ipairs(results) do
+          if r.status == "complete" or r.status == "partial" then built = built + 1 end
+        end
+        minetest.log("action", string.format(
+          "[pw_debug] village batch finished: attempted=%d materialized=%d", #results, built))
+        for _, r in ipairs(results) do
+          minetest.log("action", string.format(
+            "[pw_debug] batch result id=%s status=%s archetype=%s family=%s lots=%s",
+            tostring(r.id), tostring(r.status), tostring(r.archetype),
+            tostring(r.family), tostring(r.lots)))
+        end
+        return
+      end
+      index = index + 1
+      local candidate = queue[index]
+      perfectworld.planner.emerge_village_area(candidate, function()
+        local ok, result = perfectworld.planner.materialize_village_new(candidate)
+        local settlement = type(result) == "table" and result.settlement or nil
+        table.insert(results, {
+          id = candidate.id,
+          ok = ok,
+          status = settlement and settlement.status or tostring(result),
+          archetype = settlement and settlement.archetype,
+          family = settlement and settlement.biome_family,
+          lots = settlement and settlement.lot_count,
+        })
+        minetest.after(0, step)
+      end)
+    end
+
+    minetest.after(0.1, step)
+    return true, string.format("batch started: %d candidates queued, target %d", #queue, count)
+  end,
+})
+
+-- === Screenshot support ===
+
+--- Place the test player exactly and aim at a target. Screenshots need a
+-- reproducible camera, which /pw_photo_camera (which picks its own angle)
+-- cannot give.
+minetest.register_chatcommand("pw_photo_at", {
+  params = "<x> <y> <z> <target_x> <target_y> <target_z>",
+  description = "Put the camera at a point and look at another point",
+  privs = {server = true},
+  func = function(name, param)
+    local nums = {}
+    for token in (param or ""):gmatch("[-%d%.]+") do
+      table.insert(nums, tonumber(token))
+    end
+    if #nums < 6 then
+      return false, "Usage: /pw_photo_at <x> <y> <z> <tx> <ty> <tz>"
+    end
+    local player = minetest.get_player_by_name(get_test_player())
+    if not player then return false, "test player not connected" end
+
+    local from = {x = nums[1], y = nums[2], z = nums[3]}
+    local to = {x = nums[4], y = nums[5], z = nums[6]}
+    local dx, dy, dz = to.x - from.x, to.y - from.y, to.z - from.z
+    local horizontal = math.sqrt(dx * dx + dz * dz)
+
+    set_day()
+    player:set_pos(from)
+    player:set_look_horizontal(math.atan2(-dx, dz) % (2 * math.pi))
+    -- set_look_vertical takes positive as downwards.
+    player:set_look_vertical(-math.atan2(dy, math.max(horizontal, 0.001)))
+    return true, string.format("camera=%s target=%s", minetest.pos_to_string(from),
+      minetest.pos_to_string(to))
+  end,
+})
+
+--- Compute three reproducible camera setups per settlement and write them,
+-- with the full settlement metadata, to a JSON file the host script drives.
+minetest.register_chatcommand("pw_village_shotlist", {
+  params = "",
+  description = "Write camera setups and metadata for every built settlement",
+  privs = {server = true},
+  func = function()
+    local function ground(x, z, fallback)
+      for y = 200, -32, -1 do
+        local node = minetest.get_node({x = x, y = y, z = z})
+        if node.name ~= "air" and node.name ~= "ignore" then return y end
+      end
+      return fallback or 0
+    end
+
+    local out = {
+      generated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+      world_seed = perfectworld.world_seed_string,
+      settlements = {},
+    }
+
+    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+      local stored = perfectworld.planner.get_settlement_plan(id)
+      local settlement = stored and stored.settlement
+      local plan = stored and stored.plan
+      if settlement and (settlement.lot_count or 0) > 0 and plan then
+        local center = settlement.center_pos
+        local bounds = settlement.bounds or {}
+        -- Mapblocks are unloaded once nobody is nearby and get_node then
+        -- reports "ignore", which would put every camera at sea level.
+        if minetest.load_area then
+          pcall(minetest.load_area,
+            {x = (bounds.min_x or center.x) - 8, y = -32, z = (bounds.min_z or center.z) - 8},
+            {x = (bounds.max_x or center.x) + 8, y = 200, z = (bounds.max_z or center.z) + 8})
+        end
+        local extent = math.max(
+          (bounds.max_x or center.x) - (bounds.min_x or center.x),
+          (bounds.max_z or center.z) - (bounds.min_z or center.z), 30)
+        local center_y = ground(center.x, center.z, center.y)
+        local shots = {}
+
+        -- 1. Overview from an elevated corner.
+        local d = extent * 0.75 + 12
+        local overview_from = {
+          x = center.x - d, y = center_y + extent * 0.65 + 22, z = center.z - d,
+        }
+        table.insert(shots, {
+          name = "overview",
+          from = overview_from,
+          target = {x = center.x, y = center_y, z = center.z},
+        })
+
+        -- 2. Along the main street, at eye height.
+        local main = plan.roads and plan.roads[1]
+        if main and #main.points >= 2 then
+          local a = main.points[math.max(1, math.floor(#main.points * 0.15))]
+          local b = main.points[math.min(#main.points, math.floor(#main.points * 0.85))]
+          table.insert(shots, {
+            name = "street",
+            from = {x = a.x, y = ground(a.x, a.z, center_y) + 2, z = a.z},
+            target = {x = b.x, y = ground(b.x, b.z, center_y) + 2, z = b.z},
+          })
+        end
+
+        -- 3. Player-level view of the first dwelling from the street side.
+        local lot
+        for _, candidate_lot in ipairs(plan.lots or {}) do
+          if candidate_lot.status == "materialized" then
+            lot = candidate_lot
+            if candidate_lot.role == "dwelling" then break end
+          end
+        end
+        if lot then
+          local rx, rz = lot.road_point.x, lot.road_point.z
+          local dx, dz = rx - lot.center.x, rz - lot.center.z
+          local length = math.max(math.sqrt(dx * dx + dz * dz), 0.001)
+          local from = {
+            x = math.floor(rx + dx / length * 4),
+            z = math.floor(rz + dz / length * 4),
+          }
+          table.insert(shots, {
+            name = "ground",
+            from = {x = from.x, y = ground(from.x, from.z, center_y) + 2, z = from.z},
+            target = {x = lot.center.x, y = ground(lot.center.x, lot.center.z, center_y) + 3, z = lot.center.z},
+          })
+        end
+
+        table.insert(out.settlements, {
+          settlement_id = settlement.settlement_id,
+          candidate_id = settlement.candidate_id,
+          region_id = settlement.region_id,
+          status = settlement.status,
+          center = center,
+          bounds = bounds,
+          biome_name = settlement.biome_name,
+          biome_family = settlement.biome_family,
+          palette = settlement.palette_id,
+          archetype = settlement.archetype,
+          size_class = settlement.size_class,
+          lot_count = settlement.lot_count,
+          structure_variants = settlement.structure_variants,
+          road_ids = settlement.road_ids,
+          road_segment_count = settlement.road_segment_count,
+          exact_plan_fingerprint = settlement.exact_plan_fingerprint,
+          structural_fingerprint = settlement.structural_fingerprint,
+          road_graph_fingerprint = settlement.road_graph_fingerprint,
+          teleport_command = string.format("/teleport %d %d %d",
+            center.x, center_y + 2, center.z),
+          shots = shots,
+        })
+      end
+    end
+
+    local stamp = os.date("!%Y%m%d_%H%M%S")
+    local path = write_world_file("pw_shotlist_" .. stamp .. ".json",
+      minetest.write_json(out, true))
+    return true, "written: " .. tostring(path) .. " settlements=" .. #out.settlements
+  end,
+})
+
+--- Dump every settlement record plus its validation report to the world dir.
+minetest.register_chatcommand("pw_village_export", {
+  params = "",
+  description = "Write all settlement records and validation reports to JSON",
+  privs = {server = true},
+  func = function()
+    local out = {
+      generated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+      world_seed = perfectworld.world_seed_string,
+      planner_version = perfectworld.PLANNER_VERSION,
+      settlements = {},
+    }
+    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+      local stored = perfectworld.planner.get_settlement_plan(id)
+      local settlement = stored and stored.settlement
+      if settlement then
+        local entry = perfectworld.core.deep_copy(settlement)
+        entry.validation = perfectworld.planner.validate_settlement(id)
+        entry.plan_roads = {}
+        for _, road in ipairs((stored.plan or {}).roads or {}) do
+          table.insert(entry.plan_roads, {
+            id = road.id, kind = road.kind, width = road.width,
+            point_count = #road.points,
+          })
+        end
+        table.insert(out.settlements, entry)
+      end
+    end
+    local stamp = os.date("!%Y%m%d_%H%M%S")
+    local path = write_world_file("pw_settlements_" .. stamp .. ".json",
+      minetest.write_json(out, true))
+    return true, "written: " .. tostring(path) .. " settlements=" .. #out.settlements
+  end,
+})
+
 minetest.log("action", "[pw_debug] loaded")
