@@ -26,6 +26,8 @@ local function deep_copy(value)
   return copy
 end
 
+-- Polynomial string hash. Every intermediate stays below 2^41, so IEEE-754
+-- doubles (the only numeric type in LuaJIT) represent it exactly.
 local function stable_hash(value)
   local text = tostring(value)
   local hash = 5381
@@ -33,6 +35,39 @@ local function stable_hash(value)
     hash = (hash * 131 + text:byte(i) + i * 17) % HASH_MOD
   end
   return hash
+end
+
+-- === Exact 32-bit integer hashing ===
+--
+-- Lua numbers here are doubles: products above 2^53 silently lose low bits.
+-- Every multiplication below is split into 16-bit limbs so the largest
+-- intermediate is 2^16 * 2^32 = 2^48, which is exact with 32x headroom.
+
+local TWO32 = 4294967296
+
+-- (a * b) mod 2^32, exact for 0 <= a, b < 2^32
+local function mul32(a, b)
+  local ah = math.floor(a / 65536) % 65536
+  local al = a % 65536
+  return ((ah * b) % 65536 * 65536 + al * b) % TWO32
+end
+
+local function mix32(h)
+  h = mul32(h + 2127912214, 2246822519)
+  h = mul32(h + math.floor(h / 65536), 3266489917)
+  h = mul32(h + math.floor(h / 4096), 668265263)
+  return (h + math.floor(h / 32768)) % TWO32
+end
+
+--- Hash an arbitrary string to a well-distributed integer in [0, 2^32).
+local function hash32(value)
+  local text = tostring(value)
+  local h = 2166136261
+  for i = 1, #text do
+    h = mul32(h + text:byte(i) + i, 16777619)
+    h = (h + math.floor(h / 256)) % TWO32
+  end
+  return mix32(h + #text)
 end
 
 local function to_base36(num)
@@ -67,6 +102,99 @@ perfectworld.core = perfectworld.core or {}
 perfectworld.core.deep_copy = deep_copy
 perfectworld.core.stable_hash = stable_hash
 perfectworld.core.to_base36 = to_base36
+perfectworld.core.mul32 = mul32
+perfectworld.core.hash32 = hash32
+perfectworld.core.HASH32_MAX = TWO32
+
+-- === Stable variation contract ===
+--
+-- Planning decisions are NOT drawn from a sequential PRNG. Each decision is an
+-- independent hash of (seed_key, label):
+--
+--   hash32(seed_key .. "#" .. label)
+--
+-- Consequences that a stream generator cannot offer:
+--   * adding a new decision somewhere does not shift any other decision;
+--   * decisions can be evaluated in any order, or not at all;
+--   * a decision is reproducible in isolation, which makes golden tests cheap.
+--
+-- Labels must be stable strings. Use ':' to namespace them, e.g.
+-- "road:segment:3:direction", "lot:5:rotation".
+
+local choice = {}
+perfectworld.core.choice = choice
+
+local function decision_hash(seed_key, label)
+  return hash32(tostring(seed_key) .. "#" .. tostring(label))
+end
+
+choice.decision_hash = decision_hash
+
+--- Uniform float in [0, 1).
+function choice.unit(seed_key, label)
+  return decision_hash(seed_key, label) / TWO32
+end
+
+--- Uniform integer in [1, n].
+function choice.index(seed_key, label, n)
+  if not n or n < 1 then return 1 end
+  return 1 + decision_hash(seed_key, label) % n
+end
+
+--- Uniform integer in [min, max] (inclusive).
+function choice.int(seed_key, label, min, max)
+  if max < min then min, max = max, min end
+  return min + decision_hash(seed_key, label) % (max - min + 1)
+end
+
+--- Uniform float in [min, max).
+function choice.range(seed_key, label, min, max)
+  return min + choice.unit(seed_key, label) * (max - min)
+end
+
+--- Pick one element of a non-empty array.
+function choice.pick(seed_key, label, list)
+  if type(list) ~= "table" or #list == 0 then return nil end
+  return list[choice.index(seed_key, label, #list)]
+end
+
+--- True with probability p.
+function choice.bool(seed_key, label, p)
+  return choice.unit(seed_key, label) < (p or 0.5)
+end
+
+--- Weighted pick. `entries` is an array of {value = ..., weight = number}.
+function choice.weighted(seed_key, label, entries)
+  local total = 0
+  for _, entry in ipairs(entries) do
+    if (entry.weight or 0) > 0 then total = total + entry.weight end
+  end
+  if total <= 0 then
+    return entries[1] and entries[1].value
+  end
+  local roll = choice.unit(seed_key, label) * total
+  local acc = 0
+  for _, entry in ipairs(entries) do
+    if (entry.weight or 0) > 0 then
+      acc = acc + entry.weight
+      if roll < acc then return entry.value end
+    end
+  end
+  return entries[#entries].value
+end
+
+--- Deterministic Fisher-Yates over a copy of `list`.
+-- Each swap uses its own label, so the shuffle of a list of length n is
+-- unaffected by decisions made anywhere else.
+function choice.shuffle(seed_key, label, list)
+  local out = {}
+  for i, v in ipairs(list) do out[i] = v end
+  for i = #out, 2, -1 do
+    local j = choice.index(seed_key, label .. ":swap:" .. i, i)
+    out[i], out[j] = out[j], out[i]
+  end
+  return out
+end
 
 local function coord_tag(value)
   value = math.floor(tonumber(value) or 0)

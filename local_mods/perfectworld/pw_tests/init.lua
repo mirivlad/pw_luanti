@@ -13,6 +13,8 @@ local test_files = {
   "core",
   "planner",
   "structures",
+  "variation",
+  "fingerprints",
   "village",
   "village_diversity",
 }
