@@ -255,6 +255,41 @@ function P.get_feature_interest()
   return out
 end
 
+-- === The runtime channel ===
+--
+-- The brain publishes intents into a spool and reads back what a real client
+-- managed to do with them. It is the only place anything outside the server can
+-- tell the bot that a decision did not survive contact with the world.
+
+function P.get_transport_status()
+  return P.impl.transport.status()
+end
+
+function P.start_transport(actor)
+  local allowed, reason = bridge.impl.permissions.can_administer(actor)
+  if not allowed then return false, "permission_denied", reason end
+  return P.impl.transport.start()
+end
+
+function P.stop_transport(actor)
+  local allowed, reason = bridge.impl.permissions.can_administer(actor)
+  if not allowed then return false, "permission_denied", reason end
+  return P.impl.transport.stop()
+end
+
+--- Report what a real client managed to do with an intent.
+-- Exposed for the tests and for any in-process consumer; the external runtime
+-- reaches this through the spool rather than through Lua.
+function P.report_execution(player_name, document)
+  return P.impl.transport.ingest_result(player_name, document)
+end
+
+function P.get_last_execution(player_name)
+  local mind = brain.get(player_name)
+  if not mind then return nil end
+  return mind.last_execution
+end
+
 P.NULL = canonical.NULL
 P.EMPTY_ARRAY = canonical.EMPTY_ARRAY
 

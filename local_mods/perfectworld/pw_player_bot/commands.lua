@@ -256,6 +256,39 @@ minetest.register_chatcommand("pw_player_bot_capabilities", {
   end,
 })
 
+minetest.register_chatcommand("pw_player_bot_transport", {
+  params = "<status|start|stop>",
+  description = "Control the intent spool an external runtime reads",
+  privs = ADMIN,
+  func = function(name, param)
+    local action = param:match("^(%S+)$") or "status"
+    if action == "start" then
+      local ok, code, detail = P.start_transport(name)
+      if not ok then
+        return false, string.format("refused: %s (%s)", tostring(code),
+          type(detail) == "table" and table.concat(detail, ",") or tostring(detail))
+      end
+    elseif action == "stop" then
+      local ok, code = P.stop_transport(name)
+      if not ok then return false, "refused: " .. tostring(code) end
+    elseif action ~= "status" then
+      return false, "Usage: /pw_player_bot_transport <status|start|stop>"
+    end
+
+    local status = P.get_transport_status()
+    local rows = {
+      string.format("setting=%s running=%s available=%s poll=%.2fs",
+        tostring(status.setting), tostring(status.running),
+        tostring(status.available), status.poll_interval),
+      "root: " .. status.root,
+    }
+    if status.missing ~= canonical.EMPTY_ARRAY and #status.missing > 0 then
+      rows[#rows + 1] = "missing: " .. table.concat(status.missing, ",")
+    end
+    return true, lines(rows)
+  end,
+})
+
 --- The shortcut for the project's own test player: register with the bridge if
 --- needed, start thinking, and take one step.
 minetest.register_chatcommand("pwbot_brain", {

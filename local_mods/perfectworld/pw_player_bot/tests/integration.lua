@@ -255,9 +255,13 @@ test("brain_routes_only_over_ground_it_has_observed", function(ctx)
     local mind = brain.get(name)
     local origin = mind.memory.last_position
     local here = origin and memory.get_cell(mind.memory, origin.x, origin.z)
+    -- Orthogonal neighbours only. A diagonal can pass can_step and still be
+    -- unroutable, because the planner refuses to cut a corner between two
+    -- blocked cells — which is the planner being right, not the route failing.
     local reachable
     if here then
-      for _, offset in ipairs(P.impl.beliefs.NEIGHBOURS) do
+      for index = 1, 4 do
+        local offset = P.impl.beliefs.NEIGHBOURS[index]
         local cell = memory.get_cell(mind.memory, here.x + offset[1], here.z + offset[2])
         if cell and P.impl.beliefs.can_step(here, cell) then
           reachable = cell

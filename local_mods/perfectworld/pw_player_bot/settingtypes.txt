@@ -43,3 +43,13 @@ pw_player_bot.intent_ttl_ticks (Intent lifetime in ticks) int 10 1 1000
 
 #    Write each issued intent to a runtime artifact in the world directory.
 pw_player_bot.log_intents (Log intents to disk) bool false
+
+#    File-spool channel to an external runtime that drives a real Luanti client.
+#    Off by default: a spool talks to something outside the server.
+pw_player_bot.intent_transport (Enable intent transport) bool false
+
+#    Seconds between polls of the execution-result directory.
+pw_player_bot.transport_poll_interval (Transport poll interval) float 0.2 0.05 10.0
+
+#    Intents allowed to wait unclaimed before the oldest are dropped.
+pw_player_bot.transport_max_pending_intents (Max pending intents) int 8 1 64

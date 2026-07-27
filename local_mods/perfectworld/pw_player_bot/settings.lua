@@ -44,6 +44,9 @@ settings.HARD = {
   max_candidates = 24,
   -- Frontier targets considered per tick.
   max_frontier_targets = 12,
+  -- Intents allowed to wait in the spool before the oldest are dropped. A
+  -- runtime that is not claiming them must not be able to fill a disk.
+  pending_intents = 64,
 }
 
 function settings.reload()
@@ -62,6 +65,14 @@ function settings.reload()
   settings.route_max_step_down = get_int("pw_player_bot.route_max_step_down", 3, 1, 8)
   settings.intent_ttl_ticks = get_int("pw_player_bot.intent_ttl_ticks", 10, 1, 1000)
   settings.log_intents = get_bool("pw_player_bot.log_intents", false)
+  -- Off by default, like the bridge's own transport. A spool is a channel to
+  -- something outside the server, and a server operator turns those on
+  -- deliberately or not at all.
+  settings.intent_transport = get_bool("pw_player_bot.intent_transport", false)
+  settings.transport_poll_interval = get_number("pw_player_bot.transport_poll_interval",
+    0.2, 0.05, 10)
+  settings.transport_max_pending_intents = get_int("pw_player_bot.transport_max_pending_intents",
+    8, 1, H.pending_intents)
   return settings
 end
 
@@ -80,6 +91,9 @@ function settings.snapshot()
     route_max_step_down = settings.route_max_step_down,
     intent_ttl_ticks = settings.intent_ttl_ticks,
     log_intents = settings.log_intents,
+    intent_transport = settings.intent_transport,
+    transport_poll_interval = settings.transport_poll_interval,
+    transport_max_pending_intents = settings.transport_max_pending_intents,
     tick_budget_us = settings.HARD.tick_budget_us,
   }
 end

@@ -15,6 +15,7 @@ local FILES = {
   "unit_memory",
   "unit_navigation",
   "unit_decisions",
+  "unit_transport",
   "integration",
 }
 

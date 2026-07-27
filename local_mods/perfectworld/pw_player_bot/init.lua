@@ -4,7 +4,7 @@
 --
 --   pw_bot_bridge     perceives   -- never acts
 --   pw_player_bot     decides     -- never acts
---   future controller acts        -- through a real Luanti client, like a player
+--   pw_bot_runtime    acts        -- through a real Luanti client, like a player
 --
 -- This mod is the middle row. It consumes player-mode observations from the
 -- bridge, accumulates a bounded memory of what it has seen, derives beliefs
@@ -14,7 +14,8 @@
 -- It does not move anyone. It cannot: nothing here writes a node, sets a
 -- position, turns a head or presses a key, and the smoke test fails the build
 -- if that ever changes. The intent it publishes is a description of what a real
--- client should do, and executing it is somebody else's job.
+-- client should do, and executing it is tools/pw_bot_runtime's job -- a separate
+-- process outside the server that drives an actual Luanti client.
 --
 -- One rule is worth repeating because it is the whole reason the bot is
 -- interesting: it plans over what it remembers, never over the map. A route can
@@ -43,6 +44,7 @@ local MODULES = {
   "goals",        -- what the bot can want, and how each becomes a plan
   "utility",      -- deterministic scoring and choice
   "brain",        -- one decision, start to finish
+  "transport",    -- the intent/result spool to an external runtime
   "api",          -- the public API
   "commands",     -- administrative chatcommands
 }

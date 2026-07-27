@@ -201,9 +201,13 @@ function brain.tick(mind)
   end
 
   mind.history = needs.note_route_success(mind.history)
-  -- Only expect movement when the plan actually contains some; otherwise the
-  -- stuck detector would fire every time the bot deliberately stood still.
+  -- Only expect movement when the plan contains some *and* something is there
+  -- to carry it out. A brain with no runtime attached is not a bot that failed
+  -- to walk, it is a bot with no legs, and counting that as being stuck would
+  -- have it forever abandoning perfectly good plans on the evidence that
+  -- nobody executed them.
   mind.history.expected_movement = plan.kind == "route"
+    and P.impl.transport ~= nil and P.impl.transport.is_running()
 
   local dominant, dominant_value = needs.dominant(drives)
   local rationale = {}
@@ -242,6 +246,19 @@ function brain.tick(mind)
     P.impl.write_intent_artifact(document)
   end
 
+  -- Hand the decision to whatever is going to carry it out. Publishing is not
+  -- executing: the spool is an outbox, and the brain does not wait on it, does
+  -- not care whether anything is listening, and does not change its mind
+  -- because nothing claimed the last one.
+  if P.impl.transport and P.impl.transport.is_running() then
+    local published, why = P.impl.transport.publish_intent(mind.player_name, document)
+    if not published then
+      minetest.log("warning", "[pw_player_bot] could not publish intent for "
+        .. mind.player_name .. ": " .. tostring(why))
+    end
+    P.impl.transport.publish_state(mind.player_name)
+  end
+
   return document, {
     drives = drives,
     dominant = dominant,
@@ -268,6 +285,7 @@ function brain.status(player_name)
       failed_routes = mind.history.failed_routes or 0,
     },
     stats = mind.stats,
+    last_execution = mind.last_execution or canonical.NULL,
     last_intent = mind.last_intent and {
       intent_id = mind.last_intent.intent_id,
       goal = mind.last_intent.goal.kind,
