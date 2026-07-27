@@ -19,6 +19,7 @@ load_mod_pw_settlements = true
 load_mod_pw_population = true
 load_mod_pw_debug = true
 load_mod_pw_bot_bridge = true
+load_mod_pw_player_bot = true
 load_mod_pw_tests = true
 
 # Test infrastructure

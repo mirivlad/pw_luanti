@@ -23,7 +23,7 @@ check_file "config/world.mt.example"
 
 # PerfectWorld modpack
 check_file "local_mods/perfectworld/modpack.conf"
-for m in pw_core pw_compat_mcl pw_planner pw_structures pw_roads pw_settlements pw_population pw_debug pw_bot_bridge pw_tests; do
+for m in pw_core pw_compat_mcl pw_planner pw_structures pw_roads pw_settlements pw_population pw_debug pw_bot_bridge pw_player_bot pw_tests; do
   check_file "local_mods/perfectworld/$m/init.lua"
   check_file "local_mods/perfectworld/$m/mod.conf"
 done
@@ -58,6 +58,56 @@ if grep -REn "os\.execute|io\.popen|imagemagick|opencv|import -window" \
   errors=$((errors+1))
 else
   echo "OK: pw_bot_bridge has no screenshot-based perception"
+fi
+
+# Player bot: decides, never acts. Same guard, and one more that matters as much
+# — the brain must reach the world through the bridge, never through the map.
+for f in memory beliefs navigation needs goals utility brain intent api; do
+  check_file "local_mods/perfectworld/pw_player_bot/$f.lua"
+done
+check_file "local_mods/perfectworld/pw_player_bot/settingtypes.txt"
+check_file "local_mods/perfectworld/pw_player_bot/tests/init.lua"
+check_pattern "local_mods/perfectworld/pw_player_bot/intent.lua" "pw_player_bot/v1"
+
+if grep -REn "$ACTING" "$ROOT/local_mods/perfectworld/pw_player_bot" --include="*.lua" \
+     --exclude-dir=tests >/dev/null 2>&1; then
+  echo "FAIL: pw_player_bot contains world- or player-acting calls outside its tests"
+  grep -REn "$ACTING" "$ROOT/local_mods/perfectworld/pw_player_bot" --include="*.lua" \
+    --exclude-dir=tests
+  errors=$((errors+1))
+else
+  echo "OK: pw_player_bot decides but never acts"
+fi
+
+if grep -REn "minetest\.get_node|core\.get_node|get_node_or_nil|VoxelManip|get_objects_inside_radius" \
+     "$ROOT/local_mods/perfectworld/pw_player_bot" --include="*.lua" \
+     --exclude-dir=tests >/dev/null 2>&1; then
+  echo "FAIL: pw_player_bot reads the map directly instead of through pw_bot_bridge"
+  grep -REn "minetest\.get_node|core\.get_node|get_node_or_nil|VoxelManip|get_objects_inside_radius" \
+    "$ROOT/local_mods/perfectworld/pw_player_bot" --include="*.lua" --exclude-dir=tests
+  errors=$((errors+1))
+else
+  echo "OK: pw_player_bot knows the world only through what it observed"
+fi
+
+# Actual calls, not the words: both modules name math.random and screenshots in
+# prose, precisely to say they do not use them.
+if grep -REn "math\.random *\(|math\.randomseed *\(|PseudoRandom *\(" \
+     "$ROOT/local_mods/perfectworld/pw_player_bot" --include="*.lua" >/dev/null 2>&1; then
+  echo "FAIL: pw_player_bot uses randomness; decisions must be reproducible"
+  grep -REn "math\.random *\(|math\.randomseed *\(|PseudoRandom *\(" \
+    "$ROOT/local_mods/perfectworld/pw_player_bot" --include="*.lua"
+  errors=$((errors+1))
+else
+  echo "OK: pw_player_bot decisions are deterministic"
+fi
+
+if grep -REn "os\.execute|io\.popen|imagemagick|opencv|import -window" \
+     "$ROOT/local_mods/perfectworld/pw_player_bot" --include="*.lua" >/dev/null 2>&1; then
+  echo "FAIL: pw_player_bot shells out or depends on an image pipeline"
+  errors=$((errors+1))
+else
+  echo "OK: pw_player_bot has no screenshot-based perception"
 fi
 
 # The bridge must not silently request an insecure environment.
