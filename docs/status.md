@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 112 total | 112 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 114 total | 114 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 ## Implemented Modules
 
@@ -14,7 +14,7 @@
 | `pw_roads` | ✅ Complete | Road persistence API, delegates to pw_planner storage |
 | `pw_settlements` | ✅ Complete | Type definitions, settlement record API |
 | `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
-| `pw_tests` | ✅ Complete | 112 tests across core, planner, structures, variation, fingerprints, village, diversity |
+| `pw_tests` | ✅ Complete | 114 tests across core, planner, structures, variation, fingerprints, village, diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
 | `pw_remote_control` | ✅ Complete | JSON remote control |
 
@@ -57,10 +57,34 @@ Biome-aware, multi-archetype settlement pipeline. See
 | `complete` status ignored required roles and unbuilt lots | Contract now enforced and validated |
 | Driveways were drawn but never recorded | Nothing proved a lot was reachable |
 | Single fingerprint quantised coordinates by 2 | One-block differences were invisible |
+| Frozen ocean passed every buildability check | A village with a full crossroads was materialized on the sea |
+| Road polylines were never checked against terrain | Streets ran off clifftops, down rock faces and into water |
+| Screenshot helper matched the xvfb-run wrapper shell | Captured the desktop instead of the game |
 
 ## Known Test Issues
 
-None. 112 PASS, 0 FAIL, 0 SKIP, 0 ERROR.
+None. 114 PASS, 0 FAIL, 0 SKIP, 0 ERROR.
+
+The only ERROR lines in a clean server log come from
+`world_format_lock_detects_incompatible_changes`, which feeds `pw_core` a
+mismatched lock record on purpose, and from Mineclonia's own redstone event
+queue. Neither is a PerfectWorld fault.
+
+## Known Visual Defects
+
+Found by reviewing 21 screenshots of 7 settlements; none of them break the
+physical contract, all of them are honest limitations of the current build.
+
+| Defect | Cause | Effect |
+|--------|-------|--------|
+| Streets are ragged: holes, offset blocks, stepped edges | `place_road_strip` writes one node per column at that column's own surface height, and skips columns whose surface is water | A street reads as a street but not as a built road surface |
+| Buildings inside one village look like the same box at different sizes | Only four structures exist, all flat-roofed rectangles from one generator | A village reads as a settlement, but not as a place with distinct buildings |
+| The `rocky` palette is monochrome | stone walls + stone roof + gravel path on stone terrain | Rocky villages are legible in silhouette only |
+| Many `hillside` settlements stand on flat ground | The hillside fallback fires whenever a flat archetype finds no viable layout, which is common on the `carpathian` mapgen | On flat ground hillside is visually indistinguishable from linear |
+
+Fix directions, in order of visual return: give the road builder a smoothed
+profile and let it bridge one-block gaps; add roof shapes and a second wall
+material per palette; give `rocky` a contrasting roof.
 
 ## Missing Systems
 

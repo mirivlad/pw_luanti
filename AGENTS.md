@@ -109,7 +109,7 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 
 ### Текущий baseline
 
-112 total | 112 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+114 total | 114 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 Baseline должен оставаться зелёным. Отчёт печатается через
 `python3 scripts/report-summary.py`.
@@ -191,11 +191,17 @@ scripts/run-testkit.sh
 # 3. снять кадры
 python3 scripts/capture-screenshots.py \
   --shotlist data/worlds/perfectworld/pw_shotlist_<stamp>.json \
-  --out /path/outside/git --limit 6
+  --out /path/outside/git --ids <settlement_id>,<settlement_id>
 ```
 
-Скрипт находит DISPLAY/XAUTHORITY запущенного клиента, ведёт камеру через
-`pw_remote_control` и снимает root-окно Xvfb через ImageMagick `import`.
+Скрипт ведёт камеру через `pw_remote_control` и снимает окно Luanti через
+ImageMagick `import`.
+
+**Клиент определяется строго**: требуется процесс `luanti --go` с
+`XAUTHORITY` внутри `/tmp/xvfb-run.*`. Обёртка `xvfb-run` наследует DISPLAY
+рабочего стола пользователя — если ориентироваться на неё, `import` снимет
+экран пользователя, а не игру. При несовпадении скрипт отказывается работать,
+а не угадывает.
 
 ## 7. Известные ограничения
 

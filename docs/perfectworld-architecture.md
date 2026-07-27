@@ -464,6 +464,21 @@ floor, paths, fences) through `perfectworld.structures.palette_material`.
 Joinery — doors, glass, torches, furniture — stays on the generic material
 table. An unregistered palette node falls back to the generic role.
 
+### Buildable Ground
+
+A column cannot carry a settlement when its surface is liquid, is in the `ice`,
+`water` or `lava` groups, or has liquid within three blocks under a thin solid
+crust. Checking only for `"water"` in the node name is not enough: a frozen
+ocean is flat, solid, walkable and opaque, so every geometric check passes and
+the planner will lay a crossroads across the sea.
+
+Road polylines are laid out geometrically, before any terrain is consulted, and
+are then **trimmed** to the contiguous run around the settlement centre where
+the ground exists, is buildable, and rises no more than three blocks per
+two-block step. Without the trim a street runs off a clifftop and into the
+water, which is the single most obvious way a generated settlement stops
+looking built.
+
 ### Terrain Adaptation
 
 `context.terrain_overrides` relaxes a structure's terrain contract for one
