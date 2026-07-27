@@ -857,17 +857,38 @@ minetest.register_chatcommand("pw_village_info", {
     end
     local s = perfectworld.settlements.get(param)
     if not s then return false, "Settlement not found: " .. param end
+    local env = s.environment_profile or {}
     local lines = {
       "settlement_id=" .. tostring(s.settlement_id),
+      "candidate_id=" .. tostring(s.candidate_id),
       "region_id=" .. tostring(s.region_id),
-      "archetype=" .. tostring(s.archetype),
       "status=" .. tostring(s.status),
       "center=" .. minetest.pos_to_string(s.center_pos or {}),
-      "env_family=" .. tostring(s.environment_profile and s.environment_profile.biome_family or "?"),
-      "fingerprint=" .. tostring(s.village_fingerprint),
+      "bounds=" .. string.format("(%s,%s)..(%s,%s)",
+        tostring(s.bounds and s.bounds.min_x), tostring(s.bounds and s.bounds.min_z),
+        tostring(s.bounds and s.bounds.max_x), tostring(s.bounds and s.bounds.max_z)),
+      "biome_name=" .. tostring(env.biome_name),
+      "biome_family=" .. tostring(s.biome_family or env.biome_family),
+      "elevation=" .. tostring(env.elevation),
+      "roughness=" .. tostring(env.roughness),
+      "water_proximity=" .. tostring(env.water_proximity),
+      "vegetation_density=" .. tostring(env.vegetation_density),
+      "palette=" .. tostring(s.palette_id),
+      "archetype=" .. tostring(s.archetype),
+      "size_class=" .. tostring(s.size_class),
       "lot_count=" .. tostring(s.lot_count),
+      "planned_lot_count=" .. tostring(s.planned_lot_count),
+      "required_roles=" .. table.concat(s.required_roles or {}, ","),
+      "optional_roles=" .. table.concat(s.optional_roles or {}, ","),
+      "missing_required_roles=" .. table.concat(s.missing_required_roles or {}, ","),
       "structure_ids=" .. table.concat(s.structure_ids or {}, ","),
+      "structure_variants=" .. table.concat(s.structure_variants or {}, ","),
       "road_ids=" .. table.concat(s.road_ids or {}, ","),
+      "road_segment_count=" .. tostring(s.road_segment_count),
+      "exact_plan_fingerprint=" .. tostring(s.exact_plan_fingerprint),
+      "structural_fingerprint=" .. tostring(s.structural_fingerprint),
+      "road_graph_fingerprint=" .. tostring(s.road_graph_fingerprint),
+      "seed_key=" .. tostring(s.seed_key),
       "generator=" .. tostring(s.generator_version),
     }
     return true, table.concat(lines, "\n")
@@ -890,47 +911,251 @@ minetest.register_chatcommand("pw_village_tp", {
   end,
 })
 
+local function format_validation(report)
+  local lines = {
+    "valid=" .. tostring(report.ok),
+    "settlement_id=" .. tostring(report.settlement_id),
+    "status=" .. tostring(report.status),
+    "archetype=" .. tostring(report.archetype),
+    "lot_count=" .. tostring(report.lot_count),
+    "structures=" .. tostring(report.structure_count),
+    "roads=" .. tostring(report.road_count),
+  }
+  local names = {}
+  for check_name in pairs(report.checks or {}) do table.insert(names, check_name) end
+  table.sort(names)
+  for _, check_name in ipairs(names) do
+    table.insert(lines, "  " .. check_name .. "=" .. report.checks[check_name])
+  end
+  if #(report.issues or {}) > 0 then
+    table.insert(lines, "issues=" .. table.concat(report.issues, " "))
+  end
+  return table.concat(lines, "\n")
+end
+
 minetest.register_chatcommand("pw_village_validate", {
-  params = "<settlement_id>",
-  description = "Validate a settlement: check structures, roads, intersections, status",
+  params = "[settlement_id]",
+  description = "Validate a settlement against its record and the real world",
   privs = {interact = true},
   func = function(name, param)
-    if not param or param == "" then return false, "Usage: /pw_village_validate <id>" end
-    local s = perfectworld.settlements.get(param)
-    if not s then return false, "Settlement not found: " .. param end
-    local issues = {}
-    -- Status check
-    if s.status == "failed" then
-      table.insert(issues, "status=failed (lot_count=" .. (s.lot_count or 0) .. ")")
-    elseif s.status == "partial" then
-      table.insert(issues, "status=partial")
-    elseif s.lot_count == 0 then
-      table.insert(issues, "lot_count=0 but status=" .. tostring(s.status))
+    param = (param or ""):match("^%s*(.-)%s*$")
+    if param == "" then
+      local player = minetest.get_player_by_name(name)
+      local pos = player and player:get_pos()
+      if not pos then return false, "Usage: /pw_village_validate <id>" end
+      local best_id, best_dist = nil, math.huge
+      for _, id in ipairs(perfectworld.settlements.list_ids()) do
+        local s = perfectworld.settlements.get(id)
+        if s and s.center_pos then
+          local dx, dz = pos.x - s.center_pos.x, pos.z - s.center_pos.z
+          local d = dx * dx + dz * dz
+          if d < best_dist then best_dist, best_id = d, id end
+        end
+      end
+      if not best_id then return false, "No settlements found" end
+      param = best_id
     end
-    -- Structure existence
-    for _, sid in ipairs(s.structure_ids or {}) do
-      local rec = perfectworld.planner.get_structure(sid)
-      if not rec then
-        table.insert(issues, "missing_structure:" .. sid)
+    local report = perfectworld.planner.validate_settlement(param)
+    return true, format_validation(report)
+  end,
+})
+
+minetest.register_chatcommand("pw_village_validate_all", {
+  params = "",
+  description = "Validate every persisted settlement and summarise the failures",
+  privs = {interact = true},
+  func = function()
+    local ids = perfectworld.settlements.list_ids()
+    local lines = {}
+    local ok_count, bad_count = 0, 0
+    for _, id in ipairs(ids) do
+      local report = perfectworld.planner.validate_settlement(id)
+      if report.ok then
+        ok_count = ok_count + 1
+      else
+        bad_count = bad_count + 1
+        table.insert(lines, id .. " status=" .. tostring(report.status)
+          .. " issues=" .. table.concat(report.issues, ","))
       end
     end
-    -- Road existence
-    for _, rid in ipairs(s.road_ids or {}) do
-      local road = perfectworld.roads.get(rid)
-      if not road then
-        table.insert(issues, "missing_road:" .. rid)
-      end
-    end
-    -- Fingerprint consistency
-    if s.village_fingerprint and s.road_graph_fingerprint then
-      -- Both present, OK
+    table.insert(lines, 1, string.format("settlements=%d valid=%d invalid=%d",
+      #ids, ok_count, bad_count))
+    return true, table.concat(lines, "\n")
+  end,
+})
+
+-- === Diversity Analysis ===
+
+local analysis_running = false
+
+local function write_world_file(filename, text)
+  local path = minetest.get_worldpath() .. "/" .. filename
+  local handle = io.open(path, "w")
+  if not handle then return nil, "cannot open " .. path end
+  handle:write(text)
+  handle:close()
+  return path
+end
+
+local function summarise_analysis(rows)
+  local function counter() return {} end
+  local metrics = {
+    total_inputs = #rows,
+    valid_plans = 0,
+    rejected_plans = 0,
+    failed_plans = 0,
+    empty_plans = 0,
+    archetype_distribution = counter(),
+    biome_family_distribution = counter(),
+    palette_distribution = counter(),
+    size_class_distribution = counter(),
+    lot_count_distribution = counter(),
+    rejection_reasons = counter(),
+  }
+  local exact, structural, road_graph = {}, {}, {}
+  local layouts, roles, structures = {}, {}, {}
+
+  local function bump(tbl, key)
+    if key == nil then key = "nil" end
+    key = tostring(key)
+    tbl[key] = (tbl[key] or 0) + 1
+  end
+
+  for _, row in ipairs(rows) do
+    if row.status == "valid" then
+      metrics.valid_plans = metrics.valid_plans + 1
+    elseif row.status == "rejected" then
+      metrics.rejected_plans = metrics.rejected_plans + 1
+    elseif row.status == "empty" then
+      metrics.empty_plans = metrics.empty_plans + 1
+      metrics.rejected_plans = metrics.rejected_plans + 1
     else
-      table.insert(issues, "missing_fingerprint")
+      metrics.failed_plans = metrics.failed_plans + 1
     end
-    if #issues == 0 then
-      return true, "valid=true settlement_id=" .. param .. " archetype=" .. tostring(s.archetype) .. " status=" .. tostring(s.status) .. " lot_count=" .. tostring(s.lot_count)
+
+    if row.status ~= "error" then
+      bump(metrics.archetype_distribution, row.archetype)
+      bump(metrics.biome_family_distribution, row.biome_family)
+      bump(metrics.palette_distribution, row.palette)
+      bump(metrics.size_class_distribution, row.size_class)
+      bump(metrics.lot_count_distribution, row.lot_count)
+      for reason in tostring(row.rejections or ""):gmatch("(%a+)=") do
+        bump(metrics.rejection_reasons, reason)
+      end
     end
-    return true, "valid=false settlement_id=" .. param .. "\n" .. table.concat(issues, "\n")
+
+    if row.status == "valid" then
+      bump(exact, row.exact_plan_fingerprint)
+      bump(structural, row.structural_fingerprint)
+      bump(road_graph, row.road_graph_fingerprint)
+      bump(layouts, row.lot_layout_key)
+      bump(roles, row.role_composition)
+      bump(structures, row.structure_composition)
+    end
+  end
+
+  local function count_keys(tbl)
+    local n = 0
+    for _ in pairs(tbl) do n = n + 1 end
+    return n
+  end
+  local function duplicate_groups(tbl)
+    local groups = {}
+    for key, count in pairs(tbl) do
+      if count > 1 then groups[key] = count end
+    end
+    return groups
+  end
+
+  metrics.unique_exact_plan_fingerprints = count_keys(exact)
+  metrics.unique_structural_fingerprints = count_keys(structural)
+  metrics.unique_road_graph_fingerprints = count_keys(road_graph)
+  metrics.unique_lot_layouts = count_keys(layouts)
+  metrics.unique_role_compositions = count_keys(roles)
+  metrics.unique_structure_compositions = count_keys(structures)
+  metrics.duplicate_exact_groups = duplicate_groups(exact)
+  metrics.duplicate_structural_groups = duplicate_groups(structural)
+  return metrics
+end
+
+minetest.register_chatcommand("pw_village_analyze", {
+  params = "[synthetic|world] [count]",
+  description = "Plan N villages and write a diversity report to the world directory",
+  privs = {server = true},
+  func = function(name, param)
+    if analysis_running then return false, "analysis already running" end
+    param = param or ""
+    local mode = param:match("world") and "world" or "synthetic"
+    local count = tonumber(param:match("%d+")) or 120
+    local inputs = perfectworld.planner.build_analysis_sample({mode = mode, count = count})
+    analysis_running = true
+    minetest.log("action", string.format(
+      "[pw_debug] diversity analysis started: mode=%s inputs=%d", mode, #inputs))
+
+    local rows = {}
+    local index = 0
+    local finish, run_one
+
+    function finish()
+      local report = {
+        generated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        mode = mode,
+        world_seed = perfectworld.world_seed_string,
+        planner_version = perfectworld.PLANNER_VERSION,
+        region_size = perfectworld.REGION_SIZE,
+        metrics = summarise_analysis(rows),
+        rows = rows,
+      }
+      local stamp = os.date("!%Y%m%d_%H%M%S")
+      local path = write_world_file("pw_diversity_" .. mode .. "_" .. stamp .. ".json",
+        minetest.write_json(report, true))
+      analysis_running = false
+      minetest.log("action", "[pw_debug] diversity analysis finished: " .. tostring(path))
+    end
+
+    local function record(input)
+      local ok, row = pcall(perfectworld.planner.analyze_input, input)
+      if ok then
+        table.insert(rows, row)
+      else
+        table.insert(rows, {
+          input_id = input.input_id,
+          status = "error",
+          error = tostring(row):sub(1, 200),
+        })
+      end
+      if #rows % 10 == 0 then
+        minetest.log("action", "[pw_debug] analysis progress " .. #rows .. "/" .. #inputs)
+      end
+    end
+
+    function run_one()
+      if index >= #inputs then
+        finish()
+        return
+      end
+      if mode == "world" then
+        -- One site at a time: the map area has to be generated before it can
+        -- be planned on, and emerging is asynchronous.
+        index = index + 1
+        local input = inputs[index]
+        perfectworld.planner.emerge_village_area({x = input.x, z = input.z}, function()
+          record(input)
+          minetest.after(0, run_one)
+        end)
+      else
+        local deadline = minetest.get_us_time() + 150000
+        while index < #inputs and minetest.get_us_time() < deadline do
+          index = index + 1
+          record(inputs[index])
+        end
+        minetest.after(0.05, run_one)
+      end
+    end
+
+    minetest.after(0.1, run_one)
+    return true, string.format("analysis started: mode=%s inputs=%d; watch the server log",
+      mode, #inputs)
   end,
 })
 
