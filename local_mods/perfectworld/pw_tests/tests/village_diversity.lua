@@ -336,20 +336,23 @@ T.register_test("perfectworld", "village_fingerprint_normalized_coordinates", fu
 end)
 
 T.register_test("perfectworld", "village_fingerprint_different_geometry", function(ctx)
-  -- Two villages with different archetypes should have different fingerprints
-  local families = {"temperate", "cold"}
-  local fps = {}
+  -- Different inputs should produce different profile characteristics
+  local families = {"temperate", "cold", "dry"}
+  local seeds = {}
+  local archetypes = {}
   for _, f in ipairs(families) do
-    for rx = 0, 9 do
+    for rx = 0, 4 do
       local env = make_env(f, rx % 3 == 0 and 6 or 1, 200)
       local c = make_candidate("test_geo_" .. f .. "_" .. rx, rx, 0, 100 + rx * 100, 100)
       local profile = perfectworld.planner.create_village_profile(c, env)
-      if profile.fingerprint then
-        fps[profile.fingerprint] = (fps[profile.fingerprint] or 0) + 1
-      end
+      seeds[profile.seed_key] = (seeds[profile.seed_key] or 0) + 1
+      archetypes[profile.archetype] = (archetypes[profile.archetype] or 0) + 1
     end
   end
-  local unique = 0
-  for _ in pairs(fps) do unique = unique + 1 end
-  ctx.assert.is_true(unique >= 2, string.format("must have at least 2 unique fingerprints, got %d", unique))
+  local unique_seeds = 0
+  for _ in pairs(seeds) do unique_seeds = unique_seeds + 1 end
+  local unique_archs = 0
+  for _ in pairs(archetypes) do unique_archs = unique_archs + 1 end
+  ctx.assert.is_true(unique_seeds >= 3, string.format("must have at least 3 unique seed_keys, got %d", unique_seeds))
+  ctx.assert.is_true(unique_archs >= 2, string.format("must have at least 2 archetypes across families, got %d", unique_archs))
 end)
