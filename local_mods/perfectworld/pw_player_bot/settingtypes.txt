@@ -1,0 +1,45 @@
+[PerfectWorld Player Bot]
+
+#    Master switch. When false the mod loads but never thinks.
+pw_player_bot.enabled (Enable the bot brain) bool true
+
+#    Seconds between decision ticks. A tick is one observation and one decision,
+#    never a per-server-step scan.
+pw_player_bot.tick_interval (Tick interval) float 1.0 0.2 30.0
+
+#    Bots the server starts thinking for, comma separated. Each must also be
+#    registered with pw_bot_bridge.
+pw_player_bot.autostart (Autostarted bots) string
+
+#    Ray profile the brain asks the bridge for on each tick.
+pw_player_bot.observation_profile (Observation profile) enum navigation minimal,navigation,detailed
+
+#    Largest number of remembered surface columns before the oldest are evicted.
+pw_player_bot.memory_max_cells (Memory: max columns) int 4096 128 65536
+
+#    Largest number of remembered features.
+pw_player_bot.memory_max_features (Memory: max features) int 512 16 8192
+
+#    Largest number of remembered objects.
+pw_player_bot.memory_max_entities (Memory: max objects) int 128 8 2048
+
+#    Ticks after which an unrefreshed memory is considered stale.
+pw_player_bot.memory_stale_ticks (Memory: stale after ticks) int 600 10 100000
+
+#    Largest number of cells the route planner may expand.
+pw_player_bot.route_max_expansions (Route: max expansions) int 4000 100 50000
+
+#    Longest route the planner will return, in cells.
+pw_player_bot.route_max_length (Route: max length) int 128 8 1024
+
+#    Highest step a route may climb in one cell.
+pw_player_bot.route_max_step_up (Route: max step up) int 1 1 3
+
+#    Deepest drop a route may take in one cell.
+pw_player_bot.route_max_step_down (Route: max step down) int 3 1 8
+
+#    Ticks an issued intent stays valid before the brain reconsiders.
+pw_player_bot.intent_ttl_ticks (Intent lifetime in ticks) int 10 1 1000
+
+#    Write each issued intent to a runtime artifact in the world directory.
+pw_player_bot.log_intents (Log intents to disk) bool false
