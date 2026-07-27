@@ -13,6 +13,8 @@ integration.
 ## What It Does
 
 - Divides the world into 1024×1024 deterministic regions
+- Exposes a server-side perception API (`pw_bot_bridge`) so an automated player
+  and the test kit can inspect what was built
 - Plans settlement candidates (farms, hamlets, villages) per region
 - Places 5 structure types: farmstead, two house variants, barn, well
 - Generates village layouts: main street, plots, building assignment
@@ -21,6 +23,8 @@ integration.
 
 ## What It Doesn't Do (Yet)
 
+- PW Bot itself: movement, navigation, memory, behaviour, client control
+  (only its senses exist — see [docs/pw-bot/](docs/pw-bot/README.md))
 - NPCs, villagers, economy
 - Roads between settlements
 - Bridges or tunnels
@@ -84,7 +88,7 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 ls -t data/worlds/perfectworld/ltk_report_*.json | head -1
 ```
 
-Current: **61 total | 57 PASS | 2 FAIL | 2 ERROR | 0 SKIP**
+Current: **204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR**
 
 See [docs/testing.md](docs/testing.md) for full test documentation.
 
@@ -112,6 +116,7 @@ PerfectWorld/
 │   │   ├── pw_settlements/       # Settlement types (skeleton)
 │   │   ├── pw_population/        # Population (skeleton)
 │   │   ├── pw_debug/             # Chat commands, screenshots
+│   │   ├── pw_bot_bridge/        # Server-side perception for the future PW Bot
 │   │   └── pw_tests/             # TestKit-based tests
 │   ├── luanti_testkit/           # Universal test framework
 │   └── pw_remote_control/        # JSON remote controller
@@ -132,6 +137,7 @@ PerfectWorld/
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems and fixes |
 | [docs/status.md](docs/status.md) | Current state, known issues |
 | [docs/perfectworld-architecture.md](docs/perfectworld-architecture.md) | Detailed design |
+| [docs/pw-bot/](docs/pw-bot/README.md) | The bot bridge: perception API, protocol, security |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 | [MIGRATION.md](MIGRATION.md) | History: extraction from monorepo |
 

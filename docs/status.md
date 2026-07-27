@@ -1,7 +1,8 @@
 # Project Status
 
-**Date:** 2026-07-27
-**Test baseline:** 118 total | 118 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+**Date:** 2026-07-28
+**Test baseline:** 204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+(118 in the `perfectworld` suite, 86 in `pw_bot_bridge`)
 
 ## Implemented Modules
 
@@ -14,6 +15,7 @@
 | `pw_roads` | ✅ Complete | Road persistence API, delegates to pw_planner storage |
 | `pw_settlements` | ✅ Complete | Type definitions, settlement record API |
 | `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
+| `pw_bot_bridge` | ✅ Complete | Server-side perception for the future PW Bot: `player`/`oracle` modes, protocol `pw_bot_bridge/v1`, semantic registry, event queue, optional file transport, 86 tests |
 | `pw_tests` | ✅ Complete | 118 tests across core, planner, structures, variation, fingerprints, village, diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
 | `pw_remote_control` | ✅ Complete | JSON remote control |
@@ -63,7 +65,7 @@ Biome-aware, multi-archetype settlement pipeline. See
 
 ## Known Test Issues
 
-None. 114 PASS, 0 FAIL, 0 SKIP, 0 ERROR.
+None. 204 PASS, 0 FAIL, 0 SKIP, 0 ERROR.
 
 The only ERROR lines in a clean server log come from
 `world_format_lock_detects_incompatible_changes`, which feeds `pw_core` a
@@ -103,6 +105,8 @@ carriageway smoothing to bridge one-block gaps.
 
 ## Missing Systems
 
+- PW Bot itself: client control, movement, navigation, memory, utility AI,
+  behaviour. Only its senses exist — see [docs/pw-bot/](pw-bot/README.md)
 - NPCs and villagers
 - Economy and trading
 - Roads between settlements (only local village roads and driveways)

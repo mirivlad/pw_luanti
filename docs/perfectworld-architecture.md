@@ -619,6 +619,60 @@ groups and rejection reasons.
 Road planning should consume regional plans and road anchors. It should not let
 individual mapgen chunks independently decide long-distance roads.
 
+## Bot Bridge
+
+`pw_bot_bridge` is a server mod that turns PerfectWorld's world state into a
+structured, versioned perception API. It exists for two consumers: a future
+PW Bot, which will connect as an ordinary player and needs senses, and the test
+kit, which needs an exact instrument for checking what the generator actually
+built.
+
+```
+PerfectWorld world state
+        |
+        v
+pw_bot_bridge
+        |
+        v
+player / oracle observation
+        |
+        v
+future pw_bot memory and logic        <- not implemented
+        |
+        v
+future real-client controller          <- not implemented
+        |
+        v
+real Luanti client actions
+```
+
+The bridge observes and explains; it never acts. It does not move a player, turn
+a head, open a door, attach anyone to a vehicle, or write a node. That boundary
+is what makes the bot worth having: a server-side mod that teleports a player
+tests the server's idea of the world, while a real client walking with real
+inputs tests the world as a player meets it — collision boxes, step height, the
+door that turns out to be one node too high. Every interesting defect this
+project has found lived in that gap.
+
+Two modes, both read-only:
+
+| Mode | Contract |
+|------|----------|
+| `player` | a deterministic server-side approximation of the programmatic perception available to a player, bounded by position, look direction, field of view, view distance and line of sight |
+| `oracle` | exact world data within configured limits, for the test kit, a coding agent and generator diagnostics |
+
+Oracle mode reads the same records the rest of this document describes —
+settlement plans, lots, structures with their rotations and footprints, road
+polylines, doorways — and adds physical verdicts on top of them: whether a road
+hangs over a hole, whether a plot is flooded, whether a doorway can be stood in.
+That makes it the natural place to build automated checks of the village grammar
+described above.
+
+The protocol is `pw_bot_bridge/v1`. Any incompatible change to it requires a new
+version, not a silent edit.
+
+Full documentation: [docs/pw-bot/](pw-bot/README.md).
+
 ## Future AliveWorld Integration
 
 AliveWorld should be unfrozen only after PerfectWorld can provide enough real

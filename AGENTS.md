@@ -32,6 +32,7 @@ PerfectWorld — самостоятельный модпак для Luanti/Minec
 | **pw_settlements** | `perfectworld/pw_settlements/` | pw_core | Settlement type definitions (skeleton) |
 | **pw_population** | `perfectworld/pw_population/` | pw_core | Population API (skeleton) |
 | **pw_debug** | `perfectworld/pw_debug/` | pw_core (opt: pw_planner, pw_structures) | Debug commands, screenshot system |
+| **pw_bot_bridge** | `perfectworld/pw_bot_bridge/` | pw_core (opt: pw_compat_mcl, pw_planner, pw_structures, pw_roads, pw_settlements, luanti_testkit) | Серверное восприятие мира для будущего PW Bot: режимы `player`/`oracle`, protocol `pw_bot_bridge/v1` |
 | **pw_tests** | `perfectworld/pw_tests/` | luanti_testkit, pw_* | TestKit-based tests |
 | **luanti_testkit** | `luanti_testkit/` | — | Universal server-side test framework |
 | **pw_remote_control** | `pw_remote_control/` | — | JSON remote control |
@@ -109,7 +110,7 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 
 ### Текущий baseline
 
-118 total | 118 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
 Baseline должен оставаться зелёным. Отчёт печатается через
 `python3 scripts/report-summary.py`.
@@ -203,7 +204,55 @@ ImageMagick `import`.
 экран пользователя, а не игру. При несовпадении скрипт отказывается работать,
 а не угадывает.
 
-## 7. Известные ограничения
+## 7. PW Bot и `pw_bot_bridge` — обязательные правила
+
+Подробности: [`docs/pw-bot/`](docs/pw-bot/README.md).
+
+PW Bot **ещё не существует**. Реализованы только его «органы чувств» —
+серверный мод `pw_bot_bridge`. Не заявляйте в документации или коммитах, что
+бот готов.
+
+Главный принцип:
+
+```text
+Bridge observes and explains.
+The real client acts.
+```
+
+Правила, обязательные для любого будущего изменения:
+
+- **Скриншот — не зрение бота.** Восприятие только программное, из состояния
+  сервера. Скриншот остаётся диагностическим артефактом для человека.
+- **Никакой зависимости от распознавания изображений.** Ни OpenCV, ни анализа
+  кадров, ни внешних процессов из мода.
+- **`player` mode не должен раскрывать oracle-данные.** Ни одна нода, сущность
+  или запись за пределами позиции, направления взгляда, FOV, дальности и линии
+  видимости не попадает в ответ.
+- **`oracle` mode никогда не выполняет действий.** Он меняет только объём
+  информации.
+- **Bridge никогда не двигает игрока**, не меняет yaw/pitch, не телепортирует,
+  не открывает двери, не взаимодействует с сущностями, не сажает игрока в
+  транспорт и не пишет ноды. `scripts/smoke-test.sh` проверяет это grep-ом.
+- **Бот не может повысить себе права.** В протоколе нет операции смены режима,
+  регистрации или привилегии — это структурная гарантия, а не проверка.
+- **Интеграционные тесты запускаются на настоящем сервере** с подключённым
+  `pwbot`. Чистые mock-тесты не заменяют их.
+- **Семантика регистрируется централизованно** через
+  `pw_bot_bridge.register_node_semantics` / `register_group_semantics` /
+  `register_entity_semantics`. Не размазывайте проверки имён нод по коду.
+- **Любое изменение внешнего протокола требует версионирования.**
+  `pw_bot_bridge/v1` — стабильный контракт; несовместимое изменение означает
+  `v2`, а не молчаливую правку.
+- **Никаких неограниченных сканирований области.** Каждый запрос имеет лимиты
+  площади, объёма, времени и rate limit.
+- **`request_insecure_environment()` запрещён** без доказанной необходимости и
+  отдельного решения пользователя. Сейчас он не нужен.
+- **Не коммитить runtime spool и отчёты**: `data/worlds/*/pw_bot_bridge/`,
+  `pw_bot_bridge_*.json`.
+
+External transport выключен по умолчанию. Oracle выключен для обычных игроков.
+
+## 8. Известные ограничения
 
 - Не коммитить: secrets, worlds, logs, reports, screenshots, runtime-data
 - FAIL/ERROR в тестах: см. `docs/status.md`

@@ -16,6 +16,8 @@ pw_core  ←  (root, no dependencies)
   ├── pw_settlements (depends: pw_core) [skeleton]
   ├── pw_population  (depends: pw_core) [skeleton]
   ├── pw_debug       (depends: pw_core, opt: pw_planner, pw_structures)
+  ├── pw_bot_bridge  (depends: pw_core, opt: pw_compat_mcl, pw_planner,
+  │                    pw_structures, pw_roads, pw_settlements, luanti_testkit)
   └── pw_tests       (depends: luanti_testkit, pw_core, pw_planner, pw_structures, pw_compat_mcl)
 
 luanti_testkit  ←  (no game dependencies)
@@ -38,6 +40,23 @@ by `materialize_chunk()`.
 
 **Road** — persisted polyline between connectors. Stored under `pw_roads` key
 in mod_storage.
+
+**Bot bridge** — `pw_bot_bridge` gives a future PW Bot programmatic senses, and
+gives the test kit an exact instrument for inspecting what the generator built.
+It observes and explains; it never moves a player, turns a head, opens a door or
+writes a node. Two modes: `player` (a deterministic server-side approximation of
+what a player could know, bounded by position, look direction, FOV, range and
+line of sight) and `oracle` (exact data within limits, for tests and
+diagnostics). See [docs/pw-bot/](pw-bot/README.md).
+
+When a subsystem introduces a new material or object that the bot should
+understand, register it centrally:
+
+```lua
+pw_bot_bridge.register_node_semantics("pw_ports:pier_deck", {"dock", "road_surface"})
+```
+
+Never add a node-name check inside the perception code instead.
 
 ### Determinism Rules
 

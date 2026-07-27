@@ -8,11 +8,22 @@ PerfectWorld tests run on a live Luanti server via [Luanti TestKit](../local_mod
 TestKit (luanti_testkit)  ←  universal framework
     ↑
 pw_tests                  ←  PerfectWorld-specific tests
+pw_bot_bridge/tests       ←  bot bridge suite (registers into the same TestKit)
     ↑
 pwbot (test client)       ←  connects to server, runs chat commands
     ↑
 pw_remote_control         ←  reads rc_cmd.json, executes /commands
 ```
+
+Two suites run in one pass:
+
+| Suite | Covers |
+|-------|--------|
+| `perfectworld` | core, planner, structures, variation, fingerprints, village, diversity |
+| `pw_bot_bridge` | protocol, registry, permissions, perception, semantics, events, transport, scenes A–E, live integration |
+
+The bridge suite is documented in detail in
+[docs/pw-bot/testing.md](pw-bot/testing.md).
 
 ## Setup
 
@@ -148,14 +159,12 @@ directory. The default `data/worlds/perfectworld/` is for development.
 
 ### Current Baseline
 
-61 total | 57 PASS | 2 FAIL | 2 ERROR | 0 SKIP
+204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
-Known issues (see `docs/status.md` for details):
+118 in the `perfectworld` suite, 86 in `pw_bot_bridge`.
 
-- `terrain_analysis_rejects_excessive_cut` — FAIL: assertion logic issue
-- `terrain_preparation_limits_modified_area` — FAIL: assertion too strict
-- `materialize_chunk_places_farmstead_once` — ERROR: village candidate not handled
-- `materialize_chunk_places_complete_farmstead_across_chunk_boundary` — ERROR: same cause
+The baseline must stay green. See `docs/status.md` for the current state and
+`python3 scripts/report-summary.py <report.json>` to print a summary.
 
 ## Stop Environment
 
