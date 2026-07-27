@@ -11,15 +11,8 @@ local STRUCTURES_KEY = "pw_materialized_structures"
 local SETTLEMENTS_KEY = "pw_settlement_plans"
 local ROADS_KEY = "pw_roads"
 
-local function det_prng(seed)
-	local state = seed
-	return function()
-		state = (state * 1103515245 + 12345) % 2147483648
-		return state / 2147483648
-	end
-end
-
 local deep_copy = perfectworld.core.deep_copy
+local choice = perfectworld.core.choice
 
 local function read_json(key)
 	local raw = storage:get_string(key)
@@ -36,387 +29,6 @@ local function write_json(key, data)
 	storage:set_string(key, minetest.write_json(data))
 end
 
--- === Village Layout Planner ===
--- Generates a deterministic village layout: main street, plots on both sides,
--- building assignment, road connectors.
-
-local function village_layout_seed(settlement_id, rx, rz)
-	return perfectworld.core.stable_hash(table.concat({
-		"village_layout", tostring(settlement_id), tostring(rx), tostring(rz),
-	}, "|"))
-end
-
-local function village_prng(seed)
-	local state = seed
-	return function()
-		state = (state * 1103515245 + 12345) % 2147483648
-		return state / 2147483648
-	end
-end
-
-local function pick_structure(prng, allowed)
-	if #allowed == 0 then return nil end
-	local idx = 1 + math.floor(prng() * #allowed)
-	return allowed[idx]
-end
-
-local function get_road_connector(def, rotation)
-	if not def or not def.connectors then return nil end
-	for _, c in ipairs(def.connectors) do
-		if c.type == "road" then
-			local rotated = perfectworld.structures.rotate_connector(c, rotation)
-			return rotated.offset_pos or {x = 0, y = 0, z = 0}
-		end
-	end
-	return nil
-end
-
--- Main village layout function
-function perfectworld.village_plan_layout(settlement)
-	local prng = village_prng(village_layout_seed(settlement.id, settlement.rx or 0, settlement.rz or 0))
-
-	local cx = settlement.cx or settlement.x or 0
-	local cz = settlement.cz or settlement.z or 0
-
-	local street_rot_idx = 1 + math.floor(prng() * 4)
-	local street_rot = ({0, 90, 180, 270})[street_rot_idx]
-
-	local street_len = 40 + math.floor(prng() * 41)
-	local street_width = 2
-
-	local dx = ({0, 1, 0, -1})[street_rot_idx]
-	local dz = ({1, 0, -1, 0})[street_rot_idx]
-	local half_len = math.floor(street_len / 2)
-
-	local street_start = {x = cx - dx * half_len, z = cz - dz * half_len}
-	local street_end_ = {x = cx + dx * half_len, z = cz + dz * half_len}
-
-	local num_plots = 4 + math.floor(prng() * 4)
-
-	local residential = {"pw_house_small_v1", "pw_house_small_v2"}
-	local farmyard = {"pw_barn_v1"}
-	local public_structs = {"pw_well_v1"}
-
-	local min_houses = 2
-	local min_public = 1
-	local placed_houses = 0
-	local placed_public = 0
-
-	local plots = {}
-	local used_footprints = {}
-
-	local plot_idx = 0
-	local side = 1
-	local offset_along = -half_len + 8
-
-	while plot_idx < num_plots and offset_along < half_len - 8 do
-		side = side * -1
-
-		local perp_dx = ({0, -1, 0, 1})[street_rot_idx] * side
-		local perp_dz = ({1, 0, -1, 0})[street_rot_idx] * side
-		local perp_dist = 8 + math.floor(prng() * 7)
-
-		local px = cx + dx * offset_along + perp_dx * perp_dist
-		local pz = cz + dz * offset_along + perp_dz * perp_dist
-
-		local btype, bname
-		if placed_houses < min_houses then
-			btype = "residential"
-			bname = pick_structure(prng, residential)
-			placed_houses = placed_houses + 1
-		elseif placed_public < min_public and plot_idx >= num_plots - 2 then
-			btype = "public"
-			bname = pick_structure(prng, public_structs)
-			placed_public = placed_public + 1
-		else
-			local roll = prng()
-			if roll < 0.5 then
-				btype = "residential"
-				bname = pick_structure(prng, residential)
-				placed_houses = placed_houses + 1
-			elseif roll < 0.75 then
-				btype = "farmyard"
-				bname = pick_structure(prng, farmyard)
-			else
-				btype = "public"
-				bname = pick_structure(prng, public_structs)
-				placed_public = placed_public + 1
-			end
-		end
-
-		if not bname then
-			btype = "residential"
-			bname = residential[1]
-			placed_houses = placed_houses + 1
-		end
-
-		local def = perfectworld.structures.get(bname)
-		if not def then
-			offset_along = offset_along + 12
-			goto village_continue
-		end
-
-		local plot_rot
-		if dx == 0 and dz == 1 then plot_rot = 0
-		elseif dx == 1 and dz == 0 then plot_rot = 90
-		elseif dx == 0 and dz == -1 then plot_rot = 180
-		elseif dx == -1 and dz == 0 then plot_rot = 270
-		else plot_rot = 0 end
-
-		local fp_minp, fp_maxp = perfectworld.structures.get_footprint(def, {x = px, y = 0, z = pz}, plot_rot)
-		local overlaps = false
-		for _, existing in ipairs(used_footprints) do
-			if fp_minp.x <= existing.max_x and fp_maxp.x >= existing.min_x and
-			   fp_minp.z <= existing.max_z and fp_maxp.z >= existing.min_z then
-				overlaps = true
-				break
-			end
-		end
-
-		if not overlaps then
-			plot_idx = plot_idx + 1
-			local plot_id = settlement.id .. "_plot_" .. plot_idx
-
-			local conn_offset = get_road_connector(def, plot_rot)
-			local conn_world = {x = px, y = 0, z = pz}
-			if conn_offset then
-				local rotated = perfectworld.structures.rotate_point(conn_offset, plot_rot)
-				conn_world = {x = px + rotated.x, y = 0, z = pz + rotated.z}
-			end
-
-			table.insert(plots, {
-				id = plot_id,
-				settlement_id = settlement.id,
-				type = btype,
-				center = {x = px, y = 0, z = pz},
-				rotation = plot_rot,
-				structure_name = bname,
-				status = "planned",
-				road_connector = conn_world,
-			})
-
-			table.insert(used_footprints, {
-				min_x = fp_minp.x, max_x = fp_maxp.x,
-				min_z = fp_minp.z, max_z = fp_maxp.z,
-			})
-		end
-
-		offset_along = offset_along + 10 + math.floor(prng() * 6)
-		::village_continue::
-	end
-
-	local ext_conn = {
-		x = street_start.x + math.floor(dx * 3),
-		y = 0,
-		z = street_start.z + math.floor(dz * 3),
-	}
-
-	return {
-		center = {x = cx, z = cz},
-		rotation = street_rot,
-		plots = plots,
-		street = {
-			start = street_start,
-			end_ = street_end_,
-			width = street_width,
-			direction = {x = dx, z = dz},
-		},
-		external_connector = ext_conn,
-	}
-end
-
--- Forward declarations for terrain helpers (defined below, used by village_materialize)
-local quick_slope_check, find_farm_location, flatten_farm_site, build_road
-
--- Materialize a village layout
-function perfectworld.village_materialize(layout)
-	local result = {
-		plots_placed = 0,
-		plots_skipped = 0,
-		street_segments = 0,
-		errors = {},
-	}
-
-	if not layout or not layout.plots then
-		return result
-	end
-
-	-- Materialize street
-	local street = layout.street
-	if street then
-		local sx, sz = street.start.x, street.start.z
-		local ex, ez = street.end_.x, street.end_.z
-		local w = street.width or 2
-
-		local steps = math.max(math.abs(ex - sx), math.abs(ez - sz))
-		local road_mat = perfectworld.compat.get_material("road")
-
-		for i = 0, steps do
-			local t = steps > 0 and (i / steps) or 0
-			local x = math.floor(sx + (ex - sx) * t)
-			local z = math.floor(sz + (ez - sz) * t)
-
-			for ox = -math.floor(w / 2), math.floor(w / 2) do
-				for oz = -math.floor(w / 2), math.floor(w / 2) do
-					local px = x + ox
-					local pz = z + oz
-					local surface_y = nil
-					for y = 256, -64, -1 do
-						local node = minetest.get_node({x = px, y = y, z = pz})
-						if node.name ~= "air" and node.name ~= "ignore" then
-							surface_y = y
-							break
-						end
-					end
-					if surface_y then
-						minetest.set_node({x = px, y = surface_y, z = pz}, {name = road_mat})
-					end
-				end
-			end
-		end
-		result.street_segments = steps
-	end
-
-	-- Materialize plots
-	for _, plot in ipairs(layout.plots) do
-		if plot.status ~= "planned" then
-			goto plot_continue
-		end
-
-		local def = perfectworld.structures.get(plot.structure_name)
-		if not def then
-			plot.status = "skipped"
-			result.plots_skipped = result.plots_skipped + 1
-			table.insert(result.errors, "structure not found: " .. tostring(plot.structure_name))
-			goto plot_continue
-		end
-
-		local offsets = {
-			{x = 0, z = 0},
-			{x = 4, z = 0},
-			{x = -4, z = 0},
-			{x = 0, z = 4},
-			{x = 0, z = -4},
-		}
-
-		local placed = false
-		for _, off in ipairs(offsets) do
-			local pos = {x = plot.center.x + off.x, y = 0, z = plot.center.z + off.z}
-			local ctx = {
-				structure_id = plot.id,
-				pos = pos,
-				rotation = plot.rotation,
-				region_id = layout.region_id,
-				settlement_id = plot.settlement_id,
-			}
-			if layout.skip_terrain_check then
-				ctx.skip_terrain_check = true
-			end
-			local ok, res = perfectworld.structures.place(plot.structure_name, ctx)
-			if ok then
-				plot.status = "materialized"
-				plot.position = res.position
-				result.plots_placed = result.plots_placed + 1
-				placed = true
-
-				-- Place a short path from plot door to street
-				if plot.road_connector and street then
-					local pcx, pcz = plot.road_connector.x, plot.road_connector.z
-					local sx, sz = street.start.x, street.start.z
-					local path_steps = 8
-					local road_mat = perfectworld.compat.get_material("road")
-					for pi = 0, path_steps do
-						local pt = path_steps > 0 and (pi / path_steps) or 0
-						local path_x = math.floor(pcx + (sx - pcx) * pt)
-						local path_z = math.floor(pcz + (sz - pcz) * pt)
-						local psurface = nil
-						for y = 256, -64, -1 do
-							local node = minetest.get_node({x = path_x, y = y, z = path_z})
-							if node.name ~= "air" and node.name ~= "ignore" then
-								psurface = y
-								break
-							end
-						end
-						if psurface then
-							minetest.set_node({x = path_x, y = psurface, z = path_z}, {name = road_mat})
-						end
-					end
-				end
-
-				break
-			end
-		end
-
-		if not placed and not layout.skip_terrain_check then
-			local building_half = 5
-			if def.terrain and def.terrain.building_footprint then
-				local bf = def.terrain.building_footprint
-				building_half = math.max(math.abs(bf.min_x), math.abs(bf.max_x), math.abs(bf.min_z), math.abs(bf.max_z)) + 2
-			end
-			local air = "air"
-			local ground_mat = perfectworld.compat.get_material("ground")
-			local sy = 0
-			for y = 256, -64, -1 do
-				local node = minetest.get_node({x = plot.center.x, y = y, z = plot.center.z})
-				if node.name ~= "air" and node.name ~= "ignore" then
-					sy = y
-					break
-				end
-			end
-			for dx = -building_half, building_half do
-				for dz = -building_half, building_half do
-					local px, pz = plot.center.x + dx, plot.center.z + dz
-					for y = sy + 10, sy, -1 do
-						local node = minetest.get_node({x = px, y = y, z = pz})
-						if node.name ~= "air" then
-							minetest.set_node({x = px, y = y, z = pz}, {name = air})
-						end
-					end
-					for y = sy, sy - 4, -1 do
-						local node = minetest.get_node({x = px, y = y, z = pz})
-						if node.name == "air" or node.name == "ignore" then
-							minetest.set_node({x = px, y = y, z = pz}, {name = ground_mat})
-						end
-					end
-					minetest.set_node({x = px, y = sy, z = pz}, {name = ground_mat})
-				end
-			end
-			minetest.log("action", "[pw_planner] flattened plot at (" .. plot.center.x .. "," .. plot.center.z .. ")")
-			local retry_ctx = {
-				structure_id = plot.id,
-				pos = {x = plot.center.x, y = 0, z = plot.center.z},
-				rotation = plot.rotation,
-				region_id = layout.region_id,
-				settlement_id = plot.settlement_id,
-				skip_terrain_check = true,
-			}
-			local ok, res = perfectworld.structures.place(plot.structure_name, retry_ctx)
-			if ok then
-				plot.status = "materialized"
-				plot.position = res.position
-				result.plots_placed = result.plots_placed + 1
-				placed = true
-			else
-				minetest.log("warning", "[pw_planner] flatten retry failed for " .. tostring(plot.id) .. ": " .. tostring(res and res.reason or res))
-			end
-		end
-
-		if not placed then
-			plot.status = "skipped"
-			result.plots_skipped = result.plots_skipped + 1
-		end
-
-		::plot_continue::
-	end
-
-	return result
-end
-
--- Shorthand aliases used by materialize_village
-perfectworld.village = perfectworld.village or {}
-perfectworld.village.plan_layout = perfectworld.village_plan_layout
-perfectworld.village.materialize = perfectworld.village_materialize
-
 -- === Region Planning ===
 
 function perfectworld.planner.plan_region(rx, rz)
@@ -426,8 +38,16 @@ function perfectworld.planner.plan_region(rx, rz)
 		return deep_copy(cached)
 	end
 
-	local base_seed = perfectworld.region_seed(rx, rz, perfectworld.PLANNER_VERSION)
-	local prng = det_prng(base_seed + perfectworld.PLANNER_VERSION * 1000003)
+	-- Region planning uses the same stable variation contract as village
+	-- planning: independent, labelled hash decisions instead of a PRNG stream.
+	local seed_key = table.concat({
+		"pwregion",
+		perfectworld.world_seed_string,
+		"v" .. tostring(perfectworld.PLANNER_VERSION),
+		"rs" .. tostring(REGION_SIZE),
+		perfectworld.core.coord_tag(rx),
+		perfectworld.core.coord_tag(rz),
+	}, "|")
 
 	local minp = {x = rx * REGION_SIZE, y = -64, z = rz * REGION_SIZE}
 	local maxp = {x = (rx + 1) * REGION_SIZE - 1, y = 256, z = (rz + 1) * REGION_SIZE - 1}
@@ -436,22 +56,19 @@ function perfectworld.planner.plan_region(rx, rz)
 	local reserved_areas = {}
 	local road_anchors = {}
 
-	local r = prng()
-	local num_candidates
-	if r < 0.2 then
-		num_candidates = 0
-	elseif r < 0.7 then
-		num_candidates = 1
-	else
-		num_candidates = 2
-	end
+	local num_candidates = choice.weighted(seed_key, "candidate_count", {
+		{value = 0, weight = 20},
+		{value = 1, weight = 50},
+		{value = 2, weight = 30},
+	})
 
 	for i = 0, num_candidates - 1 do
 		local x, z
 		local valid = false
-		for _attempt = 1, 50 do
-			x = minp.x + MARGIN + math.floor(prng() * (REGION_SIZE - 2 * MARGIN))
-			z = minp.z + MARGIN + math.floor(prng() * (REGION_SIZE - 2 * MARGIN))
+		for attempt = 1, 50 do
+			local label = "candidate:" .. i .. ":attempt:" .. attempt
+			x = minp.x + MARGIN + choice.int(seed_key, label .. ":x", 0, REGION_SIZE - 2 * MARGIN - 1)
+			z = minp.z + MARGIN + choice.int(seed_key, label .. ":z", 0, REGION_SIZE - 2 * MARGIN - 1)
 
 			valid = true
 			for _, existing in ipairs(settlement_candidates) do
@@ -472,28 +89,24 @@ function perfectworld.planner.plan_region(rx, rz)
 			break
 		end
 
-		local type_roll = prng()
-		local stype
-		if type_roll < 0.4 then
-			stype = "farm"
-		elseif type_roll < 0.8 then
-			stype = "hamlet"
-		else
-			stype = "village"
-		end
+		local stype = choice.weighted(seed_key, "candidate:" .. i .. ":type", {
+			{value = "farm", weight = 40},
+			{value = "hamlet", weight = 40},
+			{value = "village", weight = 20},
+		})
 
 		local priority
 		if stype == "farm" then
-			priority = 1 + math.floor(prng() * 2)
+			priority = choice.int(seed_key, "candidate:" .. i .. ":priority", 1, 2)
 		elseif stype == "hamlet" then
-			priority = 2 + math.floor(prng() * 3)
+			priority = choice.int(seed_key, "candidate:" .. i .. ":priority", 2, 4)
 		else
-			priority = 4 + math.floor(prng() * 2)
+			priority = choice.int(seed_key, "candidate:" .. i .. ":priority", 4, 5)
 		end
 
 		local candidate_id = perfectworld.core.settlement_id(rx, rz, i)
 		local structure_id = perfectworld.core.structure_id(candidate_id, 0)
-		local rotation = ({0, 90, 180, 270})[1 + math.floor(prng() * 4)]
+		local rotation = choice.pick(seed_key, "candidate:" .. i .. ":rotation", {0, 90, 180, 270})
 
 		local structure_name
 		if stype == "village" then
@@ -696,48 +309,153 @@ function perfectworld.planner.is_composite_candidate(candidate)
 end
 
 -- === Village Generation System ===
--- Deterministic multi-structure settlement generation with biome-aware profiles,
--- multiple archetypes, and a grammar-based planning pipeline.
+-- Deterministic multi-structure settlement generation with biome-aware
+-- profiles, three archetypes, and a grammar-based planning pipeline.
+--
+-- Variation contract: every planning decision is an independent hash of
+-- (seed_key, label) via perfectworld.core.choice. There is no sequential
+-- stream, so inserting a new decision never shifts the existing ones.
 
--- Stable PRNG: deterministic hash-based random for village generation.
--- Different seeds produce different sequences; same seed always produces same sequence.
-local function village_prng_new(seed)
-  local state = (seed % 2147483648)
-  return function()
-    state = (state * 1103515245 + 12345) % 2147483648
-    return state / 2147483648
+local choice = perfectworld.core.choice
+local hash32 = perfectworld.core.hash32
+
+local ARCHETYPES = {"linear", "compact", "hillside"}
+perfectworld.planner.ARCHETYPES = ARCHETYPES
+
+-- Roles a lot can carry. `dwelling` is the only role a finished settlement
+-- must contain (at least MIN_DWELLINGS of them).
+local ROLE_ORDER = {"dwelling", "farm", "utility", "central", "optional"}
+local MIN_DWELLINGS = 2
+perfectworld.planner.ROLE_ORDER = ROLE_ORDER
+perfectworld.planner.MIN_DWELLINGS = MIN_DWELLINGS
+
+local ROLE_VARIANTS = {
+  dwelling = {"pw_house_small_v1", "pw_house_small_v2"},
+  farm = {"pw_farmstead_v1"},
+  utility = {"pw_barn_v1", "pw_well_v1"},
+  central = {"pw_well_v1"},
+  optional = {"pw_house_small_v1", "pw_house_small_v2", "pw_barn_v1", "pw_well_v1"},
+}
+
+-- === Terrain sampling ===
+--
+-- Planning reads terrain through a sampler object rather than calling
+-- minetest.get_node directly. The default sampler reads the live map; tests
+-- inject synthetic terrain so layout rules can be exercised without depending
+-- on which mapblocks happen to be generated.
+--
+-- Scanning a whole column per probe is expensive, so every sampler memoises.
+
+local function make_world_terrain()
+  local cache = {}
+  local terrain = {kind = "world"}
+
+  function terrain.surface_y(x, z)
+    local key = x .. ":" .. z
+    local cached = cache[key]
+    if cached ~= nil then
+      if cached == false then return nil end
+      return cached
+    end
+    for y = 200, -32, -1 do
+      local node = minetest.get_node({x = x, y = y, z = z})
+      if node.name ~= "air" and node.name ~= "ignore" then
+        cache[key] = y
+        return y
+      end
+    end
+    cache[key] = false
+    return nil
   end
+
+  function terrain.is_liquid(x, z)
+    local y = terrain.surface_y(x, z)
+    if not y then return false end
+    local name = minetest.get_node({x = x, y = y, z = z}).name
+    return name:find("water") ~= nil or name:find("lava") ~= nil
+  end
+
+  function terrain.reset()
+    cache = {}
+  end
+
+  return terrain
 end
 
--- Generate a deterministic seed from candidate and environment data.
-local function village_seed(candidate, profile)
-  local parts = {
-    "village_v2",
-    tostring(perfectworld.region_seed(candidate.rx or 0, candidate.rz or 0)),
-    tostring(candidate.id),
-    tostring(profile.biome_family or "unknown"),
-    tostring(profile.roughness or 0),
-    tostring(perfectworld.PLANNER_VERSION),
-  }
-  return perfectworld.core.stable_hash(table.concat(parts, "|"))
+--- Deterministic synthetic terrain for tests and for probing layout rules.
+-- `spec` fields: base, slope_x, slope_z, relief, water_line, seed_key.
+function perfectworld.planner.make_synthetic_terrain(spec)
+  spec = spec or {}
+  local base = spec.base or 32
+  local slope_x = spec.slope_x or 0
+  local slope_z = spec.slope_z or 0
+  local relief = spec.relief or 0
+  local water_line = spec.water_line
+  local seed_key = spec.seed_key or "synthetic"
+  local cache = {}
+  local terrain = {kind = "synthetic", spec = spec}
+
+  function terrain.surface_y(x, z)
+    local key = x .. ":" .. z
+    local cached = cache[key]
+    if cached == nil then
+      local height = base + x * slope_x + z * slope_z
+      if relief > 0 then
+        height = height + math.floor(
+          perfectworld.core.choice.range(seed_key, "relief:" .. x .. ":" .. z, -relief, relief))
+      end
+      cached = math.floor(height)
+      cache[key] = cached
+    end
+    return cached
+  end
+
+  function terrain.is_liquid(x, z)
+    if not water_line then return false end
+    return terrain.surface_y(x, z) <= water_line
+  end
+
+  function terrain.reset() end
+
+  return terrain
 end
+
+local world_terrain = make_world_terrain()
+perfectworld.planner._world_terrain = world_terrain
+
+-- === Seed key ===
+-- Depends only on world seed, region, candidate identity and planner version,
+-- exactly as documented in docs/development.md. Terrain influences the plan
+-- through decision *weights*, never through the seed.
+
+-- `world_seed_override` exists so the diversity harness can probe the
+-- "different world seed" axis without regenerating the map. Normal generation
+-- never sets it.
+local function village_seed_key(candidate)
+  return table.concat({
+    "pwv2",
+    candidate.world_seed_override or perfectworld.world_seed_string,
+    "v" .. tostring(perfectworld.PLANNER_VERSION),
+    "rs" .. tostring(perfectworld.REGION_SIZE),
+    perfectworld.core.coord_tag(candidate.rx or 0),
+    perfectworld.core.coord_tag(candidate.rz or 0),
+    tostring(candidate.id),
+  }, "|")
+end
+
+perfectworld.planner.village_seed_key = village_seed_key
 
 -- === Archetype Selection ===
--- Three archetypes with weighted selection based on terrain profile.
 
-local archetypes = {"linear", "compact", "hillside"}
-
-local function select_archetype(prng, profile)
+local function archetype_weights(profile)
   local roughness = profile.roughness or 0
   local water = profile.water_proximity or 999
   local family = profile.biome_family or "temperate"
 
-  -- Weighted selection: [linear_weight, compact_weight, hillside_weight]
   local w_linear = 35
   local w_compact = 40
   local w_hillside = 25
 
-  -- Hillside preference: rough terrain
   if roughness > 3 then
     w_hillside = w_hillside + 30
     w_compact = w_compact - 10
@@ -747,648 +465,1229 @@ local function select_archetype(prng, profile)
     w_linear = w_linear - 10
     w_compact = w_compact - 15
   end
-
-  -- Linear preference: near water (along shore/river)
   if water < 20 then
     w_linear = w_linear + 25
     w_compact = w_compact - 10
   end
-
-  -- Compact preference: dry/rocky open areas
   if family == "dry" or family == "rocky" then
     w_compact = w_compact + 15
   end
 
-  local total = w_linear + w_compact + w_hillside
-  local roll = prng() * total
-  if roll < w_linear then return "linear"
-  elseif roll < w_linear + w_compact then return "compact"
-  else return "hillside" end
+  return {
+    {value = "linear", weight = math.max(w_linear, 1)},
+    {value = "compact", weight = math.max(w_compact, 1)},
+    {value = "hillside", weight = math.max(w_hillside, 1)},
+  }
 end
 
+local function select_archetype(seed_key, profile)
+  return choice.weighted(seed_key, "archetype", archetype_weights(profile))
+end
+
+perfectworld.planner._archetype_weights = archetype_weights
+
 -- === Village Profile ===
--- Created once per candidate, deterministically from seed and environment.
 
 function perfectworld.planner.create_village_profile(candidate, environment)
+  local seed_key = village_seed_key(candidate)
   local profile = {
     village_id = candidate.id,
     generator_version = perfectworld.PLANNER_VERSION,
     environment = environment,
-    seed_key = village_seed(candidate, environment),
+    seed_key = seed_key,
+    seed_hash = hash32(seed_key),
   }
-  local prng = village_prng_new(profile.seed_key)
-  profile.archetype = select_archetype(prng, environment)
 
-  -- Size class: small (3-5), medium (5-8), large (8-12)
-  local size_roll = prng()
-  if size_roll < 0.3 then
-    profile.size_class = "small"
-    profile.target_lots = 3 + math.floor(prng() * 3)  -- 3-5
-    profile.density = 0.3 + prng() * 0.15
-  elseif size_roll < 0.8 then
-    profile.size_class = "medium"
-    profile.target_lots = 5 + math.floor(prng() * 4)  -- 5-8
-    profile.density = 0.35 + prng() * 0.2
+  profile.archetype = select_archetype(seed_key, environment)
+
+  profile.size_class = choice.weighted(seed_key, "size_class", {
+    {value = "small", weight = 30},
+    {value = "medium", weight = 50},
+    {value = "large", weight = 20},
+  })
+  if profile.size_class == "small" then
+    profile.target_lots = choice.int(seed_key, "target_lots:small", 3, 5)
+    profile.density = choice.range(seed_key, "density:small", 0.30, 0.45)
+  elseif profile.size_class == "medium" then
+    profile.target_lots = choice.int(seed_key, "target_lots:medium", 5, 8)
+    profile.density = choice.range(seed_key, "density:medium", 0.35, 0.55)
   else
-    profile.size_class = "large"
-    profile.target_lots = 8 + math.floor(prng() * 5)  -- 8-12
-    profile.density = 0.4 + prng() * 0.25
+    profile.target_lots = choice.int(seed_key, "target_lots:large", 8, 12)
+    profile.density = choice.range(seed_key, "density:large", 0.40, 0.65)
   end
 
-  -- Road character
+  local branches
+  if profile.archetype == "compact" then
+    branches = choice.int(seed_key, "road:branches:compact", 1, 2)
+  else
+    branches = choice.bool(seed_key, "road:branches:linear", 0.4) and 1 or 0
+  end
   profile.road_character = {
-    main_length = 30 + math.floor(prng() * 51),  -- 30-80
-    branches = profile.archetype == "compact" and (1 + math.floor(prng() * 2)) or (prng() < 0.4 and 1 or 0),
-    curve = prng() * 0.3,  -- 0-0.3 curvature factor
-    crossing = prng() < 0.3,
+    main_length = choice.int(seed_key, "road:main_length", 30, 80),
+    branches = branches,
+    curve = choice.range(seed_key, "road:curve", 0, 0.30),
+    crossing = choice.bool(seed_key, "road:crossing", 0.35),
+    direction_index = choice.index(seed_key, "road:main:direction", 8),
   }
 
-  -- Lot spacing
   profile.lot_spacing = {
-    min_gap = 6 + math.floor(prng() * 5),
-    max_gap = 10 + math.floor(prng() * 7),
-    depth = 6 + math.floor(prng() * 5),
-    set_back = 3 + math.floor(prng() * 3),
+    min_gap = choice.int(seed_key, "spacing:min_gap", 6, 10),
+    max_gap = choice.int(seed_key, "spacing:max_gap", 10, 16),
+    depth = choice.int(seed_key, "spacing:depth", 6, 10),
+    set_back = choice.int(seed_key, "spacing:set_back", 3, 5),
   }
+  if profile.lot_spacing.max_gap <= profile.lot_spacing.min_gap then
+    profile.lot_spacing.max_gap = profile.lot_spacing.min_gap + 4
+  end
 
-  -- Structure roles allocation
+  -- Role composition. Mandatory roles come first so that, when terrain trims
+  -- the lot list, the surviving lots are the ones the contract requires.
+  local roles = {}
   local remaining = profile.target_lots
-  profile.structure_roles = {}
-  -- Minimum 2 dwellings
-  local dwellings = 2 + (profile.size_class == "large" and math.floor(prng() * 2) or 0)
-  for _ = 1, dwellings do table.insert(profile.structure_roles, "dwelling") end
+  local dwellings = MIN_DWELLINGS
+  if profile.size_class == "large" then
+    dwellings = dwellings + choice.int(seed_key, "roles:extra_dwellings", 0, 2)
+  elseif profile.size_class == "medium" then
+    dwellings = dwellings + choice.int(seed_key, "roles:extra_dwellings", 0, 1)
+  end
+  dwellings = math.min(dwellings, remaining)
+  for _ = 1, dwellings do table.insert(roles, "dwelling") end
   remaining = remaining - dwellings
-  -- 1 farm if enough lots
-  if remaining >= 2 and prng() < 0.8 then
-    table.insert(profile.structure_roles, "farm")
+
+  if remaining >= 2 and choice.bool(seed_key, "roles:farm", 0.8) then
+    table.insert(roles, "farm")
     remaining = remaining - 1
   end
-  -- 1 utility if enough lots
   if remaining >= 2 then
-    table.insert(profile.structure_roles, "utility")
+    table.insert(roles, "utility")
     remaining = remaining - 1
   end
-  -- 1 central/public if medium or larger
   if profile.size_class ~= "small" and remaining >= 1 then
-    table.insert(profile.structure_roles, "central")
+    table.insert(roles, "central")
     remaining = remaining - 1
   end
-  -- Fill remaining with optional/decorative
   while remaining > 0 do
-    table.insert(profile.structure_roles, "optional")
+    table.insert(roles, "optional")
     remaining = remaining - 1
   end
-  -- Shuffle roles deterministically
-  for i = #profile.structure_roles, 2, -1 do
-    local j = 1 + math.floor(prng() * i)
-    profile.structure_roles[i], profile.structure_roles[j] = profile.structure_roles[j], profile.structure_roles[i]
+  profile.structure_roles = roles
+
+  profile.required_roles = {"dwelling"}
+  profile.optional_roles = {}
+  do
+    local seen = {dwelling = true}
+    for _, role in ipairs(roles) do
+      if not seen[role] then
+        seen[role] = true
+        table.insert(profile.optional_roles, role)
+      end
+    end
   end
 
-  -- Material palette
-  local palette = perfectworld.compat.get_family_palette(environment.biome_family)
+  local family = environment.biome_family or "temperate"
+  local palette = perfectworld.compat.get_family_palette(family)
   if not palette then
-    palette = perfectworld.compat.get_family_palette("temperate")
+    family = "temperate"
+    palette = perfectworld.compat.get_family_palette(family)
   end
   profile.material_palette = palette
+  profile.palette_id = family
 
-  -- Variation parameters for structure selection
   profile.variation_parameters = {
-    dwelling_variant = 1 + math.floor(prng() * 2),  -- 1 or 2
-    orientation_noise = prng() * 0.3,
-    spacing_jitter = prng() * 0.4,
+    orientation_noise = choice.range(seed_key, "variation:orientation_noise", 0, 0.3),
+    spacing_jitter = choice.range(seed_key, "variation:spacing_jitter", 0, 0.4),
   }
 
   return profile
 end
 
 -- === Village Grammar: Road Network ===
--- Builds the road skeleton based on archetype.
+-- Main streets are snapped to one of eight compass directions: free-angle
+-- polylines turn into visually noisy staircases on a block grid.
 
-local function build_road_network(prng, center, profile)
-  local archetype = profile.archetype
+local function direction_from_index(index)
+  local angle = (index - 1) * math.pi / 4
+  return math.cos(angle), math.sin(angle)
+end
+
+local function build_road_network(seed_key, center, profile, terrain)
   local roads = {}
-  local road_id_counter = 0
-
-  local function next_road_id(suffix)
-    road_id_counter = road_id_counter + 1
-    return profile.village_id .. "_road_" .. suffix .. "_" .. road_id_counter
-  end
-
   local cx, cz = center.x, center.z
   local curve = profile.road_character.curve or 0
   local main_len = profile.road_character.main_length or 40
   local branches = profile.road_character.branches or 0
+  local half = math.floor(main_len / 2)
+  local mdx, mdz = direction_from_index(profile.road_character.direction_index or 1)
 
-  if archetype == "linear" then
-    -- One main street, possibly curved
-    local angle = prng() * 2 * math.pi
-    local dx = math.cos(angle)
-    local dz = math.sin(angle)
-    local half = math.floor(main_len / 2)
+  local function road_id(kind, index)
+    return profile.village_id .. "_road_" .. kind .. "_" .. index
+  end
+
+  local function main_points(label, dx, dz, from, to, curviness)
     local points = {}
-    for i = -half, half, 2 do
+    for i = from, to, 2 do
       local px = cx + dx * i
       local pz = cz + dz * i
-      if curve > 0 and i ~= 0 then
-        local perp_x = -dz * curve * i * prng()
-        local perp_z = dx * curve * i * prng()
-        px = px + perp_x
-        pz = pz + perp_z
+      if curviness > 0 and i ~= 0 then
+        local bend = choice.range(seed_key, label .. ":bend:" .. i, -1, 1) * curviness * math.abs(i)
+        px = px - dz * bend
+        pz = pz + dx * bend
       end
-      table.insert(points, {x = math.floor(px), z = math.floor(pz)})
+      table.insert(points, {x = math.floor(px + 0.5), z = math.floor(pz + 0.5)})
     end
+    return points
+  end
+
+  if profile.archetype == "linear" then
     table.insert(roads, {
-      id = next_road_id("main"),
-      points = points,
-      width = 2,
+      id = road_id("main", 1),
+      points = main_points("road:main", mdx, mdz, -half, half, curve),
+      width = 3,
       kind = "main_street",
     })
 
-  elseif archetype == "compact" then
-    -- Crossroads or fork
-    local main_angle = prng() * 2 * math.pi
-    local mdx = math.cos(main_angle)
-    local mdz = math.sin(main_angle)
-    local half = math.floor(main_len / 2)
-    local main_points = {}
-    for i = -half, half, 2 do
-      table.insert(main_points, {x = math.floor(cx + mdx * i), z = math.floor(cz + mdz * i)})
-    end
+  elseif profile.archetype == "compact" then
     table.insert(roads, {
-      id = next_road_id("main"),
-      points = main_points,
-      width = 2,
+      id = road_id("main", 1),
+      points = main_points("road:main", mdx, mdz, -half, half, curve * 0.5),
+      width = 3,
       kind = "main_street",
     })
-    -- Crossing street
     if profile.road_character.crossing then
-      local cross_half = math.floor(main_len * 0.5)
-      local perp_angle = main_angle + math.pi / 2
-      local pdx = math.cos(perp_angle)
-      local pdz = math.sin(perp_angle)
-      local cross_points = {}
-      for i = -cross_half, cross_half, 2 do
-        table.insert(cross_points, {x = math.floor(cx + pdx * i), z = math.floor(cz + pdz * i)})
-      end
+      local cross_half = math.floor(main_len * 0.4)
+      local pdx, pdz = -mdz, mdx
       table.insert(roads, {
-        id = next_road_id("cross"),
-        points = cross_points,
+        id = road_id("cross", 1),
+        points = main_points("road:cross", pdx, pdz, -cross_half, cross_half, 0),
         width = 2,
         kind = "cross_street",
       })
     end
-    -- Branch streets
     for b = 1, branches do
-      local b_angle = main_angle + (prng() - 0.5) * math.pi * 0.8
-      local bdx = math.cos(b_angle)
-      local bdz = math.sin(b_angle)
-      local b_len = 15 + math.floor(prng() * 20)
+      local label = "road:branch:" .. b
+      local turn = choice.pick(seed_key, label .. ":turn", {-1, 1})
+      local bdx, bdz = -mdz * turn, mdx * turn
+      local b_len = choice.int(seed_key, label .. ":length", 14, 34)
+      local anchor = choice.int(seed_key, label .. ":anchor", -half + 4, half - 4)
+      local bx = cx + mdx * anchor
+      local bz = cz + mdz * anchor
       local b_points = {}
-      local bx = cx + mdx * half * (prng() * 0.6 - 0.3)
-      local bz = cz + mdz * half * (prng() * 0.6 - 0.3)
       for i = 0, b_len, 2 do
-        table.insert(b_points, {x = math.floor(bx + bdx * i), z = math.floor(bz + bdz * i)})
+        table.insert(b_points, {x = math.floor(bx + bdx * i + 0.5), z = math.floor(bz + bdz * i + 0.5)})
       end
       table.insert(roads, {
-        id = next_road_id("branch"),
+        id = road_id("branch", b),
         points = b_points,
-        width = 1,
+        width = 2,
         kind = "branch",
       })
     end
 
-  elseif archetype == "hillside" then
-    -- Contour-following road: try to stay at similar elevation
-    local angle = prng() * 2 * math.pi
-    local dx = math.cos(angle)
-    local dz = math.sin(angle)
-    local half = math.floor(main_len / 2)
+  else -- hillside
+    -- Follow the contour: shift the street sideways whenever the next sample
+    -- would climb more than three blocks.
     local points = {}
     local prev_y = nil
     for i = -half, half, 2 do
-      local px = cx + dx * i
-      local pz = cz + dz * i
-      -- Adjust to follow contour
+      local px = cx + mdx * i
+      local pz = cz + mdz * i
       if prev_y then
-        for sy = 256, -64, -1 do
-          local node = minetest.get_node({x = math.floor(px), y = sy, z = math.floor(pz)})
-          if node.name ~= "air" and node.name ~= "ignore" then
-            if math.abs(sy - prev_y) > 3 then
-              -- Steep change: shift laterally to find gentler slope
-              local shifted = false
-              for lateral = -4, 4, 2 do
-                local lx = px - dz * lateral
-                local lz = pz + dx * lateral
-                for ly = 256, -64, -1 do
-                  local ln = minetest.get_node({x = math.floor(lx), y = ly, z = math.floor(lz)})
-                  if ln.name ~= "air" and ln.name ~= "ignore" then
-                    if math.abs(ly - prev_y) <= 3 then
-                      px, pz = lx, lz
-                      shifted = true
-                    end
-                    break
-                  end
-                end
-                if shifted then break end
-              end
+        local best_px, best_pz, best_delta = px, pz, math.huge
+        for lateral = -6, 6, 2 do
+          local lx = math.floor(px - mdz * lateral + 0.5)
+          local lz = math.floor(pz + mdx * lateral + 0.5)
+          local ly = terrain.surface_y(lx, lz)
+          if ly then
+            local delta = math.abs(ly - prev_y)
+            if delta < best_delta then
+              best_delta = delta
+              best_px, best_pz = lx, lz
             end
-            prev_y = sy
-            break
+            if delta <= 1 then break end
           end
         end
-      else
-        for sy = 256, -64, -1 do
-          local node = minetest.get_node({x = math.floor(px), y = sy, z = math.floor(pz)})
-          if node.name ~= "air" and node.name ~= "ignore" then
-            prev_y = sy
-            break
-          end
-        end
+        px, pz = best_px, best_pz
       end
-      table.insert(points, {x = math.floor(px), z = math.floor(pz)})
+      local ix, iz = math.floor(px + 0.5), math.floor(pz + 0.5)
+      prev_y = terrain.surface_y(ix, iz) or prev_y
+      table.insert(points, {x = ix, z = iz})
     end
     table.insert(roads, {
-      id = next_road_id("main"),
+      id = road_id("main", 1),
       points = points,
-      width = 2,
-      kind = "main_street",
+      width = 3,
+      kind = "contour_street",
     })
+    if branches > 0 then
+      -- A short spur climbing away from the contour street.
+      local anchor_index = choice.index(seed_key, "road:spur:anchor", math.max(#points, 1))
+      local anchor = points[anchor_index] or {x = cx, z = cz}
+      local turn = choice.pick(seed_key, "road:spur:turn", {-1, 1})
+      local sdx, sdz = -mdz * turn, mdx * turn
+      local spur_len = choice.int(seed_key, "road:spur:length", 10, 22)
+      local spur_points = {}
+      for i = 0, spur_len, 2 do
+        table.insert(spur_points, {
+          x = math.floor(anchor.x + sdx * i + 0.5),
+          z = math.floor(anchor.z + sdz * i + 0.5),
+        })
+      end
+      table.insert(roads, {
+        id = road_id("spur", 1),
+        points = spur_points,
+        width = 2,
+        kind = "spur",
+      })
+    end
   end
 
-  return roads
+  -- Drop degenerate roads (fewer than two distinct points).
+  local cleaned = {}
+  for _, road in ipairs(roads) do
+    local distinct = {}
+    local count = 0
+    for _, pt in ipairs(road.points) do
+      local key = pt.x .. ":" .. pt.z
+      if not distinct[key] then
+        distinct[key] = true
+        count = count + 1
+      end
+    end
+    if count >= 2 then table.insert(cleaned, road) end
+  end
+  return cleaned
 end
 
--- === Village Grammar: Lot Allocation ===
--- Places lots along roads based on spacing and terrain suitability.
-
-local function allocate_lots(prng, roads, profile, environment)
-  local lots = {}
-  local spacing = profile.lot_spacing
-  local used_positions = {}
-
-  local function is_too_close(px, pz, min_dist)
-    for _, up in ipairs(used_positions) do
-      local dx = up.x - px
-      local dz = up.z - pz
-      if dx * dx + dz * dz < min_dist * min_dist then
-        return true
-      end
-    end
-    return false
-  end
-
-  local function terrain_ok(px, pz)
-    local sy = nil
-    for y = 256, -64, -1 do
-      local node = minetest.get_node({x = px, y = y, z = pz})
-      if node.name ~= "air" and node.name ~= "ignore" then
-        sy = y
-        break
-      end
-    end
-    if not sy then return false end
-    -- Check for water
-    for y = sy, sy + 3 do
-      local node = minetest.get_node({x = px, y = y, z = pz})
-      if node.name:find("water") then return false end
-    end
-    -- Check local slope
-    local min_y, max_y = sy, sy
-    for dx = -2, 2, 2 do
-      for dz = -2, 2, 2 do
-        local ly = nil
-        for y = 256, -64, -1 do
-          local node = minetest.get_node({x = px + dx, y = y, z = pz + dz})
-          if node.name ~= "air" and node.name ~= "ignore" then
-            ly = y
-            break
+--- Set of world cells covered by the road surface, keyed "x:z".
+local function road_cell_set(roads)
+  local cells = {}
+  for _, road in ipairs(roads) do
+    local half_w = math.floor((road.width or 2) / 2)
+    for i = 1, #road.points - 1 do
+      local p1, p2 = road.points[i], road.points[i + 1]
+      local steps = math.max(math.abs(p2.x - p1.x), math.abs(p2.z - p1.z), 1)
+      for s = 0, steps do
+        local t = s / steps
+        local rx = math.floor(p1.x + (p2.x - p1.x) * t + 0.5)
+        local rz = math.floor(p1.z + (p2.z - p1.z) * t + 0.5)
+        for ox = -half_w, half_w do
+          for oz = -half_w, half_w do
+            cells[(rx + ox) .. ":" .. (rz + oz)] = true
           end
         end
-        if ly then
-          min_y = math.min(min_y, ly)
-          max_y = math.max(max_y, ly)
-        end
       end
     end
-    return (max_y - min_y) <= 4  -- max 4-block slope for lots
   end
-
-  for _, road in ipairs(roads) do
-    if #road.points < 2 then goto road_continue end
-    local road_vec = {
-      x = road.points[#road.points].x - road.points[1].x,
-      z = road.points[#road.points].z - road.points[1].z,
-    }
-    local road_len = math.sqrt(road_vec.x * road_vec.x + road_vec.z * road_vec.z)
-    if road_len < 4 then goto road_continue end
-    local rdx = road_vec.x / road_len
-    local rdz = road_vec.z / road_len
-    -- Perpendicular directions (both sides)
-    local perp_x = -rdz
-    local perp_z = rdx
-
-    local accumulated = spacing.min_gap + prng() * spacing.min_gap
-    while accumulated < road_len - spacing.min_gap do
-      local t = accumulated / road_len
-      local sx = math.floor(road.points[1].x + road_vec.x * t)
-      local sz = math.floor(road.points[1].z + road_vec.z * t)
-      -- Try both sides
-      for side = 1, -1, -2 do
-        if #lots >= profile.target_lots then break end
-        local offset = spacing.set_back + math.floor(spacing.depth / 2)
-        local lx = math.floor(sx + perp_x * side * offset)
-        local lz = math.floor(sz + perp_z * side * offset)
-        local min_dist = math.max(spacing.min_gap, offset * 0.8)
-        if not is_too_close(lx, lz, min_dist) and terrain_ok(lx, lz) then
-          table.insert(lots, {
-            center = {x = lx, z = lz},
-            road_point = {x = sx, z = sz},
-            side = side,
-            road_id = road.id,
-          })
-          table.insert(used_positions, {x = lx, z = lz})
-        end
-      end
-      accumulated = accumulated + spacing.min_gap + prng() * (spacing.max_gap - spacing.min_gap)
-    end
-    ::road_continue::
-  end
-
-  return lots
+  return cells
 end
 
--- === Village Grammar: Structure Selection ===
+perfectworld.planner._road_cell_set = road_cell_set
 
-local function select_structure_variant(prng, role, profile)
-  local var = profile.variation_parameters.dwelling_variant or 1
+-- === Village Grammar: Lot Allocation ===
 
-  if role == "dwelling" then
-    if var == 1 then return "pw_house_small_v1"
-    else return "pw_house_small_v2" end
-  elseif role == "farm" then
-    return "pw_farmstead_v1"
-  elseif role == "utility" then
-    if prng() < 0.5 then return "pw_barn_v1"
-    else return "pw_well_v1" end
-  elseif role == "central" then
-    return "pw_well_v1"
-  elseif role == "optional" then
-    local r = prng()
-    if r < 0.4 then return "pw_house_small_v1"
-    elseif r < 0.7 then return "pw_barn_v1"
-    else return "pw_well_v1" end
+--- Rotation whose road connector points most directly at `target`.
+local function orient_to_road(def, origin, target, seed_key, label)
+  local rotations = def.rotations or {0}
+  if #rotations == 1 then return rotations[1] end
+
+  local connector
+  for _, c in ipairs(def.connectors or {}) do
+    if c.type == "road" and c.offset_pos then
+      connector = c.offset_pos
+      break
+    end
   end
-  return "pw_house_small_v1"
+  if not connector then
+    return choice.pick(seed_key, label, rotations)
+  end
+
+  local dx = target.x - origin.x
+  local dz = target.z - origin.z
+  local length = math.sqrt(dx * dx + dz * dz)
+  if length < 0.5 then
+    return choice.pick(seed_key, label, rotations)
+  end
+  dx, dz = dx / length, dz / length
+
+  local best, best_score = nil, -math.huge
+  for _, rotation in ipairs(rotations) do
+    local rotated = perfectworld.structures.rotate_point(connector, rotation)
+    local rlen = math.sqrt(rotated.x * rotated.x + rotated.z * rotated.z)
+    if rlen > 0 then
+      local score = (rotated.x / rlen) * dx + (rotated.z / rlen) * dz
+      if score > best_score + 1e-9 then
+        best_score = score
+        best = rotation
+      end
+    end
+  end
+  return best or rotations[1]
+end
+
+perfectworld.planner._orient_to_road = orient_to_road
+
+--- Candidate lot anchors along each road, on both sides.
+local function lot_anchors(seed_key, roads, profile)
+  local anchors = {}
+  local spacing = profile.lot_spacing
+  for road_index, road in ipairs(roads) do
+    local first, last = road.points[1], road.points[#road.points]
+    local vx, vz = last.x - first.x, last.z - first.z
+    local road_len = math.sqrt(vx * vx + vz * vz)
+    if road_len >= 8 then
+      local rdx, rdz = vx / road_len, vz / road_len
+      local perp_x, perp_z = -rdz, rdx
+      local label = "lots:road:" .. road_index
+      local offset = spacing.set_back + math.floor(spacing.depth / 2)
+      local along = spacing.min_gap
+        + choice.range(seed_key, label .. ":start", 0, spacing.min_gap)
+      local step_index = 0
+      while along < road_len - spacing.min_gap do
+        step_index = step_index + 1
+        local sx = first.x + vx * (along / road_len)
+        local sz = first.z + vz * (along / road_len)
+        local first_side = choice.pick(seed_key, label .. ":side:" .. step_index, {1, -1})
+        for _, side in ipairs({first_side, -first_side}) do
+          local jitter = choice.int(seed_key, label .. ":jitter:" .. step_index .. ":" .. side, -1, 1)
+          table.insert(anchors, {
+            center = {
+              x = math.floor(sx + perp_x * side * (offset + jitter) + 0.5),
+              z = math.floor(sz + perp_z * side * (offset + jitter) + 0.5),
+            },
+            road_point = {x = math.floor(sx + 0.5), z = math.floor(sz + 0.5)},
+            side = side,
+            road_id = road.id,
+            road_index = road_index,
+          })
+        end
+        along = along + spacing.min_gap
+          + choice.range(seed_key, label .. ":gap:" .. step_index, 0, spacing.max_gap - spacing.min_gap)
+      end
+    end
+  end
+  return anchors
+end
+
+--- Is the ground at this anchor usable for a lot?
+local function terrain_verdict(anchor, max_slope, terrain)
+  local cx, cz = anchor.center.x, anchor.center.z
+  local base = terrain.surface_y(cx, cz)
+  if not base then return false, "no_surface" end
+  if terrain.is_liquid(cx, cz) then return false, "water" end
+
+  local min_y, max_y = base, base
+  for dx = -3, 3, 3 do
+    for dz = -3, 3, 3 do
+      if terrain.is_liquid(cx + dx, cz + dz) then return false, "water" end
+      local y = terrain.surface_y(cx + dx, cz + dz)
+      if y then
+        min_y = math.min(min_y, y)
+        max_y = math.max(max_y, y)
+      end
+    end
+  end
+  local slope = max_y - min_y
+  if slope > max_slope then return false, "slope" end
+  return true, nil, base, slope
 end
 
 -- === Village Grammar: Full Plan Generation ===
 
-local function generate_village_plan(candidate, profile, environment)
-  local prng = village_prng_new(profile.seed_key)
-  local center = {x = candidate.x, z = candidate.z}
+local function rect_overlaps(a_min, a_max, b_min, b_max)
+  return a_min.x <= b_max.x and a_max.x >= b_min.x
+    and a_min.z <= b_max.z and a_max.z >= b_min.z
+end
 
-  -- Step 1: Build road network
-  local roads = build_road_network(prng, center, profile)
+--- Canonical, order-independent description of the road graph.
+--
+-- Contract:
+--   * coordinates are relative to the settlement centre, so absolute world
+--     position never creates false uniqueness;
+--   * a segment is undirected — writing it from either end yields the same
+--     token (the lexicographically smaller endpoint is emitted first);
+--   * segments are sorted, so Lua table order and the order in which
+--     independent roads were generated do not matter;
+--   * per-node degrees are appended, so two graphs over the same point set but
+--     with different connections differ;
+--   * every intermediate point is kept, so different bends differ.
+--
+-- Road ids, kinds and names are deliberately excluded: this is the geometry
+-- and topology of the network, nothing else.
+local function road_graph_signature(roads, center)
+  local segments = {}
+  local degree = {}
 
-  -- Step 2: Allocate lots
-  local lots = allocate_lots(prng, roads, profile, environment)
+  local function node_key(pt)
+    return (pt.x - center.x) .. "," .. (pt.z - center.z)
+  end
 
-  -- Step 3: Assign roles to lots
-  local role_idx = 0
-  for _, lot in ipairs(lots) do
-    role_idx = role_idx + 1
-    local role = profile.structure_roles[role_idx] or "dwelling"
-    local structure_name = select_structure_variant(prng, role, profile)
-    local def = perfectworld.structures.get(structure_name)
-    local rot = ({0, 90, 180, 270})[1 + math.floor(prng() * 4)]
-    lot.role = role
-    lot.structure_name = structure_name
-    lot.rotation = rot
-    if def then
-      lot.footprint_min, lot.footprint_max = perfectworld.structures.get_footprint(
-        def, {x = lot.center.x, y = 0, z = lot.center.z}, rot)
+  for _, road in ipairs(roads) do
+    for i = 1, #road.points - 1 do
+      local a, b = road.points[i], road.points[i + 1]
+      local ka, kb = node_key(a), node_key(b)
+      if ka ~= kb then
+        local lo, hi = ka, kb
+        if hi < lo then lo, hi = hi, lo end
+        table.insert(segments, lo .. ">" .. hi .. "@" .. tostring(road.width or 2))
+        degree[ka] = (degree[ka] or 0) + 1
+        degree[kb] = (degree[kb] or 0) + 1
+      end
     end
   end
 
-  -- Step 4: Filter overlapping lots
-  local filtered_lots = {}
-  for i, lot in ipairs(lots) do
-    local overlaps = false
-    if lot.footprint_min and lot.footprint_max then
-      for j, other in ipairs(filtered_lots) do
-        if other.footprint_min and other.footprint_max then
-          if lot.footprint_min.x <= other.footprint_max.x and lot.footprint_max.x >= other.footprint_min.x and
-             lot.footprint_min.z <= other.footprint_max.z and lot.footprint_max.z >= other.footprint_min.z then
-            overlaps = true
+  table.sort(segments)
+  -- Deduplicate: a segment travelled twice is the same edge.
+  local unique = {}
+  for _, seg in ipairs(segments) do
+    if unique[#unique] ~= seg then table.insert(unique, seg) end
+  end
+
+  local nodes = {}
+  for key, deg in pairs(degree) do
+    table.insert(nodes, key .. ":" .. deg)
+  end
+  table.sort(nodes)
+
+  return "rg2|" .. table.concat(unique, ";") .. "||" .. table.concat(nodes, ";")
+end
+
+perfectworld.planner._road_graph_signature = road_graph_signature
+
+--- Exact plan signature: full normalised geometry, no quantisation.
+local function exact_plan_signature(plan)
+  local center = plan.center
+  local parts = {
+    "exact1",
+    plan.archetype,
+    tostring(plan.environment and plan.environment.biome_family),
+    plan.size_class,
+    plan.palette_id or "?",
+    tostring(#plan.lots),
+  }
+
+  local lot_tokens = {}
+  for _, lot in ipairs(plan.lots) do
+    table.insert(lot_tokens, table.concat({
+      lot.center.x - center.x,
+      lot.center.z - center.z,
+      lot.role,
+      lot.structure_name,
+      lot.rotation,
+      lot.road_point.x - center.x,
+      lot.road_point.z - center.z,
+    }, ","))
+  end
+  table.sort(lot_tokens)
+  table.insert(parts, table.concat(lot_tokens, ";"))
+
+  local road_tokens = {}
+  for _, road in ipairs(plan.roads) do
+    local pts = {}
+    for _, pt in ipairs(road.points) do
+      table.insert(pts, (pt.x - center.x) .. "," .. (pt.z - center.z))
+    end
+    table.insert(road_tokens, road.kind .. "@" .. tostring(road.width) .. ":" .. table.concat(pts, " "))
+  end
+  table.sort(road_tokens)
+  table.insert(parts, table.concat(road_tokens, ";"))
+
+  table.insert(parts, plan.road_graph_signature or "")
+  return table.concat(parts, "|")
+end
+
+--- Structural signature: quantised, for grouping visually similar layouts.
+local function structural_plan_signature(plan)
+  local center = plan.center
+  local q = 4
+  local function quant(v) return math.floor(v / q) end
+
+  local role_counts = {}
+  local structure_counts = {}
+  local cells = {}
+  for _, lot in ipairs(plan.lots) do
+    role_counts[lot.role] = (role_counts[lot.role] or 0) + 1
+    structure_counts[lot.structure_name] = (structure_counts[lot.structure_name] or 0) + 1
+    table.insert(cells, quant(lot.center.x - center.x) .. "," .. quant(lot.center.z - center.z))
+  end
+  table.sort(cells)
+
+  local roles = {}
+  for _, role in ipairs(ROLE_ORDER) do
+    if role_counts[role] then table.insert(roles, role .. "x" .. role_counts[role]) end
+  end
+  local structures_list = {}
+  for name, count in pairs(structure_counts) do
+    table.insert(structures_list, name .. "x" .. count)
+  end
+  table.sort(structures_list)
+
+  local segment_count = 0
+  for _, road in ipairs(plan.roads) do
+    segment_count = segment_count + math.max(#road.points - 1, 0)
+  end
+
+  return table.concat({
+    "struct1",
+    plan.archetype,
+    plan.size_class,
+    plan.palette_id or "?",
+    #plan.lots,
+    #plan.roads,
+    segment_count,
+    table.concat(roles, ","),
+    table.concat(structures_list, ","),
+    table.concat(cells, ";"),
+  }, "|")
+end
+
+perfectworld.planner._exact_plan_signature = exact_plan_signature
+perfectworld.planner._structural_plan_signature = structural_plan_signature
+
+--- Build (but do not materialize) a village plan.
+function perfectworld.planner.build_village_plan(candidate, profile, environment, terrain)
+  terrain = terrain or world_terrain
+  local seed_key = profile.seed_key
+  local center = {x = candidate.x, z = candidate.z}
+  local rejections = {}
+
+  local function reject(reason)
+    rejections[reason] = (rejections[reason] or 0) + 1
+  end
+
+  local roads = build_road_network(seed_key, center, profile, terrain)
+  local road_cells = road_cell_set(roads)
+
+  -- Hillside settlements terrace into the slope, so they tolerate more relief
+  -- than the flat archetypes.
+  local hillside = profile.archetype == "hillside"
+  local lot_max_slope = hillside and 6 or 4
+  local terrain_overrides = hillside
+    and {max_slope = 6, max_cut_depth = 5, max_fill_height = 4, foundation_depth = 4}
+    or nil
+
+  local anchors = lot_anchors(seed_key, roads, profile)
+  local lots = {}
+  local role_index = 0
+
+  for anchor_index, anchor in ipairs(anchors) do
+    if #lots >= profile.target_lots then break end
+
+    local ok, reason = terrain_verdict(anchor, lot_max_slope, terrain)
+    if not ok then
+      reject(reason)
+    else
+      local role = profile.structure_roles[role_index + 1]
+      if not role then break end
+      local structure_name = choice.pick(seed_key,
+        "lot:" .. anchor_index .. ":variant", ROLE_VARIANTS[role] or ROLE_VARIANTS.dwelling)
+      local def = perfectworld.structures.get(structure_name)
+      if not def then
+        reject("unknown_structure")
+      else
+        local origin = {x = anchor.center.x, y = 0, z = anchor.center.z}
+        local rotation = orient_to_road(def, origin, anchor.road_point,
+          seed_key, "lot:" .. anchor_index .. ":rotation")
+        local fp_min, fp_max = perfectworld.structures.get_footprint(def, origin, rotation)
+
+        local blocked = false
+        for _, other in ipairs(lots) do
+          if rect_overlaps(fp_min, fp_max, other.footprint_min, other.footprint_max) then
+            blocked = true
+            reject("lot_overlap")
             break
           end
         end
-      end
-    end
-    if not overlaps then
-      table.insert(filtered_lots, lot)
-    end
-  end
 
-  -- Now assign actual roles to remaining lots
-  local final_lots = {}
-  local roles = {}
-  for _, r in ipairs(profile.structure_roles) do
-    roles[r] = (roles[r] or 0) + 1
-  end
-  local mandatory_order = {"dwelling", "farm", "utility", "central", "optional"}
-  local lot_idx = 0
-  for _, role in ipairs(mandatory_order) do
-    local count = roles[role] or 0
-    for _ = 1, count do
-      lot_idx = lot_idx + 1
-      if filtered_lots[lot_idx] then
-        filtered_lots[lot_idx].role = role
-        filtered_lots[lot_idx].structure_name = select_structure_variant(prng, role, profile)
-        local def = perfectworld.structures.get(filtered_lots[lot_idx].structure_name)
-        if def then
-          local rot = ({0, 90, 180, 270})[1 + math.floor(prng() * 4)]
-          filtered_lots[lot_idx].rotation = rot
-          filtered_lots[lot_idx].footprint_min, filtered_lots[lot_idx].footprint_max =
-            perfectworld.structures.get_footprint(def, {x = filtered_lots[lot_idx].center.x, y = 0, z = filtered_lots[lot_idx].center.z}, rot)
+        if not blocked then
+          -- A road must never run through a building.
+          for x = fp_min.x - 1, fp_max.x + 1 do
+            for z = fp_min.z - 1, fp_max.z + 1 do
+              if road_cells[x .. ":" .. z] then
+                blocked = true
+                break
+              end
+            end
+            if blocked then break end
+          end
+          if blocked then reject("road_conflict") end
         end
-        table.insert(final_lots, filtered_lots[lot_idx])
+
+        if not blocked then
+          role_index = role_index + 1
+          table.insert(lots, {
+            index = role_index,
+            anchor_index = anchor_index,
+            center = {x = anchor.center.x, z = anchor.center.z},
+            road_point = anchor.road_point,
+            road_id = anchor.road_id,
+            side = anchor.side,
+            role = role,
+            structure_name = structure_name,
+            rotation = rotation,
+            footprint_min = fp_min,
+            footprint_max = fp_max,
+          })
+        end
       end
     end
   end
 
-  -- Build plan
+  local bounds = {
+    min_x = center.x, max_x = center.x,
+    min_z = center.z, max_z = center.z,
+  }
+  local function extend(x, z)
+    bounds.min_x = math.min(bounds.min_x, x)
+    bounds.max_x = math.max(bounds.max_x, x)
+    bounds.min_z = math.min(bounds.min_z, z)
+    bounds.max_z = math.max(bounds.max_z, z)
+  end
+  for _, road in ipairs(roads) do
+    local half_w = math.floor((road.width or 2) / 2)
+    for _, pt in ipairs(road.points) do
+      extend(pt.x - half_w, pt.z - half_w)
+      extend(pt.x + half_w, pt.z + half_w)
+    end
+  end
+  for _, lot in ipairs(lots) do
+    extend(lot.footprint_min.x, lot.footprint_min.z)
+    extend(lot.footprint_max.x, lot.footprint_max.z)
+  end
+  for _, key in ipairs({"min_x", "min_z"}) do bounds[key] = bounds[key] - 2 end
+  for _, key in ipairs({"max_x", "max_z"}) do bounds[key] = bounds[key] + 2 end
+
+  local role_counts = {}
+  for _, lot in ipairs(lots) do
+    role_counts[lot.role] = (role_counts[lot.role] or 0) + 1
+  end
+
   local plan = {
     village_id = profile.village_id,
     generator_version = profile.generator_version,
+    seed_key = seed_key,
     archetype = profile.archetype,
     size_class = profile.size_class,
     environment = environment,
     material_palette = profile.material_palette,
+    palette_id = profile.palette_id,
+    terrain_overrides = terrain_overrides,
     center = center,
+    bounds = bounds,
     roads = roads,
-    lots = final_lots,
+    lots = lots,
     structure_roles = profile.structure_roles,
-    -- Fingerprint for determinism verification
-    fingerprint = nil, -- computed below
+    required_roles = profile.required_roles,
+    optional_roles = profile.optional_roles,
+    role_counts = role_counts,
+    rejections = rejections,
+    viable = #lots > 0 and (role_counts.dwelling or 0) >= MIN_DWELLINGS,
   }
 
-  -- Compute road graph fingerprint (normalized to center, captures real geometry)
-  local rg_parts = { "rg1", profile.archetype }
-  for _, road in ipairs(roads) do
-    table.insert(rg_parts, road.kind)
-    table.insert(rg_parts, tostring(#road.points))
-    table.insert(rg_parts, tostring(road.width or 2))
-    -- Normalized relative coordinates
-    for i, pt in ipairs(road.points) do
-      table.insert(rg_parts, tostring(math.floor((pt.x - center.x) / 2)))
-      table.insert(rg_parts, tostring(math.floor((pt.z - center.z) / 2)))
-    end
-  end
-  plan.road_graph_fingerprint = perfectworld.core.stable_hash(table.concat(rg_parts, "|"))
-
-  -- Compute village fingerprint (includes all lots and roads)
-  local fp_parts = { "v3", profile.archetype, environment.biome_family,
-    profile.size_class, tostring(#final_lots), tostring(#roads) }
-  -- Lots: roles, structures, rotations, normalized positions
-  for _, lot in ipairs(final_lots) do
-    table.insert(fp_parts, lot.role)
-    table.insert(fp_parts, lot.structure_name)
-    table.insert(fp_parts, tostring(lot.rotation))
-    table.insert(fp_parts, tostring(math.floor((lot.center.x - center.x) / 2)))
-    table.insert(fp_parts, tostring(math.floor((lot.center.z - center.z) / 2)))
-  end
-  -- Road graph fingerprint
-  table.insert(fp_parts, plan.road_graph_fingerprint)
-  plan.fingerprint = perfectworld.core.stable_hash(table.concat(fp_parts, "|"))
+  plan.road_graph_signature = road_graph_signature(roads, center)
+  plan.road_graph_fingerprint = hash32(plan.road_graph_signature)
+  plan.exact_plan_signature = exact_plan_signature(plan)
+  plan.exact_plan_fingerprint = hash32(plan.exact_plan_signature)
+  plan.structural_signature = structural_plan_signature(plan)
+  plan.structural_fingerprint = hash32(plan.structural_signature)
+  -- Backwards-compatible alias used by older records and debug commands.
+  plan.fingerprint = plan.exact_plan_fingerprint
 
   return plan
 end
 
--- === Village Materialization (New) ===
+--- Plan a village end to end: environment -> profile -> plan.
+-- `env_override` (analysis only) forces environment fields such as
+-- biome_family so palette branches the local map does not contain can still be
+-- exercised. `terrain` (tests only) replaces the live-map sampler.
+function perfectworld.planner.plan_village(candidate, env_override, terrain)
+  local environment
+  if terrain then
+    environment = {
+      biome_id = "synthetic", biome_name = "synthetic", biome_family = "temperate",
+      heat = 50, humidity = 50,
+      elevation = terrain.surface_y(candidate.x, candidate.z) or 0,
+      roughness = 0, average_slope = 0, water_proximity = 999, vegetation_density = 0,
+      available_material_profile = "temperate",
+    }
+  else
+    world_terrain.reset()
+    local center = {x = candidate.x, y = 0, z = candidate.z}
+    if minetest.load_area then
+      pcall(minetest.load_area,
+        {x = center.x - 70, y = -32, z = center.z - 70},
+        {x = center.x + 70, y = 200, z = center.z + 70})
+    end
+    local surface = world_terrain.surface_y(center.x, center.z)
+    environment = perfectworld.compat.get_environment({x = center.x, y = surface or 0, z = center.z})
+  end
+  if type(env_override) == "table" then
+    for key, value in pairs(env_override) do environment[key] = value end
+  end
+  local profile = perfectworld.planner.create_village_profile(candidate, environment)
+  local plan = perfectworld.planner.build_village_plan(candidate, profile, environment, terrain)
+  return plan, profile, environment
+end
+
+--- Emerge (generate if needed) the map area a village plan will inspect.
+-- minetest.load_area only loads already-generated blocks, so a village planned
+-- near the edge of the generated world would see no terrain at all.
+function perfectworld.planner.emerge_village_area(candidate, callback)
+  local radius = 72
+  local minp = {x = candidate.x - radius, y = -16, z = candidate.z - radius}
+  local maxp = {x = candidate.x + radius, y = 144, z = candidate.z + radius}
+  if not minetest.emerge_area then
+    callback()
+    return
+  end
+  minetest.emerge_area(minp, maxp, function(_, _, calls_remaining)
+    if calls_remaining == 0 then callback() end
+  end)
+end
+
+-- === Diversity Analysis ===
+--
+-- Builds a deterministic sample of planning inputs, generates a full plan for
+-- each one, and returns a flat row per input. Nothing is written to the world.
+--
+-- Two modes:
+--   "synthetic" - terrain comes from make_synthetic_terrain, so the sample can
+--                 cover slopes, water and relief that the local map may not
+--                 contain, and runs without waiting for map generation;
+--   "world"     - terrain comes from the live map, which requires the area to
+--                 be emerged first (see emerge_village_area).
+
+--- Terrain archetypes used by the synthetic sample.
+perfectworld.planner.TERRAIN_SPECS = {
+  {name = "flat_lowland", base = 12, slope_x = 0, slope_z = 0, relief = 0},
+  {name = "flat_upland", base = 96, slope_x = 0, slope_z = 0, relief = 0},
+  {name = "gentle_slope", base = 40, slope_x = 0.10, slope_z = 0.03, relief = 0},
+  {name = "steep_slope", base = 60, slope_x = 0.38, slope_z = -0.12, relief = 1},
+  {name = "rolling", base = 48, slope_x = 0.02, slope_z = 0.02, relief = 3},
+  {name = "rough", base = 70, slope_x = 0.05, slope_z = -0.05, relief = 7},
+  {name = "shoreline", base = 6, slope_x = 0.06, slope_z = 0, relief = 1, water_line = 3},
+  {name = "submerged", base = 1, slope_x = 0, slope_z = 0, relief = 0, water_line = 8},
+  {name = "cliff", base = 50, slope_x = 0.9, slope_z = 0, relief = 2},
+}
+
+--- Deterministic analysis sample.
+function perfectworld.planner.build_analysis_sample(opts)
+  opts = opts or {}
+  local mode = opts.mode or "synthetic"
+  local target = opts.count or 120
+  local step = opts.spacing or 1024
+  local families = perfectworld.compat.list_families()
+  local world_seeds = opts.world_seeds or {
+    perfectworld.world_seed_string, "1", "424242", "9007199254740993",
+  }
+  local inputs = {}
+  local index = 0
+
+  local grid = {}
+  for rx = -4, 4 do
+    for rz = -4, 4 do table.insert(grid, {rx = rx, rz = rz}) end
+  end
+  table.sort(grid, function(a, b)
+    local da, db = a.rx * a.rx + a.rz * a.rz, b.rx * b.rx + b.rz * b.rz
+    if da ~= db then return da < db end
+    if a.rx ~= b.rx then return a.rx < b.rx end
+    return a.rz < b.rz
+  end)
+
+  if mode == "synthetic" then
+    -- family x terrain x world seed, walked so that the first N inputs already
+    -- cover every family and every terrain archetype.
+    local specs = perfectworld.planner.TERRAIN_SPECS
+    local combos = math.max(#families, #specs, #world_seeds)
+    local i = 0
+    while #inputs < target do
+      i = i + 1
+      if i > combos * combos * #world_seeds then break end
+      local family = families[1 + (i - 1) % #families]
+      local spec = specs[1 + math.floor((i - 1) / #families) % #specs]
+      local seed = world_seeds[1 + math.floor((i - 1) / (#families * #specs)) % #world_seeds]
+      local cell = grid[1 + (i - 1) % #grid]
+      index = index + 1
+      table.insert(inputs, {
+        input_id = string.format("syn_%03d", index),
+        rx = cell.rx, rz = cell.rz,
+        x = cell.rx * step + 137 * i % step,
+        z = cell.rz * step - 211 * i % step,
+        world_seed = seed,
+        terrain_source = "synthetic:" .. spec.name,
+        terrain_spec = spec,
+        env_override = {
+          biome_family = family,
+          biome_name = "synthetic:" .. family,
+          roughness = spec.relief + math.floor(math.abs(spec.slope_x) * 20),
+          average_slope = spec.relief + math.floor(math.abs(spec.slope_x) * 20),
+          water_proximity = spec.water_line and 6 or 400,
+          elevation = spec.base,
+        },
+        note = family .. "/" .. spec.name,
+      })
+    end
+
+    -- Fallback biome: an unknown biome name must resolve to the temperate palette.
+    index = index + 1
+    table.insert(inputs, {
+      input_id = string.format("syn_%03d", index),
+      rx = 0, rz = 0, x = 700, z = -700,
+      world_seed = perfectworld.world_seed_string,
+      terrain_source = "synthetic:flat_lowland",
+      terrain_spec = perfectworld.planner.TERRAIN_SPECS[1],
+      env_override = {
+        biome_name = "mcl_biomes:nonexistent_xyz",
+        biome_family = perfectworld.compat.get_biome_family("mcl_biomes:nonexistent_xyz"),
+      },
+      note = "fallback_biome",
+    })
+    return inputs
+  end
+
+  -- World mode: real map terrain, spread over regions; the tail forces every
+  -- biome family so all palette branches are covered even where the local map
+  -- has no such biome.
+  local offsets = {
+    {dx = 0, dz = 0}, {dx = 320, dz = -260}, {dx = -280, dz = 300},
+    {dx = 180, dz = 420}, {dx = -400, dz = -180},
+  }
+  local forced_count = math.min(#families * 2, math.floor(target * 0.25))
+
+  for _, cell in ipairs(grid) do
+    for _, offset in ipairs(offsets) do
+      for _, seed in ipairs(world_seeds) do
+        if #inputs >= target - forced_count then break end
+        index = index + 1
+        table.insert(inputs, {
+          input_id = string.format("world_%03d", index),
+          rx = cell.rx, rz = cell.rz,
+          x = cell.rx * step + math.floor(step / 2) + offset.dx,
+          z = cell.rz * step + math.floor(step / 2) + offset.dz,
+          world_seed = seed,
+          terrain_source = "world",
+        })
+      end
+      if #inputs >= target - forced_count then break end
+    end
+    if #inputs >= target - forced_count then break end
+  end
+
+  local forced = 0
+  for _, family in ipairs(families) do
+    for variant = 1, 2 do
+      if #inputs >= target then break end
+      forced = forced + 1
+      index = index + 1
+      local cell = grid[1 + (forced % #grid)]
+      table.insert(inputs, {
+        input_id = string.format("world_%03d", index),
+        rx = cell.rx, rz = cell.rz,
+        x = cell.rx * step + math.floor(step / 2) + 150 * variant,
+        z = cell.rz * step + math.floor(step / 2) - 170 * variant,
+        world_seed = perfectworld.world_seed_string,
+        terrain_source = "world+forced_env",
+        env_override = {biome_family = family, biome_name = "forced:" .. family},
+        note = "forced_family:" .. family,
+      })
+    end
+  end
+
+  return inputs
+end
+
+--- Plan one analysis input and return a flat result row.
+function perfectworld.planner.analyze_input(input)
+  local candidate = {
+    id = "analysis_" .. input.input_id .. "_" .. perfectworld.core.coord_tag(input.rx)
+      .. "_" .. perfectworld.core.coord_tag(input.rz),
+    x = input.x,
+    z = input.z,
+    rx = input.rx,
+    rz = input.rz,
+    type = "village",
+    structure_name = perfectworld.planner.COMPOSITE_MARKER,
+    world_seed_override = input.world_seed,
+    region_id = perfectworld.get_region_id(input.rx, input.rz),
+  }
+
+  local terrain
+  if input.terrain_spec then
+    local spec = {}
+    for key, value in pairs(input.terrain_spec) do spec[key] = value end
+    spec.seed_key = "terrain|" .. input.input_id
+    terrain = perfectworld.planner.make_synthetic_terrain(spec)
+  end
+
+  local ok, plan, profile, environment = pcall(
+    perfectworld.planner.plan_village, candidate, input.env_override, terrain)
+  if not ok then
+    return {
+      input_id = input.input_id,
+      status = "error",
+      error = tostring(plan):sub(1, 200),
+      terrain_source = input.terrain_source,
+      note = input.note,
+    }
+  end
+
+  local role_key, structure_key = {}, {}
+  for _, lot in ipairs(plan.lots) do
+    table.insert(role_key, lot.role)
+    table.insert(structure_key, lot.structure_name)
+  end
+  table.sort(role_key)
+  table.sort(structure_key)
+
+  local status
+  if #plan.lots == 0 then
+    status = "empty"
+  elseif not plan.viable then
+    status = "rejected"
+  else
+    status = "valid"
+  end
+
+  local rejections = {}
+  for reason, count in pairs(plan.rejections) do
+    table.insert(rejections, reason .. "=" .. count)
+  end
+  table.sort(rejections)
+
+  return {
+    input_id = input.input_id,
+    candidate_id = candidate.id,
+    status = status,
+    terrain_source = input.terrain_source,
+    note = input.note,
+    world_seed = input.world_seed,
+    rx = input.rx, rz = input.rz, x = input.x, z = input.z,
+    biome_name = environment.biome_name,
+    biome_family = environment.biome_family,
+    elevation = environment.elevation,
+    roughness = environment.roughness,
+    water_proximity = environment.water_proximity,
+    vegetation_density = environment.vegetation_density,
+    archetype = plan.archetype,
+    size_class = plan.size_class,
+    palette = plan.palette_id,
+    target_lots = profile.target_lots,
+    lot_count = #plan.lots,
+    road_count = #plan.roads,
+    exact_plan_fingerprint = plan.exact_plan_fingerprint,
+    structural_fingerprint = plan.structural_fingerprint,
+    road_graph_fingerprint = plan.road_graph_fingerprint,
+    lot_layout_key = plan.structural_signature,
+    role_composition = table.concat(role_key, ","),
+    structure_composition = table.concat(structure_key, ","),
+    rejections = table.concat(rejections, " "),
+    seed_key = profile.seed_key,
+  }
+end
+-- === Village Materialization ===
+
+--- Lay a road surface strip perpendicular to the direction of travel.
+local function place_road_strip(p1, p2, width, material_name)
+  local dx, dz = p2.x - p1.x, p2.z - p1.z
+  local length = math.sqrt(dx * dx + dz * dz)
+  if length < 0.001 then return 0 end
+  local perp_x, perp_z = -dz / length, dx / length
+  local half_w = math.floor(width / 2)
+  local steps = math.max(math.abs(dx), math.abs(dz), 1)
+  local placed = 0
+  for s = 0, steps do
+    local t = s / steps
+    local bx = p1.x + dx * t
+    local bz = p1.z + dz * t
+    for w = -half_w, half_w do
+      local px = math.floor(bx + perp_x * w + 0.5)
+      local pz = math.floor(bz + perp_z * w + 0.5)
+      local y = world_terrain.surface_y(px, pz)
+      if y then
+        local node = minetest.get_node({x = px, y = y, z = pz})
+        if node.name ~= material_name and not node.name:find("water") then
+          minetest.set_node({x = px, y = y, z = pz}, {name = material_name})
+          placed = placed + 1
+        end
+      end
+    end
+  end
+  return placed
+end
 
 local function materialize_village_plan(plan, profile, candidate)
-  -- Mark settlement as placed first (idempotency gate)
   if perfectworld.planner.is_placed(candidate.id) then
     return true, {reason = "already_placed", settlement_id = candidate.id}
   end
 
+  local palette = profile.material_palette
+  local road_material = perfectworld.structures.palette_material(palette, "path", "road")
   local placed_structures = {}
   local placed_roads = {}
   local errors = {}
 
-  -- Materialize roads
-  for _, road in ipairs(plan.roads) do
-    if road.points and #road.points >= 2 then
-      local road_mat = profile.material_palette.path or perfectworld.compat.get_material("road")
-      for i = 1, #road.points - 1 do
-        local p1 = road.points[i]
-        local p2 = road.points[i + 1]
-        local steps = math.max(math.abs(p2.x - p1.x), math.abs(p2.z - p1.z))
-        if steps < 1 then steps = 1 end
-        for s = 0, steps do
-          local t = steps > 0 and (s / steps) or 0
-          local rx = math.floor(p1.x + (p2.x - p1.x) * t)
-          local rz = math.floor(p1.z + (p2.z - p1.z) * t)
-          for w = -math.floor(road.width / 2), math.floor(road.width / 2) do
-            local px = rx + w
-            for py = 256, -64, -1 do
-              local node = minetest.get_node({x = px, y = py, z = rz})
-              if node.name ~= "air" and node.name ~= "ignore" then
-                minetest.set_node({x = px, y = py, z = rz}, {name = road_mat})
-                break
-              end
-            end
-          end
-        end
-      end
-      -- Save road record
-      local road_record = {
-        id = road.id,
-        type = "local_road",
-        from_settlement = candidate.id,
-        path = road.points,
-        length = #road.points,
-        width = road.width,
-        kind = road.kind,
-      }
-      perfectworld.planner.save_road(road_record)
-      table.insert(placed_roads, road_record)
-    end
-  end
-
-  -- Materialize structures
+  -- Structures first: terrain preparation reshapes the surface, and doing it
+  -- after the roads were laid would bury or erase them.
   for _, lot in ipairs(plan.lots) do
     local def = perfectworld.structures.get(lot.structure_name)
     if not def then
       table.insert(errors, "structure_not_found:" .. tostring(lot.structure_name))
-      goto lot_continue
-    end
-    local structure_id = candidate.id .. "_struct_" .. (#placed_structures + 1)
-    local ctx = {
-      structure_id = structure_id,
-      pos = {x = lot.center.x, y = 0, z = lot.center.z},
-      rotation = lot.rotation,
-      region_id = candidate.region_id or perfectworld.get_region_id(candidate.rx or 0, candidate.rz or 0),
-      settlement_id = candidate.id,
-    }
-    local ok, result = perfectworld.structures.place(lot.structure_name, ctx)
-    if ok then
-      local record = {
-        structure_id = structure_id,
-        structure_name = lot.structure_name,
-        role = lot.role,
-        status = "materialized",
-        position = result.position,
-        rotation = lot.rotation,
-        region_id = ctx.region_id,
-        settlement_id = candidate.id,
-      }
-      perfectworld.planner.record_structure(record)
-      table.insert(placed_structures, record)
     else
-      table.insert(errors, "placement_failed:" .. tostring(lot.structure_name) .. ":" .. tostring(result and result.reason))
+      local structure_id = candidate.id .. "_struct_" .. (#placed_structures + 1)
+      local ctx = {
+        structure_id = structure_id,
+        pos = {x = lot.center.x, y = 0, z = lot.center.z},
+        rotation = lot.rotation,
+        region_id = candidate.region_id or perfectworld.get_region_id(candidate.rx or 0, candidate.rz or 0),
+        settlement_id = candidate.id,
+        palette = palette,
+        terrain_overrides = plan.terrain_overrides,
+      }
+      local ok, result = perfectworld.structures.place(lot.structure_name, ctx)
+      if ok then
+        lot.status = "materialized"
+        lot.position = result.position
+        lot.structure_id = structure_id
+        perfectworld.planner.record_structure({
+          structure_id = structure_id,
+          structure_name = lot.structure_name,
+          definition_version = def.version or 1,
+          role = lot.role,
+          status = "materialized",
+          position = result.position,
+          rotation = lot.rotation,
+          footprint_min = lot.footprint_min,
+          footprint_max = lot.footprint_max,
+          region_id = ctx.region_id,
+          settlement_id = candidate.id,
+        })
+        table.insert(placed_structures, {
+          structure_id = structure_id,
+          structure_name = lot.structure_name,
+          role = lot.role,
+          rotation = lot.rotation,
+          position = result.position,
+        })
+      else
+        lot.status = "skipped"
+        table.insert(errors, "placement_failed:" .. tostring(lot.structure_name)
+          .. ":" .. tostring(result and result.reason))
+      end
     end
-    ::lot_continue::
   end
 
-  -- Build settlement record
+  -- Roads and the short driveways that connect every placed lot to them.
+  world_terrain.reset()
+  for _, road in ipairs(plan.roads) do
+    local nodes = 0
+    for i = 1, #road.points - 1 do
+      nodes = nodes + place_road_strip(road.points[i], road.points[i + 1], road.width or 2, road_material)
+    end
+    local road_record = {
+      id = road.id,
+      type = "local_road",
+      from_settlement = candidate.id,
+      path = road.points,
+      length = #road.points,
+      segment_count = math.max(#road.points - 1, 0),
+      width = road.width,
+      kind = road.kind,
+      nodes_placed = nodes,
+    }
+    perfectworld.planner.save_road(road_record)
+    table.insert(placed_roads, road_record)
+  end
+
+  for _, lot in ipairs(plan.lots) do
+    if lot.status == "materialized" then
+      local def = perfectworld.structures.get(lot.structure_name)
+      local door = {x = lot.center.x, z = lot.center.z}
+      for _, c in ipairs((def and def.connectors) or {}) do
+        if c.type == "road" and c.offset_pos then
+          local rotated = perfectworld.structures.rotate_point(c.offset_pos, lot.rotation)
+          door = {x = lot.center.x + rotated.x, z = lot.center.z + rotated.z}
+          break
+        end
+      end
+      place_road_strip(door, lot.road_point, 1, road_material)
+      lot.door = door
+    end
+  end
+
+  -- Completion contract.
+  local placed_roles = {}
+  for _, s in ipairs(placed_structures) do
+    placed_roles[s.role] = (placed_roles[s.role] or 0) + 1
+  end
+  local missing_required = {}
+  if (placed_roles.dwelling or 0) < MIN_DWELLINGS then
+    table.insert(missing_required, "dwelling<" .. MIN_DWELLINGS)
+  end
+
   local settlement_status
   if #placed_structures == 0 then
     settlement_status = "failed"
-  elseif #errors > 0 then
+  elseif #errors > 0 or #missing_required > 0 then
     settlement_status = "partial"
   else
     settlement_status = "complete"
   end
+
+  -- Bounds must contain everything that was actually built.
+  local bounds = {
+    min_x = plan.bounds.min_x, max_x = plan.bounds.max_x,
+    min_z = plan.bounds.min_z, max_z = plan.bounds.max_z,
+  }
+  for _, s in ipairs(placed_structures) do
+    if s.position then
+      bounds.min_x = math.min(bounds.min_x, s.position.x)
+      bounds.max_x = math.max(bounds.max_x, s.position.x)
+      bounds.min_z = math.min(bounds.min_z, s.position.z)
+      bounds.max_z = math.max(bounds.max_z, s.position.z)
+    end
+  end
+
   local settlement_record = {
     settlement_id = candidate.id,
     candidate_id = candidate.id,
     region_id = candidate.region_id or perfectworld.get_region_id(candidate.rx or 0, candidate.rz or 0),
     generator_version = profile.generator_version,
+    seed_key = profile.seed_key,
     status = settlement_status,
-    center_pos = {x = candidate.x, y = 0, z = candidate.z},
-    bounds = {
-      min_x = candidate.x - 50, max_x = candidate.x + 50,
-      min_z = candidate.z - 50, max_z = candidate.z + 50,
-    },
+    center_pos = {x = candidate.x, y = world_terrain.surface_y(candidate.x, candidate.z) or 0, z = candidate.z},
+    bounds = bounds,
     environment_profile = profile.environment,
+    biome_name = profile.environment and profile.environment.biome_name,
+    biome_family = profile.environment and profile.environment.biome_family,
     archetype = profile.archetype,
-    village_fingerprint = plan.fingerprint,
+    size_class = profile.size_class,
+    palette_id = profile.palette_id,
+    material_palette = palette,
+    required_roles = profile.required_roles,
+    optional_roles = profile.optional_roles,
+    missing_required_roles = missing_required,
+    role_counts = placed_roles,
+    village_fingerprint = plan.exact_plan_fingerprint,
+    exact_plan_fingerprint = plan.exact_plan_fingerprint,
+    structural_fingerprint = plan.structural_fingerprint,
     road_graph_fingerprint = plan.road_graph_fingerprint,
     structure_ids = {},
+    structure_variants = {},
     road_ids = {},
+    road_segment_count = 0,
     lot_count = #placed_structures,
+    planned_lot_count = #plan.lots,
+    errors = errors,
     created_at = minetest.get_gametime(),
   }
   for _, s in ipairs(placed_structures) do
     table.insert(settlement_record.structure_ids, s.structure_id)
+    table.insert(settlement_record.structure_variants, s.structure_name)
   end
   for _, r in ipairs(placed_roads) do
     table.insert(settlement_record.road_ids, r.id)
+    settlement_record.road_segment_count = settlement_record.road_segment_count + (r.segment_count or 0)
   end
 
-  -- Persist
   perfectworld.planner.save_settlement_plan(candidate.id, {
     plan = plan,
     profile = profile,
@@ -1412,7 +1711,6 @@ function perfectworld.planner.materialize_village_new(candidate)
   end
 
   if perfectworld.planner.is_placed(candidate.id) then
-    -- Check if already saved
     local existing = perfectworld.planner.get_settlement_plan(candidate.id)
     if existing and existing.settlement then
       return true, {settlement = existing.settlement, from_cache = true}
@@ -1420,19 +1718,42 @@ function perfectworld.planner.materialize_village_new(candidate)
     return false, "already_placed_no_record"
   end
 
-  -- Get environment profile
-  local pos = {x = candidate.x, y = 0, z = candidate.z}
-  local environment = perfectworld.compat.get_environment(pos)
+  local plan, profile = perfectworld.planner.plan_village(candidate)
+  if not plan.viable then
+    -- Never persist an unbuildable settlement as a real one.
+    local record = {
+      settlement_id = candidate.id,
+      candidate_id = candidate.id,
+      region_id = candidate.region_id or perfectworld.get_region_id(candidate.rx or 0, candidate.rz or 0),
+      generator_version = profile.generator_version,
+      status = "failed",
+      reason = "no_viable_layout",
+      rejections = plan.rejections,
+      center_pos = {x = candidate.x, y = 0, z = candidate.z},
+      archetype = profile.archetype,
+      size_class = profile.size_class,
+      palette_id = profile.palette_id,
+      biome_family = profile.environment and profile.environment.biome_family,
+      environment_profile = profile.environment,
+      exact_plan_fingerprint = plan.exact_plan_fingerprint,
+      structural_fingerprint = plan.structural_fingerprint,
+      road_graph_fingerprint = plan.road_graph_fingerprint,
+      village_fingerprint = plan.exact_plan_fingerprint,
+      structure_ids = {},
+      structure_variants = {},
+      road_ids = {},
+      lot_count = 0,
+      planned_lot_count = #plan.lots,
+      created_at = minetest.get_gametime(),
+    }
+    perfectworld.planner.save_settlement_plan(candidate.id, {
+      plan = plan, profile = profile, settlement = record,
+    })
+    perfectworld.planner.mark_placed(candidate.id)
+    return false, {settlement = record, reason = "no_viable_layout"}
+  end
 
-  -- Create village profile
-  local profile = perfectworld.planner.create_village_profile(candidate, environment)
-
-  -- Generate plan
-  local plan = generate_village_plan(candidate, profile, environment)
-
-  -- Materialize
-  local ok, result = materialize_village_plan(plan, profile, candidate)
-  return ok, result
+  return materialize_village_plan(plan, profile, candidate)
 end
 
 -- === Public API: Fingerprint ===
@@ -1443,6 +1764,287 @@ function perfectworld.planner.get_village_fingerprint(candidate)
     return existing.settlement.village_fingerprint
   end
   return nil
+end
+
+-- === Settlement Validation ===
+--
+-- Checks the persisted record *and* the actual world. A record in mod_storage
+-- is not evidence that anything was built.
+
+local function rects_overlap_margin(a, b, margin)
+  return a.min.x - margin <= b.max.x and a.max.x + margin >= b.min.x
+    and a.min.z - margin <= b.max.z and a.max.z + margin >= b.min.z
+end
+
+function perfectworld.planner.validate_settlement(settlement_id)
+  local report = {
+    settlement_id = settlement_id,
+    ok = false,
+    issues = {},
+    checks = {},
+  }
+  local function issue(code, detail)
+    table.insert(report.issues, detail and (code .. ":" .. detail) or code)
+  end
+  local function check(name, ok, detail)
+    report.checks[name] = ok and "ok" or ("FAIL" .. (detail and (":" .. detail) or ""))
+    if not ok then issue(name, detail) end
+    return ok
+  end
+
+  local stored = perfectworld.planner.get_settlement_plan(settlement_id)
+  local settlement = stored and stored.settlement
+  if not settlement then
+    issue("record_missing")
+    return report
+  end
+  local plan = stored.plan or {}
+  report.status = settlement.status
+  report.archetype = settlement.archetype
+  report.lot_count = settlement.lot_count
+
+  -- 1. status / completeness contract
+  if settlement.status == "complete" then
+    check("complete_has_lots", (settlement.lot_count or 0) > 0)
+    check("complete_has_required_roles", #(settlement.missing_required_roles or {}) == 0,
+      table.concat(settlement.missing_required_roles or {}, ","))
+    check("complete_has_no_errors", #(settlement.errors or {}) == 0,
+      tostring((settlement.errors or {})[1]))
+    check("complete_fully_materialized",
+      (settlement.lot_count or 0) >= (settlement.planned_lot_count or 0),
+      tostring(settlement.lot_count) .. "/" .. tostring(settlement.planned_lot_count))
+  elseif settlement.status == "failed" then
+    check("failed_has_no_lots", (settlement.lot_count or 0) == 0)
+  end
+  check("has_fingerprints",
+    settlement.exact_plan_fingerprint ~= nil
+    and settlement.structural_fingerprint ~= nil
+    and settlement.road_graph_fingerprint ~= nil)
+
+  -- 2. referenced records exist and resolve
+  local structures = {}
+  for _, sid in ipairs(settlement.structure_ids or {}) do
+    local record = perfectworld.planner.get_structure(sid)
+    if not record then
+      issue("missing_structure", sid)
+    else
+      if not perfectworld.structures.get(record.structure_name) then
+        issue("unregistered_structure", record.structure_name)
+      end
+      table.insert(structures, record)
+    end
+  end
+  report.checks.structures_resolve = (#structures == #(settlement.structure_ids or {}))
+    and "ok" or "FAIL"
+
+  local roads = {}
+  for _, rid in ipairs(settlement.road_ids or {}) do
+    local road = perfectworld.planner.get_road(rid)
+    if not road then
+      issue("missing_road", rid)
+    else
+      table.insert(roads, road)
+    end
+  end
+  report.checks.roads_resolve = (#roads == #(settlement.road_ids or {})) and "ok" or "FAIL"
+
+  -- 3. geometry: footprints, road corridors, bounds
+  local boxes = {}
+  for _, record in ipairs(structures) do
+    local def = perfectworld.structures.get(record.structure_name)
+    local origin = record.position or {x = 0, y = 0, z = 0}
+    local fmin, fmax
+    if record.footprint_min and record.footprint_max then
+      fmin, fmax = record.footprint_min, record.footprint_max
+    elseif def then
+      fmin, fmax = perfectworld.structures.get_footprint(def, origin, record.rotation or 0)
+    end
+    if fmin and fmax then
+      table.insert(boxes, {
+        id = record.structure_id,
+        min = {x = math.min(fmin.x, fmax.x), z = math.min(fmin.z, fmax.z)},
+        max = {x = math.max(fmin.x, fmax.x), z = math.max(fmin.z, fmax.z)},
+        record = record,
+        def = def,
+      })
+    end
+  end
+
+  local overlap = nil
+  local neighbour_damage = nil
+  for i = 1, #boxes do
+    for j = i + 1, #boxes do
+      if rects_overlap_margin(boxes[i], boxes[j], 0) then
+        overlap = boxes[i].id .. "|" .. boxes[j].id
+      elseif rects_overlap_margin(boxes[i], boxes[j], 1) then
+        -- terrain preparation reaches one block past the footprint
+        neighbour_damage = boxes[i].id .. "|" .. boxes[j].id
+      end
+    end
+  end
+  check("footprints_disjoint", overlap == nil, overlap)
+  check("terrain_prep_isolated", neighbour_damage == nil, neighbour_damage)
+
+  local road_cells = {}
+  for _, road in ipairs(roads) do
+    local half_w = math.floor((road.width or 2) / 2)
+    local points = road.path or {}
+    for i = 1, #points - 1 do
+      local p1, p2 = points[i], points[i + 1]
+      local steps = math.max(math.abs(p2.x - p1.x), math.abs(p2.z - p1.z), 1)
+      for s = 0, steps do
+        local t = s / steps
+        local rx = math.floor(p1.x + (p2.x - p1.x) * t + 0.5)
+        local rz = math.floor(p1.z + (p2.z - p1.z) * t + 0.5)
+        for ox = -half_w, half_w do
+          for oz = -half_w, half_w do
+            road_cells[(rx + ox) .. ":" .. (rz + oz)] = true
+          end
+        end
+      end
+    end
+  end
+
+  local road_through = nil
+  for _, box in ipairs(boxes) do
+    for x = box.min.x, box.max.x do
+      for z = box.min.z, box.max.z do
+        if road_cells[x .. ":" .. z] then road_through = box.id break end
+      end
+      if road_through then break end
+    end
+    if road_through then break end
+  end
+  check("roads_avoid_buildings", road_through == nil, road_through)
+
+  -- 4. every building reaches a road, and its door is not walled in
+  local unconnected, blocked_door = nil, nil
+  for _, box in ipairs(boxes) do
+    local record = box.record
+    local origin = record.position
+    local door = origin
+    if box.def then
+      for _, c in ipairs(box.def.connectors or {}) do
+        if c.type == "road" and c.offset_pos then
+          local rotated = perfectworld.structures.rotate_point(c.offset_pos, record.rotation or 0)
+          door = {x = origin.x + rotated.x, y = origin.y, z = origin.z + rotated.z}
+          break
+        end
+      end
+    end
+    local reached = false
+    for dx = -4, 4 do
+      for dz = -4, 4 do
+        if road_cells[(door.x + dx) .. ":" .. (door.z + dz)] then reached = true break end
+      end
+      if reached then break end
+    end
+    if not reached then unconnected = record.structure_id end
+
+    -- the node just outside the door must be passable
+    local outside = minetest.get_node({x = door.x, y = door.y + 1, z = door.z})
+    local outside_def = minetest.registered_nodes[outside.name]
+    if outside.name ~= "air" and outside.name ~= "ignore"
+      and outside_def and outside_def.walkable then
+      blocked_door = record.structure_id .. "@" .. outside.name
+    end
+  end
+  if #boxes > 0 then
+    check("lots_connected_to_road", unconnected == nil, unconnected)
+    check("doors_accessible", blocked_door == nil, blocked_door)
+  end
+
+  -- 5. bounds contain everything
+  local bounds = settlement.bounds
+  if bounds then
+    local outside = nil
+    local function inside(x, z)
+      return x >= bounds.min_x and x <= bounds.max_x and z >= bounds.min_z and z <= bounds.max_z
+    end
+    for _, box in ipairs(boxes) do
+      if not (inside(box.min.x, box.min.z) and inside(box.max.x, box.max.z)) then
+        outside = box.id
+      end
+    end
+    for cell in pairs(road_cells) do
+      local sx, sz = cell:match("^(-?%d+):(-?%d+)$")
+      if sx and not inside(tonumber(sx), tonumber(sz)) then
+        outside = outside or ("road@" .. cell)
+      end
+    end
+    check("bounds_contain_all", outside == nil, outside)
+  else
+    check("bounds_present", false)
+  end
+
+  -- 6. the world actually contains the buildings
+  local missing_in_world, floating, unregistered_node = nil, nil, nil
+  for _, box in ipairs(boxes) do
+    local origin = box.record.position
+    local built = 0
+    local scanned = 0
+    for x = box.min.x, box.max.x do
+      for z = box.min.z, box.max.z do
+        for y = origin.y, origin.y + ((box.def and box.def.size.y) or 5) do
+          local node = minetest.get_node({x = x, y = y, z = z})
+          if node.name ~= "air" and node.name ~= "ignore" then
+            scanned = scanned + 1
+            if not minetest.registered_nodes[node.name] then
+              unregistered_node = node.name
+            end
+            built = built + 1
+          end
+        end
+      end
+    end
+    if built < 8 then
+      missing_in_world = box.id .. "(nodes=" .. built .. ")"
+    end
+    -- ground must exist under every footprint corner
+    for _, corner in ipairs({
+      {x = box.min.x, z = box.min.z}, {x = box.max.x, z = box.min.z},
+      {x = box.min.x, z = box.max.z}, {x = box.max.x, z = box.max.z},
+      {x = math.floor((box.min.x + box.max.x) / 2), z = math.floor((box.min.z + box.max.z) / 2)},
+    }) do
+      local below = minetest.get_node({x = corner.x, y = origin.y - 1, z = corner.z})
+      if below.name == "air" then
+        floating = box.id .. "@" .. corner.x .. "," .. corner.z
+      end
+    end
+  end
+  if #boxes > 0 then
+    check("structures_present_in_world", missing_in_world == nil, missing_in_world)
+    check("no_floating_buildings", floating == nil, floating)
+    check("nodes_registered", unregistered_node == nil, unregistered_node)
+  end
+
+  -- 7. terrain preparation is bounded to the footprint + a small margin, so a
+  -- settlement can never carve an oversized artificial platform
+  local oversized = nil
+  for _, box in ipairs(boxes) do
+    local margin = (box.def and box.def.terrain and box.def.terrain.modification_margin) or 1
+    if margin > 2 then
+      oversized = box.id .. "(margin=" .. margin .. ")"
+    end
+  end
+  check("no_oversized_platform", oversized == nil, oversized)
+
+  -- 8. no duplicated structures at the same spot (re-materialization guard)
+  local seen_positions = {}
+  local duplicate = nil
+  for _, record in ipairs(structures) do
+    local pos = record.position or {x = 0, y = 0, z = 0}
+    local key = record.structure_name .. "@" .. pos.x .. "," .. pos.y .. "," .. pos.z
+    if seen_positions[key] then duplicate = key end
+    seen_positions[key] = true
+  end
+  check("no_duplicate_structures", duplicate == nil, duplicate)
+
+  report.structure_count = #structures
+  report.road_count = #roads
+  report.plan_lot_count = #(plan.lots or {})
+  report.ok = #report.issues == 0
+  return report
 end
 
 -- === Single Structure Materialization ===
@@ -1516,347 +2118,9 @@ local function materialize_single_structure(candidate)
 	return false, last_error or "no_valid_placement"
 end
 
--- === Farm Location Finder ===
-
-local function quick_slope_check_fn(cx, cz, half_size)
-	pcall(minetest.load_area,
-		{x = cx - half_size - 5, y = -10, z = cz - half_size - 5},
-		{x = cx + half_size + 5, y = 60, z = cz + half_size + 5})
-	local min_y, max_y, sum_y, count = nil, nil, 0, 0
-	for dx = -half_size, half_size do
-		for dz = -half_size, half_size do
-			local y = nil
-			for sy = 256, -64, -1 do
-				local node = minetest.get_node({x = cx + dx, y = sy, z = cz + dz})
-				if node.name ~= "air" and node.name ~= "ignore" then
-					y = sy
-					break
-				end
-			end
-			if not y then
-				return false, 999, "missing_surface", 0
-			end
-			min_y = min_y and math.min(min_y, y) or y
-			max_y = max_y and math.max(max_y, y) or y
-			sum_y = sum_y + y
-			count = count + 1
-		end
-	end
-	local slope = max_y - min_y
-	local avg_y = count > 0 and math.floor(sum_y / count + 0.5) or 0
-	return true, slope, nil, avg_y
-end
-quick_slope_check = quick_slope_check_fn
-
-local function find_farm_location_fn(candidate, layout)
-	minetest.log("action", "[pw_planner] find_farm_location called for " .. tostring(candidate.id))
-	local prng = det_prng(perfectworld.core.stable_hash(candidate.id .. "_farm_search"))
-
-	local best_farm = nil
-	local best_score = math.huge
-	local fallback_farm = nil
-	local fallback_slope = math.huge
-
-	local function try_location(fx, fz, dist, allow_steep)
-		if layout and layout.plots then
-			for _, plot in ipairs(layout.plots) do
-				if plot.center then
-					local ddx = fx - plot.center.x
-					local ddz = fz - plot.center.z
-					if ddx * ddx + ddz * ddz < 400 then
-						return nil
-					end
-				end
-			end
-		end
-
-		-- Load chunks around the candidate position
-		pcall(minetest.load_area,
-			{x = fx - 10, y = -10, z = fz - 10},
-			{x = fx + 10, y = 60, z = fz + 10})
-		local ok, slope, reason, avg_y = quick_slope_check(fx, fz, 3)
-		if not ok then
-			return nil
-		end
-
-		if slope <= 2 then
-			local ref_y = 0
-			for dx = -3, 3 do
-				for dz = -3, 3 do
-					local y = nil
-					for sy = 256, -64, -1 do
-						local node = minetest.get_node({x = fx + dx, y = sy, z = fz + dz})
-						if node.name ~= "air" and node.name ~= "ignore" then
-							y = sy
-							break
-						end
-					end
-					if not y then return nil end
-					if ref_y == 0 then ref_y = y end
-					local diff = y - ref_y
-					if diff > 4 or diff < -3 then
-						return nil
-					end
-				end
-			end
-
-			local rot = ({0, 90, 180, 270})[1 + math.floor(prng() * 4)]
-			local conn_offset = {x = 0, z = 7}
-			local rotated = perfectworld.structures.rotate_point(conn_offset, rot)
-			return {
-				x = fx, z = fz,
-				rotation = rot,
-				connector = {x = fx + rotated.x, z = fz + rotated.z},
-				needs_flatten = false,
-				surface_y = avg_y,
-			}
-		end
-
-		if allow_steep and slope < fallback_slope then
-			fallback_slope = slope
-			minetest.log("action", "[pw_planner] farm fallback at (" .. fx .. "," .. fz .. ") slope=" .. slope)
-			local rot = ({0, 90, 180, 270})[1 + math.floor(prng() * 4)]
-			local conn_offset = {x = 0, z = 7}
-			local rotated = perfectworld.structures.rotate_point(conn_offset, rot)
-			fallback_farm = {
-				x = fx, z = fz,
-				rotation = rot,
-				connector = {x = fx + rotated.x, z = fz + rotated.z},
-				needs_flatten = true,
-				surface_y = avg_y,
-			}
-		end
-
-		return nil
-	end
-
-	for attempt = 1, 50 do
-		local angle = prng() * 2 * math.pi
-		local dist = 80 + prng() * 170
-		local fx = candidate.x + math.floor(math.cos(angle) * dist)
-		local fz = candidate.z + math.floor(math.sin(angle) * dist)
-
-		local farm = try_location(fx, fz, dist, true)
-		if farm and not farm.needs_flatten then
-			local score = math.abs(dist - 150)
-			if score < best_score then
-				best_score = score
-				best_farm = farm
-			end
-		end
-	end
-	if best_farm then
-		minetest.log("action", "[pw_planner] farm found strict at (" .. best_farm.x .. "," .. best_farm.z .. ")")
-		return best_farm
-	end
-	if fallback_farm then
-		minetest.log("action", "[pw_planner] farm found fallback at (" .. fallback_farm.x .. "," .. fallback_farm.z .. ") slope=" .. fallback_slope)
-		return fallback_farm
-	end
-
-	for ring = 1, 3 do
-		local base_dist = 100 + ring * 100
-		for dir_i = 0, 7 do
-			local angle = dir_i * math.pi / 4
-			for offset = -40, 40, 10 do
-				local dist = base_dist + offset
-				if dist >= 80 and dist <= 500 then
-					local fx = candidate.x + math.floor(math.cos(angle) * dist)
-					local fz = candidate.z + math.floor(math.sin(angle) * dist)
-					local farm = try_location(fx, fz, dist, false)
-					if farm and not farm.needs_flatten then
-						return farm
-					end
-				end
-			end
-		end
-	end
-	if fallback_farm then return fallback_farm end
-
-	if layout and layout.external_connector then
-		local dirs = {
-			{dx =  1, dz =  0}, {dx = -1, dz = 0},
-			{dx =  0, dz =  1}, {dx =  0, dz = -1},
-			{dx =  1, dz =  1}, {dx = -1, dz = -1},
-			{dx =  1, dz = -1}, {dx = -1, dz =  1},
-		}
-		local base = layout.external_connector
-		for step = 80, 260, 20 do
-			for _, dir in ipairs(dirs) do
-				local fx = base.x + dir.dx * step
-				local fz = base.z + dir.dz * step
-				local farm = try_location(fx, fz, step, true)
-				if farm and not farm.needs_flatten then
-					return farm
-				end
-			end
-		end
-	end
-	if fallback_farm then
-		minetest.log("action", "[pw_planner] farm found fallback phase3 at (" .. fallback_farm.x .. "," .. fallback_farm.z .. ")")
-		return fallback_farm
-	end
-
-	-- Final fallback: try very close to external connector (50-100 blocks) in all 8 directions
-	if layout and layout.external_connector then
-		local base = layout.external_connector
-		local dirs = {
-			{dx =  1, dz =  0}, {dx = -1, dz = 0},
-			{dx =  0, dz =  1}, {dx =  0, dz = -1},
-			{dx =  1, dz =  1}, {dx = -1, dz = -1},
-			{dx =  1, dz = -1}, {dx = -1, dz =  1},
-		}
-		for step = 50, 120, 10 do
-			for _, dir in ipairs(dirs) do
-				local fx = base.x + dir.dx * step
-				local fz = base.z + dir.dz * step
-				local farm = try_location(fx, fz, step, false)
-				if farm and not farm.needs_flatten then return farm end
-			end
-		end
-	end
-	if fallback_farm then
-		minetest.log("action", "[pw_planner] farm found fallback phase4 at (" .. fallback_farm.x .. "," .. fallback_farm.z .. ")")
-		return fallback_farm
-	end
-
-	-- Last resort: use external_connector offset itself, mark for flatten
-	if layout and layout.external_connector then
-		local ec = layout.external_connector
-		for _, dir in ipairs({{dx=60, dz=60}, {dx=-60, dz=60}, {dx=60, dz=-60}, {dx=-60, dz=-60}, {dx=80, dz=0}, {dx=-80, dz=0}, {dx=0, dz=80}, {dx=0, dz=-80}}) do
-			local fx = ec.x + dir.dx
-			local fz = ec.z + dir.dz
-			local ok, slope, reason, avg_y = quick_slope_check(fx, fz, 3)
-			if ok then
-				minetest.log("action", "[pw_planner] farm last-resort FOUND at (" .. fx .. "," .. fz .. ") slope=" .. slope)
-				local rot = ({0, 90, 180, 270})[1 + math.floor(prng() * 4)]
-				local conn_offset = {x = 0, z = 7}
-				local rotated = perfectworld.structures.rotate_point(conn_offset, rot)
-				return {
-					x = fx, z = fz,
-					rotation = rot,
-					connector = {x = fx + rotated.x, z = fz + rotated.z},
-					needs_flatten = true,
-					surface_y = avg_y,
-				}
-			end
-		end
-	end
-
-	minetest.log("action", "[pw_planner] find_farm_location returning nil")
-	return nil
-end
-find_farm_location = find_farm_location_fn
-
-local function flatten_farm_site_fn(farm)
-	if not farm.needs_flatten then return end
-	local ground_mat = perfectworld.compat.get_material("ground")
-	local cx, cz = farm.x, farm.z
-	local sy = farm.surface_y or 0
-
-	for dx = -4, 4 do
-		for dz = -4, 4 do
-			local px, pz = cx + dx, cz + dz
-			for y = sy + 1, 256 do
-				local node = minetest.get_node({x = px, y = y, z = pz})
-				if node.name ~= "air" then
-					minetest.set_node({x = px, y = y, z = pz}, {name = "air"})
-				else
-					break
-				end
-			end
-			for y = sy, math.max(sy - 3, -64), -1 do
-				local node = minetest.get_node({x = px, y = y, z = pz})
-				if node.name == "air" or node.name == "ignore" then
-					minetest.set_node({x = px, y = y, z = pz}, {name = ground_mat})
-				else
-					break
-				end
-			end
-			minetest.set_node({x = px, y = sy, z = pz}, {name = ground_mat})
-		end
-	end
-end
-flatten_farm_site = flatten_farm_site_fn
-
--- === Simple Road Builder ===
-
-local function build_road_fn(start_conn, farm_conn)
-	if not start_conn or not farm_conn then return nil end
-
-	local road_path = {}
-	local sx, sz = start_conn.x, start_conn.z
-	local ex, ez = farm_conn.x, farm_conn.z
-
-	local dx = ex - sx
-	local dz = ez - sz
-	local dist = math.sqrt(dx * dx + dz * dz)
-	local steps = math.floor(dist)
-
-	if steps < 2 then return nil end
-
-	local road_mat = perfectworld.compat.get_material("road")
-	local half_width = 1
-	local prev_y = nil
-
-	for i = 0, steps do
-		local t = steps > 0 and (i / steps) or 0
-		local x = math.floor(sx + dx * t)
-		local z = math.floor(sz + dz * t)
-
-		local surface_y = nil
-		for y = 256, -64, -1 do
-			local node = minetest.get_node({x = x, y = y, z = z})
-			if node.name ~= "air" and node.name ~= "ignore" then
-				surface_y = y
-				break
-			end
-		end
-
-		if not surface_y then
-			if prev_y then
-				surface_y = prev_y
-			else
-				goto road_continue
-			end
-		end
-
-		if prev_y then
-			local diff = surface_y - prev_y
-			if diff > 1 then
-				for step_y = prev_y + 1, surface_y do
-					for w = -half_width, half_width do
-						minetest.set_node({x = x + w, y = step_y, z = z}, {name = road_mat})
-					end
-				end
-			elseif diff < -1 then
-				surface_y = prev_y
-			end
-		end
-
-		for w = -half_width, half_width do
-			minetest.set_node({x = x + w, y = surface_y, z = z}, {name = road_mat})
-			minetest.set_node({x = x + w, y = surface_y - 1, z = z}, {name = road_mat})
-		end
-
-		table.insert(road_path, {x = x, y = surface_y, z = z})
-		prev_y = surface_y
-
-		::road_continue::
-	end
-
-	return road_path
-end
-build_road = build_road_fn
-
--- === Village Materialization ===
-
-local function materialize_village(candidate)
-  -- Delegate to the new biome-aware village generation system.
-  return perfectworld.planner.materialize_village_new(candidate)
-end
-
 -- === Region Candidate Materialization ===
+
+local materialize_village = perfectworld.planner.materialize_village_new
 
 function perfectworld.planner.materialize_region_candidate(rx, rz, index, opts)
 	opts = opts or {}

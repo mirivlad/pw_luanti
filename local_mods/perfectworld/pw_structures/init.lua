@@ -9,6 +9,21 @@ local function material(name, opts)
 	return perfectworld.compat.get_material(name, opts or {required = true})
 end
 
+--- Resolve a material through the settlement's biome palette when one is given.
+-- `palette_key` names an entry of a `pw_compat_mcl` family palette; `role` is
+-- the generic material role used when there is no palette (or the palette node
+-- is not registered in this game).
+function perfectworld.structures.palette_material(palette, palette_key, role)
+	if palette and palette_key then
+		local node_name = palette[palette_key]
+		if node_name and (node_name == "air" or minetest.registered_nodes[node_name]) then
+			return node_name
+		end
+	end
+	return perfectworld.compat.get_material(role, {required = false})
+end
+local palette_material = perfectworld.structures.palette_material
+
 local function is_replaceable(pos)
 	local node = minetest.get_node(pos)
 	if perfectworld.compat and perfectworld.compat.is_replaceable then
@@ -263,8 +278,8 @@ function perfectworld.structures.analyze_terrain(def, origin, rotation)
 	}
 end
 
-function perfectworld.structures.prepare_terrain(def, origin, rotation, analysis)
-	local foundation = material("foundation")
+function perfectworld.structures.prepare_terrain(def, origin, rotation, analysis, palette)
+	local foundation = palette_material(palette, "foundation", "foundation")
 	local air = "air"
 	local base_y = analysis.surface_y + 1
 	local minp, maxp = analysis.minp, analysis.maxp
@@ -382,14 +397,14 @@ local function place_node(origin, rotation, local_pos, node_name, param2)
 	minetest.set_node(p, {name = node_name, param2 = param2 or 0})
 end
 
-local function resolve_farmstead_materials()
+local function resolve_farmstead_materials(palette)
 	return {
-		foundation = material("foundation"),
-		wall = material("wall"),
-		roof = material("roof"),
-		floor = material("floor"),
-		road = material("road"),
-		fence = material("fence", {required = false, fallback = "air"}),
+		foundation = palette_material(palette, "foundation", "foundation"),
+		wall = palette_material(palette, "wall_primary", "wall"),
+		roof = palette_material(palette, "roof", "roof"),
+		floor = palette_material(palette, "wall_secondary", "floor"),
+		road = palette_material(palette, "path", "road"),
+		fence = palette_material(palette, "fence", "fence"),
 		door = material("door"),
 		door_top = material("door_top", {required = false, fallback = "air"}),
 		window = material("window", {required = false, fallback = "air"}),
@@ -410,7 +425,7 @@ end
 local function farmstead_generator(context, def)
 	local pos = context.prepared_position or context.pos
 	local rotation = context.rotation or 0
-	local mats = resolve_farmstead_materials()
+	local mats = resolve_farmstead_materials(context.palette)
 
 	for x = -3, 3 do
 		for z = -3, 3 do
@@ -489,6 +504,14 @@ function perfectworld.structures.place(name, context)
 	if not allowed then
 		return false, {reason = "unsupported_rotation", rotation = rotation}
 	end
+	-- Per-placement terrain relaxation (hillside lots need deeper cuts than the
+	-- structure's default contract allows). Copy first: `def` is the registry entry.
+	if type(context.terrain_overrides) == "table" then
+		def = deep_copy(def)
+		for key, value in pairs(context.terrain_overrides) do
+			def.terrain[key] = value
+		end
+	end
 	if def.placement.type == "lua" and def.placement.preflight then
 		local preflight_ok, preflight_result, preflight_err = pcall(def.placement.preflight, context, def)
 		if not preflight_ok then
@@ -550,7 +573,7 @@ function perfectworld.structures.place(name, context)
 		z = analysis.maxp.z,
 	}
 	local rollback = snapshot_area(rollback_minp, rollback_maxp)
-	local prep_ok, prep = perfectworld.structures.prepare_terrain(def, context.pos, rotation, analysis)
+	local prep_ok, prep = perfectworld.structures.prepare_terrain(def, context.pos, rotation, analysis, context.palette)
 	if not prep_ok then
 		restore_area(rollback)
 		return false, prep
@@ -624,10 +647,13 @@ end
 		local pos = context.prepared_position or context.pos
 		local rotation = context.rotation or 0
 		local mats = perfectworld.compat
+		local palette = context.palette
 
-		local wall_mat = mats.get_material(opts.wall_mat or "wall", {required = false}) or "air"
-		local roof_mat = mats.get_material(opts.roof_mat or "roof", {required = false}) or "air"
-		local floor_mat = mats.get_material(opts.floor_mat or "floor", {required = false}) or "air"
+		-- Walls, roof and floor follow the settlement's biome palette; joinery
+		-- (doors, glass, furniture) stays on the generic material table.
+		local wall_mat = palette_material(palette, "wall_primary", opts.wall_mat or "wall")
+		local roof_mat = palette_material(palette, "roof", opts.roof_mat or "roof")
+		local floor_mat = palette_material(palette, "wall_secondary", opts.floor_mat or "floor")
 		local door_mat = mats.get_material(opts.door_mat or "door", {required = false}) or wall_mat
 		local door_top_mat = mats.get_material(opts.door_top_mat or "door_top", {required = false}) or "air"
 		local window_mat = mats.get_material(opts.window_mat or "window", {required = false}) or "air"
@@ -847,7 +873,7 @@ local well_v1_ok = perfectworld.structures.register("pw_well_v1", {
 		generator = function(context, def)
 			local pos = context.prepared_position or context.pos
 			local rotation = context.rotation or 0
-			local cobble = perfectworld.compat.get_material("cobble")
+			local cobble = palette_material(context.palette, "foundation", "cobble")
 			local water = perfectworld.compat.get_material("water")
 
 			-- 4 corner pillars
