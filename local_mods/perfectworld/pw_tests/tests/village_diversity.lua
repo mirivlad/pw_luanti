@@ -163,6 +163,45 @@ T.register_test("perfectworld", "biome_ids_resolve_to_families", function(ctx)
     "resolving every registered biome id must reach at least 4 families, got %d", distinct))
 end)
 
+T.register_test("perfectworld", "frozen_and_liquid_surfaces_are_unbuildable", function(ctx)
+  -- Regression: the surface check only looked for "water" in the node name.
+  -- A frozen ocean is flat, solid and walkable, so every geometric check
+  -- passed and a village was materialized on the sea.
+  local unbuildable = {"mcl_core:water_source", "mcl_core:water_flowing",
+    "mcl_core:river_water_source", "mcl_core:lava_source", "mcl_core:ice"}
+  for _, name in ipairs(unbuildable) do
+    if minetest.registered_nodes[name] then
+      ctx.assert.is_true(perfectworld.compat.is_unbuildable_surface(name),
+        name .. " must not be treated as buildable ground")
+    end
+  end
+
+  -- Every registered ice-like node must be rejected, not just the ones above.
+  local ice_nodes = 0
+  for name, def in pairs(minetest.registered_nodes) do
+    if (def.groups or {}).ice then
+      ice_nodes = ice_nodes + 1
+      ctx.assert.is_true(perfectworld.compat.is_unbuildable_surface(name),
+        "ice node " .. name .. " must not be treated as buildable ground")
+    end
+  end
+  ctx.assert.is_true(ice_nodes > 0, "the game must register at least one ice node")
+
+  for _, name in ipairs({"mcl_core:dirt", "mcl_core:stone", "mcl_core:sand",
+    "mcl_core:dirt_with_grass"}) do
+    if minetest.registered_nodes[name] then
+      ctx.assert.is_false(perfectworld.compat.is_unbuildable_surface(name),
+        name .. " must be buildable ground")
+    end
+  end
+
+  ctx.assert.is_true(perfectworld.compat.is_liquid_node("mcl_core:water_source"),
+    "water must be detected as a liquid")
+  ctx.assert.is_false(perfectworld.compat.is_liquid_node("mcl_core:ice"),
+    "ice is not a liquid, but it is still unbuildable")
+  ctx.assert.is_false(perfectworld.compat.is_liquid_node("air"), "air is not a liquid")
+end)
+
 T.register_test("perfectworld", "village_unknown_biome_gets_fallback", function(ctx)
   local family = perfectworld.compat.get_biome_family("nonexistent_biome_xyz")
   ctx.assert.equal(family, "temperate", "unknown biome must fall back to temperate")

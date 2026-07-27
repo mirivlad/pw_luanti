@@ -87,6 +87,28 @@ function perfectworld.compat.get_material(name, opts)
   error("missing required material: " .. tostring(name))
 end
 
+--- Is this node a liquid?
+function perfectworld.compat.is_liquid_node(node_name)
+  if not node_name or node_name == "air" or node_name == "ignore" then return false end
+  local def = minetest.registered_nodes[node_name]
+  if def and def.liquidtype and def.liquidtype ~= "none" then return true end
+  return node_name:find("water") ~= nil or node_name:find("lava") ~= nil
+end
+
+--- Can a settlement stand on this surface node?
+--
+-- Liquids are the obvious no. Ice is the subtle one: a frozen ocean is flat,
+-- solid and walkable, so every geometric check passes and the planner will
+-- cheerfully lay out a village on the sea.
+function perfectworld.compat.is_unbuildable_surface(node_name)
+  if not node_name or node_name == "ignore" then return true end
+  if perfectworld.compat.is_liquid_node(node_name) then return true end
+  local def = minetest.registered_nodes[node_name]
+  local groups = (def and def.groups) or {}
+  if groups.ice or groups.water or groups.lava then return true end
+  return node_name:find("ice") ~= nil
+end
+
 function perfectworld.compat.is_replaceable(node_name)
   if not node_name or node_name == "air" or node_name == "ignore" then return true end
   local def = minetest.registered_nodes[node_name]
@@ -205,15 +227,15 @@ function perfectworld.compat.get_environment(pos)
     roughness = math.floor(avg_slope / (samples - 1) * 10) / 10
   end
 
-  -- Water proximity: check for water within a radius
+  -- Water proximity: nearest open water or frozen water surface. Ice counts:
+  -- a village on a frozen lake shore is still a shore settlement.
   local water_proximity = 999
   for dx = -16, 16, 4 do
     for dz = -16, 16, 4 do
       for y = pos.y + 10, pos.y - 10, -1 do
         local node = minetest.get_node({x = x + dx, y = y, z = z + dz})
-        if node.name == "mcl_core:water_source" or node.name == "mcl_core:river_water_source" then
-          local dist = math.sqrt(dx * dx + dz * dz)
-          water_proximity = math.min(water_proximity, dist)
+        if perfectworld.compat.is_unbuildable_surface(node.name) then
+          water_proximity = math.min(water_proximity, math.sqrt(dx * dx + dz * dz))
           break
         end
         if node.name ~= "air" and node.name ~= "ignore" then break end

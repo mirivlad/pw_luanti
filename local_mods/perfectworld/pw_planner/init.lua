@@ -368,11 +368,24 @@ local function make_world_terrain()
     return nil
   end
 
+  --- True when the column cannot carry a building.
+  --
+  -- Checking only for "water" in the node name is not enough: a frozen ocean
+  -- is a perfectly flat, perfectly solid, perfectly walkable surface of ice,
+  -- and the planner will happily lay a crossroads across it. Anything liquid,
+  -- icy, or sitting directly on top of liquid is unbuildable ground.
   function terrain.is_liquid(x, z)
     local y = terrain.surface_y(x, z)
     if not y then return false end
     local name = minetest.get_node({x = x, y = y, z = z}).name
-    return name:find("water") ~= nil or name:find("lava") ~= nil
+    if perfectworld.compat.is_unbuildable_surface(name) then return true end
+    -- thin shelf: solid crust directly over liquid
+    for depth = 1, 3 do
+      local below = minetest.get_node({x = x, y = y - depth, z = z}).name
+      if perfectworld.compat.is_liquid_node(below) then return true end
+      if below == "air" or below == "ignore" then break end
+    end
+    return false
   end
 
   function terrain.reset()
