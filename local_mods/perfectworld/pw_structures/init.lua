@@ -343,6 +343,19 @@ function perfectworld.structures.prepare_terrain(def, origin, rotation, analysis
 				for y = cut_bottom_y, cut_top_y do
 					minetest.set_node({x = x, y = y, z = z}, {name = foundation})
 				end
+				-- On a slope the downhill side of a footprint can sit above open
+				-- air. Carry the foundation down as a plinth until it meets solid
+				-- ground so the building never floats. Bounded in depth and laid
+				-- only under the building itself, so it cannot grow into an
+				-- artificial platform.
+				local plinth_y = cut_bottom_y - 1
+				local plinth_floor = plinth_y - (def.terrain.max_plinth_depth or 12)
+				while plinth_y >= plinth_floor do
+					local existing = minetest.get_node({x = x, y = plinth_y, z = z}).name
+					if existing ~= "air" and existing ~= "ignore" then break end
+					minetest.set_node({x = x, y = plinth_y, z = z}, {name = foundation})
+					plinth_y = plinth_y - 1
+				end
 			end
 			-- air clearance: apply with blend
 			for y = fill_bottom_y, target_top do
@@ -614,7 +627,7 @@ local ok, err = perfectworld.structures.register("pw_farmstead_v1", {
 		modification_margin = 1,
 		max_cut_depth = 3,
 		max_fill_height = 4,
-		building_footprint = {min_x = -3, max_x = 3, min_z = -3, max_z = 3},
+		building_footprint = {min_x = -4, max_x = 4, min_z = -4, max_z = 4},
 	},
 	connectors = {
 		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 7}},
@@ -744,7 +757,10 @@ local house_small_v1_ok = perfectworld.structures.register("pw_house_small_v1", 
 	terrain = {
 		max_slope = 2, foundation_depth = 2, clearance_height = 5,
 		modification_margin = 1, max_cut_depth = 3, max_fill_height = 3,
-		building_footprint = {min_x = -2, max_x = 2, min_z = -2, max_z = 2},
+		-- Must cover the whole built extent: the wall ring stands at
+		-- +/-floor(size/2), so a smaller footprint leaves the outer wall
+		-- columns without foundation and they float over a cut.
+		building_footprint = {min_x = -3, max_x = 3, min_z = -2, max_z = 2},
 	},
 	connectors = {
 		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 3}},
@@ -760,7 +776,7 @@ local house_small_v1_ok = perfectworld.structures.register("pw_house_small_v1", 
 				{x = 1, y = 1, z = 0, mat = "light"},
 				{x = -1, y = 1, z = -1, mat = "table"},
 			},
-			building_footprint = {min_x = -2, max_x = 2, min_z = -2, max_z = 2},
+				building_footprint = {min_x = -3, max_x = 3, min_z = -2, max_z = 2},
 		}),
 		preflight = function()
 			-- ensure critical materials exist
@@ -785,7 +801,7 @@ local house_small_v2_ok = perfectworld.structures.register("pw_house_small_v2", 
 	terrain = {
 		max_slope = 2, foundation_depth = 2, clearance_height = 6,
 		modification_margin = 1, max_cut_depth = 3, max_fill_height = 3,
-		building_footprint = {min_x = -3, max_x = 3, min_z = -2, max_z = 2},
+		building_footprint = {min_x = -4, max_x = 4, min_z = -2, max_z = 2},
 	},
 	connectors = {
 		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 3}},
@@ -801,7 +817,7 @@ local house_small_v2_ok = perfectworld.structures.register("pw_house_small_v2", 
 				{x = 0, y = 1, z = 0, mat = "light"},
 				{x = 2, y = 1, z = 0, mat = "container"},
 			},
-			building_footprint = {min_x = -3, max_x = 3, min_z = -2, max_z = 2},
+				building_footprint = {min_x = -4, max_x = 4, min_z = -2, max_z = 2},
 		}),
 		preflight = function()
 			perfectworld.compat.get_material("wall")
@@ -825,7 +841,7 @@ local barn_v1_ok = perfectworld.structures.register("pw_barn_v1", {
 	terrain = {
 		max_slope = 2, foundation_depth = 2, clearance_height = 6,
 		modification_margin = 1, max_cut_depth = 3, max_fill_height = 3,
-		building_footprint = {min_x = -3, max_x = 3, min_z = -3, max_z = 3},
+		building_footprint = {min_x = -4, max_x = 4, min_z = -3, max_z = 3},
 	},
 	connectors = {
 		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 4}},
@@ -841,7 +857,7 @@ local barn_v1_ok = perfectworld.structures.register("pw_barn_v1", {
 				{x = -2, y = 1, z = -1, mat = "container"},
 				{x = 2, y = 1, z = -1, mat = "container"},
 			},
-			building_footprint = {min_x = -3, max_x = 3, min_z = -3, max_z = 3},
+				building_footprint = {min_x = -4, max_x = 4, min_z = -3, max_z = 3},
 		}),
 		preflight = function()
 			perfectworld.compat.get_material("wall")

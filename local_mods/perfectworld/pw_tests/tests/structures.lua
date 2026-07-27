@@ -186,10 +186,19 @@ T.register_test("perfectworld", "terrain_analysis_uses_building_footprint_not_fu
   if minetest.load_area then
     pcall(minetest.load_area, {x = origin.x - 18, y = origin.y - 4, z = origin.z - 18}, {x = origin.x + 18, y = origin.y + 16, z = origin.z + 18})
   end
+  -- Plateau covering the building footprint plus its modification margin
+  -- (farmstead: -4..4 plus margin 1), dropping away outside it. The full
+  -- structure spans +/-7, so analysis passing here proves it looks at the
+  -- building footprint and not at the whole structure.
+  local plateau = math.max(
+    math.abs(def.terrain.building_footprint.min_x),
+    def.terrain.building_footprint.max_x,
+    math.abs(def.terrain.building_footprint.min_z),
+    def.terrain.building_footprint.max_z) + (def.terrain.modification_margin or 1)
   for dx = -18, 18 do
     for dz = -18, 18 do
       local h = origin.y
-      if dx < -4 or dx > 4 or dz < -4 or dz > 4 then
+      if dx < -plateau or dx > plateau or dz < -plateau or dz > plateau then
         h = origin.y - 3
       end
       minetest.set_node({x = origin.x + dx, y = h, z = origin.z + dz}, {name = perfectworld.compat.get_material("ground")})

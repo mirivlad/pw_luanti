@@ -289,60 +289,49 @@ T.register_test("perfectworld", "materialize_chunk_places_farmstead_once", funct
   ctx.log("materialized candidate " .. c.id .. " as " .. c.structure_id .. " from plan " .. selected_plan.id)
 end)
 
-T.register_test("perfectworld", "materialize_chunk_handles_village_candidate", function(ctx)
-  -- Scan regions deterministically for a village candidate.
-  -- plan_region is deterministic, so once found, the same region always has the village.
+T.register_test("perfectworld", "materialize_chunk_queues_village_candidates", function(ctx)
+  -- A village spans more terrain than the mapchunk that contains its centre,
+  -- so materialize_chunk must queue it for emerge-then-build instead of
+  -- planning it against terrain that does not exist yet.
   local found_rx, found_rz, village_candidate
   for rx = 0, 9 do
     for rz = 0, 9 do
       local plan = perfectworld.planner.plan_region(rx, rz)
       for _, c in ipairs(plan.settlement_candidates or {}) do
-        if c.structure_name == "__village__" then
-          found_rx = rx
-          found_rz = rz
-          village_candidate = c
+        if c.structure_name == perfectworld.planner.COMPOSITE_MARKER then
+          found_rx, found_rz, village_candidate = rx, rz, c
           break
         end
       end
+      if village_candidate then break end
     end
     if village_candidate then break end
   end
-
-  if not village_candidate then
-    ctx.skip("no village candidate found in scanned regions 0..9")
-    return
-  end
-
-  local ground_y = 0
-  local prep_minp, prep_maxp = prepare_candidate_area(village_candidate, ground_y)
-  if minetest.get_node({x = village_candidate.x, y = ground_y, z = village_candidate.z}).name == "ignore" then
-    minetest.emerge_area(prep_minp, prep_maxp)
-    ctx.skip("village candidate area not emerged")
-    return
-  end
+  ctx.assert.not_nil(village_candidate, "plan_region must produce a village candidate in regions 0..9")
 
   perfectworld.planner._test_unmark_placed(village_candidate.id)
   perfectworld.planner._test_clear_settlement(village_candidate.id)
+  -- A previous run may still have this village in flight; queuing is
+  -- deliberately a no-op while that is true, so clear the marker first.
+  perfectworld.planner._test_clear_pending_village(village_candidate.id)
 
+  local prep_minp, prep_maxp = prepare_candidate_area(village_candidate, 0)
   local result = perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)
-  ctx.assert.is_true(
-    perfectworld.planner.is_placed(village_candidate.id),
-    "village candidate must be marked placed; result=" .. minetest.write_json(result)
-  )
 
-  -- Verify settlement plan was saved in mod_storage
-  local saved_plan = perfectworld.planner.get_settlement_plan(village_candidate.id)
-  ctx.assert.not_nil(saved_plan, "village settlement plan must be persisted in mod_storage")
+  ctx.assert.equal(result.queued, 1,
+    "the village must be queued, not built inline; result=" .. minetest.write_json(result))
+  ctx.assert.is_false(perfectworld.planner.is_placed(village_candidate.id),
+    "queuing must not mark the candidate placed before it is actually built")
 
-  -- Idempotency: second call must not duplicate
-  local placed_before = #perfectworld.planner.list_placed()
-  perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)
-  local placed_after = #perfectworld.planner.list_placed()
-  ctx.assert.equal(placed_before, placed_after, "second call must not duplicate records")
+  -- Queuing is idempotent: a second pass over the same chunk must not enqueue
+  -- the same village again.
+  local second = perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)
+  ctx.assert.equal(second.queued, 0, "the same village must not be queued twice")
 
-  perfectworld.planner._test_unmark_placed(village_candidate.id)
-  perfectworld.planner._test_clear_settlement(village_candidate.id)
-  ctx.log("village candidate " .. village_candidate.id .. " at rx=" .. found_rx .. " rz=" .. found_rz .. " materialized")
+  -- Leave nothing in flight for the next run.
+  perfectworld.planner._test_clear_pending_village(village_candidate.id)
+  ctx.log("village candidate " .. village_candidate.id
+    .. " at rx=" .. found_rx .. " rz=" .. found_rz .. " queued")
 end)
 
 T.register_test("perfectworld", "materialize_chunk_idempotent_across_calls", function(ctx)
