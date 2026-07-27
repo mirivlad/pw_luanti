@@ -1,0 +1,59 @@
+[PerfectWorld Bot Bridge]
+
+#    Master switch. When false the mod loads but refuses every observation.
+pw_bot_bridge.enabled (Enable the bridge) bool true
+
+#    File-spool transport for a future external runtime. Off by default.
+pw_bot_bridge.external_transport (Enable external file transport) bool false
+
+#    Mode a newly registered bot gets when the caller does not name one.
+pw_bot_bridge.default_mode (Default perception mode) enum player player,oracle
+
+#    Bots the server registers at start, as "name:mode" separated by commas.
+#    Example: pwbot:player,inspector:oracle
+pw_bot_bridge.autoregister (Autoregistered bots) string
+
+#    How far player-mode vision reaches, in nodes.
+pw_bot_bridge.player_view_distance (Player view distance) int 48 4 128
+
+#    Full horizontal field of view of player mode, in degrees.
+pw_bot_bridge.player_horizontal_fov (Player horizontal FOV) int 100 20 180
+
+#    Full vertical field of view of player mode, in degrees.
+pw_bot_bridge.player_vertical_fov (Player vertical FOV) int 80 20 170
+
+#    Ray fan used when a request does not name a profile.
+pw_bot_bridge.player_ray_profile (Default ray profile) enum navigation minimal,navigation,detailed
+
+#    Largest half-extent of an oracle area request, in nodes.
+pw_bot_bridge.oracle_max_radius (Oracle max radius) int 64 8 256
+
+#    Largest node count an oracle request may touch.
+pw_bot_bridge.oracle_max_nodes (Oracle max nodes) int 32768 512 262144
+
+#    Sustained request rate per registered bot.
+pw_bot_bridge.max_requests_per_second (Max requests per second) float 10.0 0.5 100.0
+
+#    Burst allowance on top of the sustained rate.
+pw_bot_bridge.max_request_burst (Max request burst) int 20 1 200
+
+#    Bounded per-bot event queue length. Older events are dropped and counted.
+pw_bot_bridge.event_queue_size (Event queue size) int 256 16 4096
+
+#    Seconds between background event sampling ticks.
+pw_bot_bridge.event_tick_interval (Event tick interval) float 0.5 0.1 10.0
+
+#    Distance in nodes a position must move before a position_changed event fires.
+pw_bot_bridge.event_position_epsilon (Position event epsilon) float 1.0 0.1 16.0
+
+#    Emit received chat messages as bridge events.
+pw_bot_bridge.event_chat (Emit chat events) bool false
+
+#    Largest canonical response the bridge will hand out, in bytes.
+pw_bot_bridge.max_response_bytes (Max response bytes) int 262144 4096 4194304
+
+#    Seconds between external transport spool polls.
+pw_bot_bridge.transport_poll_interval (Transport poll interval) float 0.2 0.05 10.0
+
+#    Largest external request file the transport will read, in bytes.
+pw_bot_bridge.transport_max_request_bytes (Max transport request bytes) int 65536 512 1048576
