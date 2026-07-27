@@ -1,7 +1,8 @@
 # Project Status
 
 **Date:** 2026-07-27
-**Test baseline:** 75 total | 75 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 79 total | 78 PASS | 1 FAIL | 0 SKIP | 0 ERROR
+(FAIL: fingerprint geometry test — fix committed, pending --force-recreate retest)
 
 ## Implemented Modules
 
