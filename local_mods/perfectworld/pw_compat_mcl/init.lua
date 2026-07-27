@@ -109,6 +109,43 @@ function perfectworld.compat.is_unbuildable_surface(node_name)
   return node_name:find("ice") ~= nil
 end
 
+--- Ground people would actually settle on.
+--
+-- Geometry alone is not enough: bare andesite at 2000 m is as flat and solid
+-- as a meadow, and a village there looks absurd because nothing can grow.
+-- Soil, sand and snow-covered soil are fine — snowy taiga and foothills are
+-- legitimate places to live; naked stone, gravel and ice are not.
+local livable_ground = {
+  ["mcl_core:dirt"] = true,
+  ["mcl_core:dirt_with_grass"] = true,
+  ["mcl_core:dirt_with_grass_snow"] = true,
+  ["mcl_core:coarse_dirt"] = true,
+  ["mcl_core:podzol"] = true,
+  ["mcl_core:podzol_snow"] = true,
+  ["mcl_core:mycelium"] = true,
+  ["mcl_core:mycelium_snow"] = true,
+  ["mcl_core:sand"] = true,
+  ["mcl_core:redsand"] = true,
+  ["mcl_core:clay"] = true,
+  ["mcl_core:snow"] = true,
+  ["mcl_core:snowblock"] = true,
+  ["mcl_mud:mud"] = true,
+}
+
+function perfectworld.compat.is_livable_ground(node_name)
+  if not node_name then return false end
+  if livable_ground[node_name] then return true end
+  local def = minetest.registered_nodes[node_name]
+  local groups = (def and def.groups) or {}
+  -- Mineclonia tags anything a plant can be planted on.
+  if groups.soil and groups.soil > 0 then return true end
+  if groups.grass_block or groups.dirt or groups.sand then return true end
+  -- Terracotta badlands are barren rock but villages there read fine, and the
+  -- dry palette is built for them.
+  if node_name:find("hardened_clay") or node_name:find("terracotta") then return true end
+  return false
+end
+
 function perfectworld.compat.is_replaceable(node_name)
   if not node_name or node_name == "air" or node_name == "ignore" then return true end
   local def = minetest.registered_nodes[node_name]
@@ -283,59 +320,108 @@ end
 local family_palettes = {
   temperate = {
     foundation = "mcl_core:cobble",
-    wall_primary = "mcl_core:wood",
-    wall_secondary = "mcl_core:wood",
+    wall_primary = "mcl_trees:wood_oak",
+    wall_secondary = "mcl_core:cobble",
+    wall_post = "mcl_trees:tree_oak",
+    floor_block = "mcl_trees:wood_oak",
     roof = "mcl_stairs:slab_oak",
+    roof_stair = "mcl_stairs:stair_oak",
+    roof_slab = "mcl_stairs:slab_oak",
+    window = "mcl_panes:pane_natural_flat",
     path = "mcl_core:coarse_dirt",
-    fence = "mcl_fences:fence",
+    fence = "mcl_fences:oak_fence",
+    fence_gate = "mcl_fences:oak_fence_gate",
+    crop = "mcl_farming:wheat_7",
   },
   forest = {
     foundation = "mcl_core:cobble",
-    wall_primary = "mcl_core:wood",
-    wall_secondary = "mcl_core:wood",
-    roof = "mcl_stairs:slab_oak",
+    wall_primary = "mcl_trees:wood_birch",
+    wall_secondary = "mcl_core:cobble",
+    wall_post = "mcl_trees:tree_birch",
+    floor_block = "mcl_trees:wood_birch",
+    roof = "mcl_stairs:slab_birch",
+    roof_stair = "mcl_stairs:stair_birch",
+    roof_slab = "mcl_stairs:slab_birch",
+    window = "mcl_panes:pane_natural_flat",
     path = "mcl_core:dirt",
-    fence = "mcl_fences:fence",
+    fence = "mcl_fences:birch_fence",
+    fence_gate = "mcl_fences:birch_fence_gate",
+    crop = "mcl_farming:carrot_7",
   },
   cold = {
-    foundation = "mcl_core:stone",
-    wall_primary = "mcl_core:wood",
-    wall_secondary = "mcl_core:cobble",
-    roof = "mcl_stairs:slab_oak",
+    foundation = "mcl_core:cobble",
+    wall_primary = "mcl_trees:wood_spruce",
+    wall_secondary = "mcl_core:stonebrick",
+    wall_post = "mcl_trees:tree_spruce",
+    floor_block = "mcl_trees:wood_spruce",
+    roof = "mcl_stairs:slab_spruce",
+    roof_stair = "mcl_stairs:stair_spruce",
+    roof_slab = "mcl_stairs:slab_spruce",
+    window = "mcl_panes:pane_natural_flat",
     path = "mcl_core:gravel",
-    fence = "mcl_fences:fence",
+    fence = "mcl_fences:spruce_fence",
+    fence_gate = "mcl_fences:spruce_fence_gate",
+    crop = "mcl_farming:potato_3",
   },
   dry = {
-    foundation = "mcl_core:sandstone",
+    foundation = "mcl_core:sandstonesmooth",
     wall_primary = "mcl_core:sandstone",
-    wall_secondary = "mcl_core:sandstone",
-    roof = "mcl_core:tree",
+    wall_secondary = "mcl_core:sandstonesmooth2",
+    wall_post = "mcl_trees:tree_acacia",
+    floor_block = "mcl_trees:wood_acacia",
+    roof = "mcl_stairs:slab_acacia",
+    roof_stair = "mcl_stairs:stair_acacia",
+    roof_slab = "mcl_stairs:slab_acacia",
+    window = "mcl_panes:pane_natural_flat",
     path = "mcl_core:sand",
-    fence = "air",
+    fence = "mcl_fences:acacia_fence",
+    fence_gate = "mcl_fences:acacia_fence_gate",
+    crop = "mcl_farming:wheat_7",
   },
   rocky = {
-    foundation = "mcl_core:stone",
-    wall_primary = "mcl_core:stone",
-    wall_secondary = "mcl_core:cobble",
-    roof = "mcl_core:stone",
+    foundation = "mcl_core:stonebrick",
+    wall_primary = "mcl_core:cobble",
+    wall_secondary = "mcl_core:stonebrick",
+    wall_post = "mcl_trees:tree_dark_oak",
+    floor_block = "mcl_trees:wood_dark_oak",
+    roof = "mcl_stairs:slab_dark_oak",
+    roof_stair = "mcl_stairs:stair_dark_oak",
+    roof_slab = "mcl_stairs:slab_dark_oak",
+    window = "mcl_panes:pane_natural_flat",
     path = "mcl_core:gravel",
-    fence = "mcl_core:cobble",
+    fence = "mcl_fences:dark_oak_fence",
+    fence_gate = "mcl_fences:dark_oak_fence_gate",
+    crop = "mcl_farming:beetroot_3",
   },
   wet = {
     foundation = "mcl_core:cobble",
-    wall_primary = "mcl_core:wood",
-    wall_secondary = "mcl_core:wood",
-    roof = "mcl_stairs:slab_oak",
+    wall_primary = "mcl_trees:wood_jungle",
+    wall_secondary = "mcl_trees:wood_oak",
+    wall_post = "mcl_trees:tree_jungle",
+    floor_block = "mcl_trees:wood_jungle",
+    roof = "mcl_stairs:slab_jungle",
+    roof_stair = "mcl_stairs:stair_jungle",
+    roof_slab = "mcl_stairs:slab_jungle",
+    window = "mcl_panes:pane_natural_flat",
     path = "mcl_core:dirt",
-    fence = "mcl_fences:fence",
+    fence = "mcl_fences:jungle_fence",
+    fence_gate = "mcl_fences:jungle_fence_gate",
+    crop = "mcl_farming:carrot_7",
   },
   coastal = {
-    foundation = "mcl_core:stone",
-    wall_primary = "mcl_core:wood",
-    wall_secondary = "mcl_core:wood",
+    foundation = "mcl_core:stonebrick",
+    wall_primary = "mcl_trees:wood_oak",
+    wall_secondary = "mcl_core:sandstone",
+    wall_post = "mcl_trees:tree_oak",
+    floor_block = "mcl_trees:wood_oak",
     roof = "mcl_stairs:slab_oak",
+    roof_stair = "mcl_stairs:stair_oak",
+    roof_slab = "mcl_stairs:slab_oak",
+    window = "mcl_panes:pane_natural_flat",
     path = "mcl_core:sand",
-    fence = "mcl_fences:fence",
+    fence = "mcl_fences:oak_fence",
+    fence_gate = "mcl_fences:oak_fence_gate",
+    crop = "mcl_farming:wheat_7",
   },
 }
 

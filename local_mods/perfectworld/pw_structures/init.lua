@@ -410,94 +410,6 @@ local function place_node(origin, rotation, local_pos, node_name, param2)
 	minetest.set_node(p, {name = node_name, param2 = param2 or 0})
 end
 
-local function resolve_farmstead_materials(palette)
-	return {
-		foundation = palette_material(palette, "foundation", "foundation"),
-		wall = palette_material(palette, "wall_primary", "wall"),
-		roof = palette_material(palette, "roof", "roof"),
-		floor = palette_material(palette, "wall_secondary", "floor"),
-		road = palette_material(palette, "path", "road"),
-		fence = palette_material(palette, "fence", "fence"),
-		door = material("door"),
-		door_top = material("door_top", {required = false, fallback = "air"}),
-		window = material("window", {required = false, fallback = "air"}),
-		light = material("light"),
-		bed = material("bed", {required = false, fallback = "air"}),
-		table = material("table", {required = false, fallback = "air"}),
-		container = material("container"),
-		garden_soil = material("garden_soil", {required = false, fallback = material("ground")}),
-		crop = material("crop", {required = false, fallback = "air"}),
-	}
-end
-
-local function farmstead_preflight()
-	resolve_farmstead_materials()
-	return true
-end
-
-local function farmstead_generator(context, def)
-	local pos = context.prepared_position or context.pos
-	local rotation = context.rotation or 0
-	local mats = resolve_farmstead_materials(context.palette)
-
-	for x = -3, 3 do
-		for z = -3, 3 do
-			place_node(pos, rotation, {x = x, y = 0, z = z}, mats.floor)
-		end
-	end
-
-	for x = -3, 3 do
-		for y = 1, 3 do
-			place_node(pos, rotation, {x = x, y = y, z = -3}, mats.wall)
-			place_node(pos, rotation, {x = x, y = y, z = 3}, mats.wall)
-		end
-	end
-	for z = -3, 3 do
-		for y = 1, 3 do
-			place_node(pos, rotation, {x = -3, y = y, z = z}, mats.wall)
-			place_node(pos, rotation, {x = 3, y = y, z = z}, mats.wall)
-		end
-	end
-
-	-- Door and windows
-	place_node(pos, rotation, {x = 0, y = 1, z = 3}, mats.door)
-	place_node(pos, rotation, {x = 0, y = 2, z = 3}, mats.door_top)
-	place_node(pos, rotation, {x = -3, y = 2, z = -1}, mats.window)
-	place_node(pos, rotation, {x = 3, y = 2, z = 1}, mats.window)
-
-	for x = -4, 4 do
-		for z = -4, 4 do
-			if math.abs(x) == 4 or math.abs(z) == 4 or (x + z) % 2 == 0 then
-				place_node(pos, rotation, {x = x, y = 4, z = z}, mats.roof)
-			end
-		end
-	end
-
-	-- Porch, short path, interior
-	for z = 4, 7 do
-		place_node(pos, rotation, {x = 0, y = 0, z = z}, mats.road)
-	end
-	place_node(pos, rotation, {x = 1, y = 1, z = 1}, mats.light)
-	place_node(pos, rotation, {x = -1, y = 1, z = -1}, mats.table)
-	place_node(pos, rotation, {x = 2, y = 1, z = -2}, mats.container)
-
-	-- Small fenced garden.
-	for x = -7, -4 do
-		for z = -3, 2 do
-			if x == -7 or x == -4 or z == -3 or z == 2 then
-				place_node(pos, rotation, {x = x, y = 1, z = z}, mats.fence)
-			else
-				place_node(pos, rotation, {x = x, y = 0, z = z}, mats.garden_soil)
-				if (x + z) % 2 == 0 and mats.crop ~= "air" then
-					place_node(pos, rotation, {x = x, y = 1, z = z}, mats.crop)
-				end
-			end
-		end
-	end
-
-	return true
-end
-
 function perfectworld.structures.place(name, context)
 	local def = structures[name]
 	if not def then
@@ -612,314 +524,467 @@ function perfectworld.structures.place(name, context)
 	}
 end
 
-local ok, err = perfectworld.structures.register("pw_farmstead_v1", {
-	version = 1,
-	size = {x = 15, y = 7, z = 14},
-	origin = {x = 7, y = 0, z = 6},
-	categories = {"settlement", "farm", "hamlet"},
-	weight = 1,
-	allowed_settlement_types = {"farm", "hamlet", "village"},
-	rotations = {0, 90, 180, 270},
-	terrain = {
-		max_slope = 2,
-		foundation_depth = 3,
-		clearance_height = 8,
-		modification_margin = 1,
-		max_cut_depth = 3,
-		max_fill_height = 4,
-		building_footprint = {min_x = -4, max_x = 4, min_z = -4, max_z = 4},
-	},
-	connectors = {
-		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 7}},
-	},
-	placement = {
-		type = "lua",
-		generator = farmstead_generator,
-		preflight = farmstead_preflight,
-	},
-})
-if not ok then
-	minetest.log("error", "[pw_structures] failed to register pw_farmstead_v1: " .. tostring(err))
+-- === Building construction kit ===
+--
+-- Modelled on the vanilla plains village houses (Minecraft Wiki,
+-- Village/Structure/Blueprints): a cobble plinth, timber corner posts, plank
+-- infill, glass-pane windows on every wall, and a pitched roof built out of
+-- stairs with a slab ridge and a one-block eave. Boxes with flat lids are not
+-- houses.
+
+local function pal(palette, key, role)
+  return palette_material(palette, key, role)
 end
 
--- === Helper: generic small building generator ===
--- Used by house_small_v1, house_small_v2, barn_v1, well_v1.
--- opts fields:
---   wall_mat, roof_mat, floor_mat, door_mat, door_top_mat, window_mat (with fallbacks)
---   size = {x, y, z}, origin = {x, y, z}
---   wall_height, roof_height, roof_overlap
---   door_side, door_offset_x, door_offset_z
---   windows = {{x, y, z}, ...}
---   interior = {{x, y, z, mat}, ...}
---   building_footprint = {min_x, max_x, min_z, max_z}
---   terrain = {max_slope, foundation_depth, clearance_height, modification_margin, max_cut_depth, max_fill_height}
---   road_connector_side, road_connector_offset_x, road_connector_offset_z
-
-	local function make_building_generator(opts)
-	return function(context, def)
-		local pos = context.prepared_position or context.pos
-		local rotation = context.rotation or 0
-		local mats = perfectworld.compat
-		local palette = context.palette
-
-		-- Walls, roof and floor follow the settlement's biome palette; joinery
-		-- (doors, glass, furniture) stays on the generic material table.
-		local wall_mat = palette_material(palette, "wall_primary", opts.wall_mat or "wall")
-		local roof_mat = palette_material(palette, "roof", opts.roof_mat or "roof")
-		local floor_mat = palette_material(palette, "wall_secondary", opts.floor_mat or "floor")
-		local door_mat = mats.get_material(opts.door_mat or "door", {required = false}) or wall_mat
-		local door_top_mat = mats.get_material(opts.door_top_mat or "door_top", {required = false}) or "air"
-		local window_mat = mats.get_material(opts.window_mat or "window", {required = false}) or "air"
-		local interior = opts.interior or {}
-
-		local ws_x = (opts.size and opts.size.x) or (def.size and def.size.x) or 7
-		local ws_y = (opts.size and opts.size.y) or (def.size and def.size.y) or 5
-		local ws_z = (opts.size and opts.size.z) or (def.size and def.size.z) or 5
-
-		-- Floor
-		local fp = opts.building_footprint
-		if fp then
-			for x = fp.min_x, fp.max_x do
-				for z = fp.min_z, fp.max_z do
-					place_node(pos, rotation, {x = x, y = 0, z = z}, floor_mat)
-				end
-			end
-		end
-
-		-- Walls
-		local wh = opts.wall_height or 3
-		for y = 1, wh do
-			for x = -math.floor(ws_x / 2), math.floor(ws_x / 2) do
-				place_node(pos, rotation, {x = x, y = y, z = -math.floor(ws_z / 2)}, wall_mat)
-				place_node(pos, rotation, {x = x, y = y, z = math.floor(ws_z / 2)}, wall_mat)
-			end
-			for z = -math.floor(ws_z / 2) + 1, math.floor(ws_z / 2) - 1 do
-				place_node(pos, rotation, {x = -math.floor(ws_x / 2), y = y, z = z}, wall_mat)
-				place_node(pos, rotation, {x = math.floor(ws_x / 2), y = y, z = z}, wall_mat)
-			end
-		end
-
-		-- Door (replace wall node)
-		local door_off = opts.door_offset or {x = 0, z = math.floor(ws_z / 2)}
-		place_node(pos, rotation, {x = door_off.x, y = 1, z = door_off.z}, door_mat)
-		place_node(pos, rotation, {x = door_off.x, y = 2, z = door_off.z}, door_top_mat)
-		local door_back = {x = door_off.x, y = 1, z = door_off.z - 1}
-		local back_in_fp = false
-		if fp then
-			back_in_fp = door_back.x >= fp.min_x and door_back.x <= fp.max_x and door_back.z >= fp.max_z
-		end
-		if not back_in_fp then
-			-- clear a walkable space in front of door
-			place_node(pos, rotation, {x = door_off.x, y = 1, z = door_off.z + 1}, "air")
-			place_node(pos, rotation, {x = door_off.x, y = 2, z = door_off.z + 1}, "air")
-		end
-
-		-- Windows
-		for _, w in ipairs(opts.windows or {}) do
-			if window_mat ~= "air" then
-				place_node(pos, rotation, w, window_mat)
-			end
-		end
-
-		-- Roof
-		local rh = opts.roof_height or (ws_y - wh - 1)
-		local ro = opts.roof_overlap or 0
-		for y = wh + 1, ws_y do
-			local inset = (y == wh + 1) and ro or 0
-			for x = -math.floor(ws_x / 2) + inset, math.floor(ws_x / 2) - inset do
-				for z = -math.floor(ws_z / 2) + inset, math.floor(ws_z / 2) - inset do
-					place_node(pos, rotation, {x = x, y = y, z = z}, roof_mat)
-				end
-			end
-		end
-
-		-- Interior
-		for _, item in ipairs(interior) do
-			local imat = mats.get_material(item.mat, {required = false}) or "air"
-			if imat ~= "air" then
-				place_node(pos, rotation, {x = item.x, y = item.y, z = item.z}, imat)
-			end
-		end
-
-		return true
-	end
+--- Place a node whose facedir must point along a direction given in the
+-- structure's own local space (so it survives rotation).
+local function place_facing(pos, rotation, local_pos, node_name, local_dir)
+  if node_name == "air" then return end
+  local world_dir = perfectworld.structures.rotate_point(local_dir, rotation)
+  place_node(pos, rotation, local_pos, node_name,
+    minetest.dir_to_facedir({x = world_dir.x, y = 0, z = world_dir.z}))
 end
 
--- === pw_house_small_v1: compact 7x5, low roof, 1 window ===
-local house_small_v1_ok = perfectworld.structures.register("pw_house_small_v1", {
-	version = 1,
-	size = {x = 7, y = 5, z = 5},
-	origin = {x = 3, y = 0, z = 2},
-	categories = {"settlement", "house", "residential"},
-	weight = 1,
-	allowed_settlement_types = {"village", "hamlet"},
-	rotations = {0, 90, 180, 270},
-	terrain = {
-		max_slope = 2, foundation_depth = 2, clearance_height = 5,
-		modification_margin = 1, max_cut_depth = 3, max_fill_height = 3,
-		-- Must cover the whole built extent: the wall ring stands at
-		-- +/-floor(size/2), so a smaller footprint leaves the outer wall
-		-- columns without foundation and they float over a cut.
-		building_footprint = {min_x = -3, max_x = 3, min_z = -2, max_z = 2},
-	},
-	connectors = {
-		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 3}},
-	},
-	placement = {
-		type = "lua",
-		generator = make_building_generator({
-			wall_mat = "wall", roof_mat = "roof", floor_mat = "floor",
-			wall_height = 3, roof_height = 2, roof_overlap = 0,
-			door_offset = {x = 0, z = 2},
-			windows = {{x = -2, y = 2, z = 0}},
-			interior = {
-				{x = 1, y = 1, z = 0, mat = "light"},
-				{x = -1, y = 1, z = -1, mat = "table"},
-			},
-				building_footprint = {min_x = -3, max_x = 3, min_z = -2, max_z = 2},
-		}),
-		preflight = function()
-			-- ensure critical materials exist
-			perfectworld.compat.get_material("wall")
-			return true
-		end,
-	},
-})
-if not house_small_v1_ok then
-	minetest.log("error", "[pw_structures] failed to register pw_house_small_v1")
+local function fill_box(pos, rotation, x1, y1, z1, x2, y2, z2, node_name)
+  if node_name == nil then return end
+  for x = math.min(x1, x2), math.max(x1, x2) do
+    for y = math.min(y1, y2), math.max(y1, y2) do
+      for z = math.min(z1, z2), math.max(z1, z2) do
+        place_node(pos, rotation, {x = x, y = y, z = z}, node_name)
+      end
+    end
+  end
 end
 
--- === pw_house_small_v2: wider 9x6, higher walls, 2 windows, door on long side ===
-local house_small_v2_ok = perfectworld.structures.register("pw_house_small_v2", {
-	version = 1,
-	size = {x = 9, y = 6, z = 5},
-	origin = {x = 4, y = 0, z = 2},
-	categories = {"settlement", "house", "residential"},
-	weight = 1,
-	allowed_settlement_types = {"village", "hamlet"},
-	rotations = {0, 90, 180, 270},
-	terrain = {
-		max_slope = 2, foundation_depth = 2, clearance_height = 6,
-		modification_margin = 1, max_cut_depth = 3, max_fill_height = 3,
-		building_footprint = {min_x = -4, max_x = 4, min_z = -2, max_z = 2},
-	},
-	connectors = {
-		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 3}},
-	},
-	placement = {
-		type = "lua",
-		generator = make_building_generator({
-			wall_mat = "wall", roof_mat = "roof", floor_mat = "floor",
-			wall_height = 4, roof_height = 2, roof_overlap = 1,
-			door_offset = {x = 0, z = 2},
-			windows = {{x = -3, y = 2, z = 0}, {x = 3, y = 2, z = 0}},
-			interior = {
-				{x = 0, y = 1, z = 0, mat = "light"},
-				{x = 2, y = 1, z = 0, mat = "container"},
-			},
-				building_footprint = {min_x = -4, max_x = 4, min_z = -2, max_z = 2},
-		}),
-		preflight = function()
-			perfectworld.compat.get_material("wall")
-			return true
-		end,
-	},
-})
-if not house_small_v2_ok then
-	minetest.log("error", "[pw_structures] failed to register pw_house_small_v2")
+--- Pitched roof: ridge along Z, slopes falling in -X and +X, one-block eaves,
+-- slab ridge cap, filled gable triangles at both ends.
+local function build_pitched_roof(pos, rotation, opts)
+  local half_w, half_d = opts.half_w, opts.half_d
+  local base_y = opts.base_y
+  local stair = opts.stair
+  local slab = opts.slab
+  local gable = opts.gable
+
+  for step = 0, half_w + 1 do
+    local y = base_y + step
+    local left = -half_w - 1 + step
+    local right = half_w + 1 - step
+    if left > right then break end
+
+    if left == right then
+      for z = -half_d - 1, half_d + 1 do
+        place_node(pos, rotation, {x = left, y = y, z = z}, slab)
+      end
+      break
+    end
+
+    for z = -half_d - 1, half_d + 1 do
+      place_facing(pos, rotation, {x = left, y = y, z = z}, stair, {x = -1, y = 0, z = 0})
+      place_facing(pos, rotation, {x = right, y = y, z = z}, stair, {x = 1, y = 0, z = 0})
+    end
+
+    -- Close the two gable triangles so the attic is not open to the weather.
+    for x = left + 1, right - 1 do
+      place_node(pos, rotation, {x = x, y = y, z = -half_d}, gable)
+      place_node(pos, rotation, {x = x, y = y, z = half_d}, gable)
+    end
+  end
 end
 
--- === pw_barn_v1: wide 9x6 storage building, no windows, large door ===
-local barn_v1_ok = perfectworld.structures.register("pw_barn_v1", {
-	version = 1,
-	size = {x = 9, y = 6, z = 7},
-	origin = {x = 4, y = 0, z = 3},
-	categories = {"settlement", "farmyard", "storage"},
-	weight = 1,
-	allowed_settlement_types = {"village"},
-	rotations = {0, 90, 180, 270},
-	terrain = {
-		max_slope = 2, foundation_depth = 2, clearance_height = 6,
-		modification_margin = 1, max_cut_depth = 3, max_fill_height = 3,
-		building_footprint = {min_x = -4, max_x = 4, min_z = -3, max_z = 3},
-	},
-	connectors = {
-		{type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 4}},
-	},
-	placement = {
-		type = "lua",
-		generator = make_building_generator({
-			wall_mat = "wall", roof_mat = "roof", floor_mat = "floor",
-			wall_height = 4, roof_height = 2, roof_overlap = 1,
-			door_offset = {x = 0, z = 3},
-			windows = {},
-			interior = {
-				{x = -2, y = 1, z = -1, mat = "container"},
-				{x = 2, y = 1, z = -1, mat = "container"},
-			},
-				building_footprint = {min_x = -4, max_x = 4, min_z = -3, max_z = 3},
-		}),
-		preflight = function()
-			perfectworld.compat.get_material("wall")
-			return true
-		end,
-	},
-})
-if not barn_v1_ok then
-	minetest.log("error", "[pw_structures] failed to register pw_barn_v1")
+--- Windows spaced along a wall run, skipping corners and the door column.
+local function window_offsets(span, skip)
+  local offsets = {}
+  for value = -span + 1, span - 1 do
+    if value ~= skip and (value + span) % 2 == 0 then
+      table.insert(offsets, value)
+    end
+  end
+  return offsets
 end
 
--- === pw_well_v1: small 3x4 public structure, open ===
-local well_v1_ok = perfectworld.structures.register("pw_well_v1", {
-	version = 1,
-	size = {x = 3, y = 4, z = 3},
-	origin = {x = 1, y = 0, z = 1},
-	categories = {"settlement", "public", "well"},
-	weight = 1,
-	allowed_settlement_types = {"village", "hamlet"},
-	rotations = {0},
-	terrain = {
-		max_slope = 1, foundation_depth = 1, clearance_height = 4,
-		modification_margin = 0, max_cut_depth = 2, max_fill_height = 2,
-		building_footprint = {min_x = -1, max_x = 1, min_z = -1, max_z = 1},
-	},
-	connectors = {},
-	placement = {
-		type = "lua",
-		generator = function(context, def)
-			local pos = context.prepared_position or context.pos
-			local rotation = context.rotation or 0
-			local cobble = palette_material(context.palette, "foundation", "cobble")
-			local water = perfectworld.compat.get_material("water")
+--- The shared house/barn builder.
+--
+-- opts: width, depth, wall_height, door_offset_x, windows (bool),
+--       plinth (bool), interior (function), wide_door (bool)
+local function make_building_generator(opts)
+  return function(context, def)
+    local pos = context.prepared_position or context.pos
+    local rotation = context.rotation or 0
+    local palette = context.palette
 
-			-- 4 corner pillars
-			for y = 1, 3 do
-				place_node(pos, rotation, {x = -1, y = y, z = -1}, cobble)
-				place_node(pos, rotation, {x = 1, y = y, z = -1}, cobble)
-				place_node(pos, rotation, {x = -1, y = y, z = 1}, cobble)
-				place_node(pos, rotation, {x = 1, y = y, z = 1}, cobble)
-			end
-			-- top cross-beams
-			place_node(pos, rotation, {x = 0, y = 4, z = -1}, cobble)
-			place_node(pos, rotation, {x = 0, y = 4, z = 1}, cobble)
-			place_node(pos, rotation, {x = -1, y = 4, z = 0}, cobble)
-			place_node(pos, rotation, {x = 1, y = 4, z = 0}, cobble)
-			-- water in the center
-			if water ~= "air" then
-				place_node(pos, rotation, {x = 0, y = 0, z = 0}, water)
-				place_node(pos, rotation, {x = 0, y = 1, z = 0}, water)
-				place_node(pos, rotation, {x = 0, y = 2, z = 0}, water)
-			end
-			return true
-		end,
-		preflight = function()
-			perfectworld.compat.get_material("cobble")
-			return true
-		end,
-	},
+    local wall = pal(palette, "wall_primary", "wall")
+    local base = pal(palette, "wall_secondary", "foundation")
+    local post = pal(palette, "wall_post", "tree")
+    local floor = pal(palette, "floor_block", "floor")
+    local stair = pal(palette, "roof_stair", "roof")
+    local slab = pal(palette, "roof_slab", "roof")
+    local window = pal(palette, "window", "window")
+    local door = perfectworld.compat.get_material("door", {required = false})
+    local door_top = perfectworld.compat.get_material("door_top", {required = false})
+
+    local width = opts.width
+    local depth = opts.depth
+    local height = opts.wall_height or 4
+    local half_w = math.floor(width / 2)
+    local half_d = math.floor(depth / 2)
+    local door_x = opts.door_offset_x or 0
+
+    -- Floor, and a solid course directly beneath it so nothing is ever
+    -- standing on air once the plinth is carried down by prepare_terrain.
+    fill_box(pos, rotation, -half_w, 0, -half_d, half_w, 0, half_d, floor)
+    fill_box(pos, rotation, -half_w, -1, -half_d, half_w, -1, half_d, base)
+
+    -- Clear the interior volume before building: leftovers from terrain
+    -- preparation would otherwise be sealed inside the walls.
+    fill_box(pos, rotation, -half_w, 1, -half_d, half_w, height + 1, half_d, "air")
+
+    for y = 1, height do
+      local course = wall
+      if opts.plinth ~= false and y == 1 then course = base end
+      for x = -half_w, half_w do
+        place_node(pos, rotation, {x = x, y = y, z = -half_d}, course)
+        place_node(pos, rotation, {x = x, y = y, z = half_d}, course)
+      end
+      for z = -half_d + 1, half_d - 1 do
+        place_node(pos, rotation, {x = -half_w, y = y, z = z}, course)
+        place_node(pos, rotation, {x = half_w, y = y, z = z}, course)
+      end
+    end
+
+    -- Timber corner posts, full height.
+    for y = 1, height do
+      for _, corner in ipairs({
+        {x = -half_w, z = -half_d}, {x = half_w, z = -half_d},
+        {x = -half_w, z = half_d}, {x = half_w, z = half_d},
+      }) do
+        place_node(pos, rotation, {x = corner.x, y = y, z = corner.z}, post)
+      end
+    end
+
+    -- Windows on every wall, at head height, evenly spaced.
+    if opts.windows ~= false and window ~= "air" then
+      for _, x in ipairs(window_offsets(half_w, door_x)) do
+        place_node(pos, rotation, {x = x, y = 2, z = half_d}, window)
+        place_node(pos, rotation, {x = x, y = 2, z = -half_d}, window)
+      end
+      for _, z in ipairs(window_offsets(half_d, nil)) do
+        place_node(pos, rotation, {x = -half_w, y = 2, z = z}, window)
+        place_node(pos, rotation, {x = half_w, y = 2, z = z}, window)
+      end
+      -- Taller houses get a second row, which reads as a real facade.
+      if height >= 4 then
+        for _, x in ipairs(window_offsets(half_w, door_x)) do
+          place_node(pos, rotation, {x = x, y = 3, z = half_d}, window)
+          place_node(pos, rotation, {x = x, y = 3, z = -half_d}, window)
+        end
+      end
+    end
+
+    -- Doorway on the +Z wall (the connector side), sill level with the floor.
+    local door_width = opts.wide_door and 1 or 0
+    for dx = -door_width, door_width do
+      place_node(pos, rotation, {x = door_x + dx, y = 1, z = half_d}, "air")
+      place_node(pos, rotation, {x = door_x + dx, y = 2, z = half_d}, "air")
+      if opts.wide_door and height >= 4 then
+        place_node(pos, rotation, {x = door_x + dx, y = 3, z = half_d}, "air")
+      end
+    end
+    if not opts.wide_door then
+      place_facing(pos, rotation, {x = door_x, y = 1, z = half_d}, door, {x = 0, y = 0, z = 1})
+      place_facing(pos, rotation, {x = door_x, y = 2, z = half_d}, door_top, {x = 0, y = 0, z = 1})
+    end
+    -- Porch: the doorstep under the eave, and a second step clear of the
+    -- roof overhang. The connector sits on the outer one, so nothing
+    -- overhangs the point a villager walks to.
+    for dz = 1, 2 do
+      place_node(pos, rotation, {x = door_x, y = 0, z = half_d + dz}, base)
+      place_node(pos, rotation, {x = door_x, y = 1, z = half_d + dz}, "air")
+      place_node(pos, rotation, {x = door_x, y = 2, z = half_d + dz}, "air")
+    end
+
+    -- Ceiling over the living space, then the roof itself.
+    fill_box(pos, rotation, -half_w + 1, height + 1, -half_d + 1,
+      half_w - 1, height + 1, half_d - 1, floor)
+    build_pitched_roof(pos, rotation, {
+      half_w = half_w, half_d = half_d, base_y = height + 1,
+      stair = stair, slab = slab, gable = wall,
+    })
+
+    if opts.interior then
+      opts.interior({
+        pos = pos, rotation = rotation, palette = palette,
+        half_w = half_w, half_d = half_d, height = height, door_x = door_x,
+        place = function(local_pos, node_name, param2)
+          place_node(pos, rotation, local_pos, node_name, param2)
+        end,
+        place_facing = function(local_pos, node_name, local_dir)
+          place_facing(pos, rotation, local_pos, node_name, local_dir)
+        end,
+      })
+    end
+
+    return true
+  end
+end
+
+--- Furniture common to dwellings: bed, hearth light, table, storage, work top.
+local function dwelling_interior(ctx)
+  local palette = ctx.palette
+  local hw, hd = ctx.half_w, ctx.half_d
+  local slab = pal(palette, "roof_slab", "roof")
+  local fence = pal(palette, "fence", "fence")
+
+  local bed_bottom = "mcl_beds:bed_red_bottom"
+  local bed_top = "mcl_beds:bed_red_top"
+  if minetest.registered_nodes[bed_bottom] and minetest.registered_nodes[bed_top] then
+    -- Head against the back wall, foot towards the room.
+    ctx.place_facing({x = -hw + 1, y = 1, z = -hd + 1}, bed_bottom, {x = 0, y = 0, z = 1})
+    ctx.place_facing({x = -hw + 1, y = 1, z = -hd + 2}, bed_top, {x = 0, y = 0, z = 1})
+  end
+
+  local table_top = slab
+  if fence ~= "air" then
+    ctx.place({x = hw - 1, y = 1, z = -hd + 1}, fence)
+    ctx.place({x = hw - 1, y = 2, z = -hd + 1}, table_top)
+  end
+
+  local crafting = "mcl_crafting_table:crafting_table"
+  if minetest.registered_nodes[crafting] then
+    ctx.place({x = hw - 1, y = 1, z = hd - 1}, crafting)
+  end
+
+  local chest = perfectworld.compat.get_material("container", {required = false})
+  if chest ~= "air" then
+    ctx.place_facing({x = -hw + 1, y = 1, z = hd - 1}, chest, {x = 0, y = 0, z = 1})
+  end
+
+  local lantern = "mcl_lanterns:lantern_floor"
+  local light = minetest.registered_nodes[lantern] and lantern
+    or perfectworld.compat.get_material("light", {required = false})
+  if light ~= "air" then
+    ctx.place({x = 0, y = ctx.height, z = 0}, light)
+  end
+
+  local pot = "mcl_flowers:poppy"
+  if minetest.registered_nodes[pot] then
+    ctx.place({x = 0, y = 1, z = -hd + 1}, pot)
+  end
+end
+
+--- Storage buildings: hay, barrels, no bed.
+local function barn_interior(ctx)
+  local hw, hd = ctx.half_w, ctx.half_d
+  local hay = "mcl_farming:hay_block"
+  if minetest.registered_nodes[hay] then
+    for x = -hw + 1, -hw + 2 do
+      for z = -hd + 1, hd - 1 do
+        ctx.place({x = x, y = 1, z = z}, hay)
+      end
+    end
+    ctx.place({x = -hw + 1, y = 2, z = -hd + 1}, hay)
+  end
+  local barrel = "mcl_barrels:barrel_closed"
+  if minetest.registered_nodes[barrel] then
+    ctx.place({x = hw - 1, y = 1, z = -hd + 1}, barrel)
+    ctx.place({x = hw - 1, y = 1, z = -hd + 2}, barrel)
+  end
+  local chest = perfectworld.compat.get_material("container", {required = false})
+  if chest ~= "air" then
+    ctx.place_facing({x = hw - 1, y = 1, z = hd - 1}, chest, {x = 0, y = 0, z = 1})
+  end
+  local light = perfectworld.compat.get_material("light", {required = false})
+  if light ~= "air" then
+    ctx.place({x = 0, y = ctx.height, z = 0}, light)
+  end
+end
+
+local function house_terrain(extra)
+  -- Vanilla villages cut and fill to make their plots; so do we. The
+  -- modified volume stays inside the footprint plus one block of margin, so
+  -- a deeper cut buys buildable ground without carving a platform.
+  local terrain = {
+    max_slope = 3, foundation_depth = 3, clearance_height = 8,
+    modification_margin = 1, max_cut_depth = 4, max_fill_height = 4,
+    max_plinth_depth = 12,
+  }
+  for key, value in pairs(extra or {}) do terrain[key] = value end
+  return terrain
+end
+
+local function register_building(name, spec)
+  local half_w = math.floor(spec.width / 2)
+  local half_d = math.floor(spec.depth / 2)
+  local roof_height = half_w + 2
+  local ok = perfectworld.structures.register(name, {
+    version = 2,
+    size = {x = spec.width + 2, y = spec.wall_height + roof_height + 1, z = spec.depth + 2},
+    origin = {x = half_w + 1, y = 0, z = half_d + 1},
+    categories = spec.categories,
+    weight = 1,
+    allowed_settlement_types = {"village", "hamlet"},
+    rotations = {0, 90, 180, 270},
+    terrain = house_terrain({
+      building_footprint = {
+        min_x = -half_w, max_x = half_w,
+        min_z = -half_d, max_z = half_d + 2,
+      },
+    }),
+    connectors = {
+      {type = "road", side = "south", offset = 0,
+       offset_pos = {x = spec.door_offset_x or 0, y = 0, z = half_d + 2}},
+    },
+    placement = {
+      type = "lua",
+      generator = make_building_generator(spec),
+      preflight = function()
+        perfectworld.compat.get_material("wall")
+        return true
+      end,
+    },
+  })
+  if not ok then
+    minetest.log("error", "[pw_structures] failed to register " .. name)
+  end
+end
+
+register_building("pw_house_small_v1", {
+  width = 5, depth = 5, wall_height = 4, door_offset_x = 0,
+  categories = {"settlement", "house", "residential"},
+  interior = dwelling_interior,
 })
-if not well_v1_ok then
-	minetest.log("error", "[pw_structures] failed to register pw_well_v1")
+
+register_building("pw_house_small_v2", {
+  width = 7, depth = 5, wall_height = 4, door_offset_x = -1,
+  categories = {"settlement", "house", "residential"},
+  interior = dwelling_interior,
+})
+
+register_building("pw_house_long_v1", {
+  width = 9, depth = 5, wall_height = 4, door_offset_x = 1,
+  categories = {"settlement", "house", "residential"},
+  interior = dwelling_interior,
+})
+
+register_building("pw_house_tall_v1", {
+  width = 5, depth = 7, wall_height = 5, door_offset_x = 0,
+  categories = {"settlement", "house", "residential"},
+  interior = dwelling_interior,
+})
+
+--- Farm interior: storage and a work top, no bed — the field is outside.
+local function farm_interior(ctx)
+  local hw, hd = ctx.half_w, ctx.half_d
+  local hay = "mcl_farming:hay_block"
+  if minetest.registered_nodes[hay] then
+    ctx.place({x = -hw + 1, y = 1, z = -hd + 1}, hay)
+    ctx.place({x = -hw + 1, y = 1, z = -hd + 2}, hay)
+    ctx.place({x = -hw + 1, y = 2, z = -hd + 1}, hay)
+  end
+  local composter = "mcl_composters:composter"
+  if minetest.registered_nodes[composter] then
+    ctx.place({x = hw - 1, y = 1, z = -hd + 1}, composter)
+  end
+  local crafting = "mcl_crafting_table:crafting_table"
+  if minetest.registered_nodes[crafting] then
+    ctx.place({x = hw - 1, y = 1, z = hd - 1}, crafting)
+  end
+  local bed_bottom, bed_top = "mcl_beds:bed_red_bottom", "mcl_beds:bed_red_top"
+  if minetest.registered_nodes[bed_bottom] then
+    ctx.place_facing({x = 0, y = 1, z = -hd + 1}, bed_bottom, {x = 0, y = 0, z = 1})
+    ctx.place_facing({x = 0, y = 1, z = -hd + 2}, bed_top, {x = 0, y = 0, z = 1})
+  end
+  local chest = perfectworld.compat.get_material("container", {required = false})
+  if chest ~= "air" then
+    ctx.place_facing({x = -hw + 1, y = 1, z = hd - 1}, chest, {x = 0, y = 0, z = 1})
+  end
+  local lantern = "mcl_lanterns:lantern_floor"
+  local light = minetest.registered_nodes[lantern] and lantern
+    or perfectworld.compat.get_material("light", {required = false})
+  if light ~= "air" then
+    ctx.place({x = 0, y = ctx.height, z = 0}, light)
+  end
+end
+
+register_building("pw_farmstead_v1", {
+  width = 7, depth = 7, wall_height = 4, door_offset_x = 0,
+  categories = {"settlement", "farm", "hamlet"},
+  interior = farm_interior,
+})
+
+register_building("pw_barn_v1", {
+  width = 9, depth = 7, wall_height = 5, door_offset_x = 0,
+  wide_door = true, windows = false,
+  categories = {"settlement", "farmyard", "storage"},
+  interior = barn_interior,
+})
+
+-- === pw_well_v1: a real well — the water is boxed in and cannot escape ===
+local well_ok = perfectworld.structures.register("pw_well_v1", {
+  version = 2,
+  size = {x = 5, y = 6, z = 5},
+  origin = {x = 2, y = 0, z = 2},
+  categories = {"settlement", "public", "well"},
+  weight = 1,
+  allowed_settlement_types = {"village", "hamlet"},
+  rotations = {0, 90, 180, 270},
+  terrain = house_terrain({
+    max_slope = 2, foundation_depth = 3, clearance_height = 6,
+    building_footprint = {min_x = -2, max_x = 2, min_z = -2, max_z = 2},
+  }),
+  connectors = {
+    {type = "road", side = "south", offset = 0, offset_pos = {x = 0, y = 0, z = 2}},
+  },
+  placement = {
+    type = "lua",
+    generator = function(context, def)
+      local pos = context.prepared_position or context.pos
+      local rotation = context.rotation or 0
+      local palette = context.palette
+      local rim = pal(palette, "foundation", "cobble")
+      local deck = pal(palette, "wall_secondary", "cobble")
+      local slab = pal(palette, "roof_slab", "roof")
+      local post = pal(palette, "wall_post", "tree")
+      local water = perfectworld.compat.get_material("water", {required = false})
+
+      -- Paved apron so the well sits in a small square, not in the mud.
+      fill_box(pos, rotation, -2, 0, -2, 2, 0, 2, deck)
+      -- Watertight shaft: solid floor and four solid sides around one source.
+      fill_box(pos, rotation, -1, -1, -1, 1, -1, 1, rim)
+      fill_box(pos, rotation, -1, 0, -1, 1, 1, 1, rim)
+      fill_box(pos, rotation, -1, 2, -1, 1, 3, 1, "air")
+      for y = 0, 1 do
+        for _, side in ipairs({
+          {x = -1, z = 0}, {x = 1, z = 0}, {x = 0, z = -1}, {x = 0, z = 1},
+          {x = -1, z = -1}, {x = 1, z = -1}, {x = -1, z = 1}, {x = 1, z = 1},
+        }) do
+          place_node(pos, rotation, {x = side.x, y = y, z = side.z}, rim)
+        end
+      end
+      if water ~= "air" then
+        -- One source, one block, enclosed on all six sides but the top.
+        place_node(pos, rotation, {x = 0, y = 0, z = 0}, water)
+        place_node(pos, rotation, {x = 0, y = 1, z = 0}, water)
+      end
+
+      -- Four posts and a slab canopy.
+      for y = 2, 3 do
+        for _, corner in ipairs({
+          {x = -1, z = -1}, {x = 1, z = -1}, {x = -1, z = 1}, {x = 1, z = 1},
+        }) do
+          place_node(pos, rotation, {x = corner.x, y = y, z = corner.z}, post)
+        end
+      end
+      fill_box(pos, rotation, -1, 4, -1, 1, 4, 1, slab)
+      return true
+    end,
+    preflight = function()
+      perfectworld.compat.get_material("cobble")
+      return true
+    end,
+  },
+})
+if not well_ok then
+  minetest.log("error", "[pw_structures] failed to register pw_well_v1")
 end
 
 minetest.log("action", "[pw_structures] loaded")
