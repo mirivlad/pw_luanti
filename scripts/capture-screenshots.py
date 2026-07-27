@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,11 +24,23 @@ WORLD = "data/worlds/perfectworld"
 
 
 def find_client_display():
-    """DISPLAY/XAUTHORITY of the running headless Luanti client."""
-    out = subprocess.run(["pgrep", "-f", "luanti --go"],
-                         capture_output=True, text=True).stdout.split()
-    for pid in out:
+    """DISPLAY/XAUTHORITY of the headless Luanti client running under Xvfb.
+
+    This must never fall back to the desktop session: `import -window root`
+    captures whatever display it is pointed at, and pointing it at :0 would
+    photograph the user's screen instead of the game. So we require:
+      * a real client binary, not the xvfb-run wrapper shell (which inherits
+        the desktop DISPLAY) and not this script's own shell;
+      * an XAUTHORITY under /tmp/xvfb-run.*, which only an Xvfb server has.
+    Anything else is refused rather than guessed.
+    """
+    pids = subprocess.run(["pgrep", "-f", "luanti"],
+                          capture_output=True, text=True).stdout.split()
+    rejected = []
+    for pid in pids:
         try:
+            with open(f"/proc/{pid}/cmdline", "rb") as handle:
+                argv = handle.read().decode("utf-8", "replace").split("\0")
             with open(f"/proc/{pid}/environ", "rb") as handle:
                 env = dict(
                     item.split("=", 1)
@@ -36,9 +49,23 @@ def find_client_display():
                 )
         except OSError:
             continue
-        if "DISPLAY" in env and "XAUTHORITY" in env:
-            return env["DISPLAY"], env["XAUTHORITY"]
-    raise SystemExit("no running Luanti client found (start it via scripts/run-testkit.sh)")
+
+        executable = os.path.basename(argv[0]) if argv and argv[0] else ""
+        if executable != "luanti" or "--go" not in argv:
+            continue
+
+        display, xauth = env.get("DISPLAY"), env.get("XAUTHORITY")
+        if display and xauth and xauth.startswith("/tmp/xvfb-run."):
+            return display, xauth
+        rejected.append(f"pid {pid}: DISPLAY={display} XAUTHORITY={xauth}")
+
+    message = ["no headless Luanti client on an Xvfb display was found.",
+               "Start one with scripts/run-testkit.sh."]
+    if rejected:
+        message.append("Refused (not an Xvfb display — capturing these would "
+                       "screenshot the desktop):")
+        message.extend("  " + item for item in rejected)
+    raise SystemExit("\n".join(message))
 
 
 def rc(chatcmd, params=""):
@@ -55,9 +82,23 @@ def rc(chatcmd, params=""):
     os.replace(tmp, os.path.join(WORLD, "rc_cmd.json"))
 
 
-def grab(display, xauth, path):
+def find_game_window(display, xauth):
+    """Window id of the Luanti window, so shots are the game and not the
+    letterboxed Xvfb root."""
     env = dict(os.environ, DISPLAY=display, XAUTHORITY=xauth)
-    subprocess.run(["import", "-window", "root", path], env=env, check=True)
+    listing = subprocess.run(["xwininfo", "-root", "-children"],
+                             env=env, capture_output=True, text=True).stdout
+    for line in listing.splitlines():
+        if '"luanti"' in line.lower() or "luanti" in line.lower():
+            match = re.search(r"(0x[0-9a-fA-F]+)", line.strip())
+            if match and "root window" not in line:
+                return match.group(1)
+    return "root"
+
+
+def grab(display, xauth, window, path):
+    env = dict(os.environ, DISPLAY=display, XAUTHORITY=xauth)
+    subprocess.run(["import", "-window", window, path], env=env, check=True)
 
 
 def main() -> int:
@@ -66,6 +107,8 @@ def main() -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--limit", type=int, default=6,
                         help="number of settlements to photograph")
+    parser.add_argument("--ids", default="",
+                        help="comma-separated settlement ids to photograph, in order")
     parser.add_argument("--settle", type=float, default=6.0,
                         help="seconds to wait for the client to render after a move")
     args = parser.parse_args()
@@ -74,12 +117,21 @@ def main() -> int:
         raise SystemExit("ImageMagick 'import' is required")
 
     display, xauth = find_client_display()
-    print(f"client display={display} xauthority={xauth}")
+    window = find_game_window(display, xauth)
+    print(f"client display={display} xauthority={xauth} window={window}")
 
     with open(args.shotlist) as handle:
         shotlist = json.load(handle)
 
-    settlements = shotlist["settlements"][: args.limit]
+    if args.ids:
+        wanted = [item.strip() for item in args.ids.split(",") if item.strip()]
+        by_id = {s["settlement_id"]: s for s in shotlist["settlements"]}
+        missing = [item for item in wanted if item not in by_id]
+        if missing:
+            raise SystemExit("not in shot list: " + ", ".join(missing))
+        settlements = [by_id[item] for item in wanted]
+    else:
+        settlements = shotlist["settlements"][: args.limit]
     os.makedirs(args.out, exist_ok=True)
 
     rc("pw_photo_setup")
@@ -105,7 +157,7 @@ def main() -> int:
             filename = "{:02d}_{}_{}_{}.png".format(
                 index, settlement["archetype"], settlement["biome_family"], shot["name"])
             path = os.path.join(args.out, filename)
-            grab(display, xauth, path)
+            grab(display, xauth, window, path)
             print(f"    {shot['name']:9} -> {filename}")
 
             metadata.append({

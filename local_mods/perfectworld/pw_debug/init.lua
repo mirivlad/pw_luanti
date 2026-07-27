@@ -503,6 +503,14 @@ minetest.register_chatcommand("pw_photo_setup", {
     if player.set_physics_override then
       player:set_physics_override({gravity = 0})
     end
+    -- Clouds sit at y=120 and turn any elevated overview shot into a white
+    -- rectangle; even lighting keeps shots comparable between settlements.
+    if player.set_clouds then
+      player:set_clouds({density = 0})
+    end
+    if player.override_day_night_ratio then
+      player:override_day_night_ratio(1)
+    end
     -- убрать интерфейс
     player:hud_set_flags({
       hotbar = false,
@@ -1292,6 +1300,97 @@ minetest.register_chatcommand("pw_village_batch", {
   end,
 })
 
+--- Re-run materialization for every settlement that already exists and report
+-- whether anything changed. This is the idempotency check a restart needs.
+minetest.register_chatcommand("pw_village_rematerialize", {
+  params = "",
+  description = "Re-attempt materialization of every existing settlement and diff the result",
+  privs = {server = true},
+  func = function()
+    local before_structures = #perfectworld.planner.list_structures()
+    local before_roads = #perfectworld.planner.list_roads()
+    local before_placed = #perfectworld.planner.list_placed()
+
+    local rows = {}
+    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+      local stored = perfectworld.planner.get_settlement_plan(id)
+      local settlement = stored and stored.settlement
+      if settlement then
+        -- Rebuild the candidate from the region plan, exactly as the mapgen
+        -- hook would.
+        local candidate
+        local rx, rz = perfectworld.get_region_coords(settlement.center_pos)
+        local plan = perfectworld.planner.plan_region(rx, rz)
+        for _, c in ipairs(plan.settlement_candidates or {}) do
+          if c.id == id then
+            candidate = c
+            candidate.region_id = plan.id
+          end
+        end
+        local row = {
+          settlement_id = id,
+          before = {
+            status = settlement.status,
+            lot_count = settlement.lot_count,
+            exact_plan_fingerprint = settlement.exact_plan_fingerprint,
+            structural_fingerprint = settlement.structural_fingerprint,
+            road_graph_fingerprint = settlement.road_graph_fingerprint,
+            archetype = settlement.archetype,
+            palette_id = settlement.palette_id,
+            structure_ids = settlement.structure_ids,
+            road_ids = settlement.road_ids,
+          },
+          candidate_found = candidate ~= nil,
+        }
+        if candidate then
+          local ok, result = perfectworld.planner.materialize_village_new(candidate)
+          local after = type(result) == "table" and result.settlement or nil
+          row.ok = ok
+          row.from_cache = type(result) == "table" and result.from_cache or false
+          if after then
+            row.after = {
+              status = after.status,
+              lot_count = after.lot_count,
+              exact_plan_fingerprint = after.exact_plan_fingerprint,
+              structural_fingerprint = after.structural_fingerprint,
+              road_graph_fingerprint = after.road_graph_fingerprint,
+              archetype = after.archetype,
+              palette_id = after.palette_id,
+              structure_ids = after.structure_ids,
+              road_ids = after.road_ids,
+            }
+          end
+        end
+        table.insert(rows, row)
+      end
+    end
+
+    local report = {
+      generated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+      before = {
+        structures = before_structures,
+        roads = before_roads,
+        placed = before_placed,
+      },
+      after = {
+        structures = #perfectworld.planner.list_structures(),
+        roads = #perfectworld.planner.list_roads(),
+        placed = #perfectworld.planner.list_placed(),
+      },
+      rows = rows,
+    }
+    local stamp = os.date("!%Y%m%d_%H%M%S")
+    local path = write_world_file("pw_rematerialize_" .. stamp .. ".json",
+      minetest.write_json(report, true))
+    return true, string.format(
+      "written: %s settlements=%d structures %d->%d roads %d->%d placed %d->%d",
+      tostring(path), #rows,
+      report.before.structures, report.after.structures,
+      report.before.roads, report.after.roads,
+      report.before.placed, report.after.placed)
+  end,
+})
+
 -- === Screenshot support ===
 
 --- Place the test player exactly and aim at a target. Screenshots need a
@@ -1404,13 +1503,17 @@ minetest.register_chatcommand("pw_village_shotlist", {
           local dx, dz = rx - lot.center.x, rz - lot.center.z
           local length = math.max(math.sqrt(dx * dx + dz * dz), 0.001)
           local from = {
-            x = math.floor(rx + dx / length * 4),
-            z = math.floor(rz + dz / length * 4),
+            x = math.floor(rx + dx / length * 7),
+            z = math.floor(rz + dz / length * 7),
           }
+          local target_y = ground(lot.center.x, lot.center.z, center_y) + 3
+          -- On a slope the street can sit well below the lot; clamping keeps
+          -- the shot at eye level instead of staring at the sky.
+          local from_y = math.max(ground(from.x, from.z, center_y) + 2, target_y - 3)
           table.insert(shots, {
             name = "ground",
-            from = {x = from.x, y = ground(from.x, from.z, center_y) + 2, z = from.z},
-            target = {x = lot.center.x, y = ground(lot.center.x, lot.center.z, center_y) + 3, z = lot.center.z},
+            from = {x = from.x, y = from_y, z = from.z},
+            target = {x = lot.center.x, y = target_y, z = lot.center.z},
           })
         end
 

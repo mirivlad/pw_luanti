@@ -66,8 +66,14 @@ log "server ready"
 if [ "$START_CLIENT" = "1" ]; then
   stop_client
   log "starting pwbot client on display :$DISPLAY_NUM"
+  # A writable copy: the client rewrites its config on exit.
+  CLIENT_CONF="$ROOT/run/client.conf"
+  cp "$ROOT/config/client.conf" "$CLIENT_CONF"
+
   setsid xvfb-run --auto-servernum --server-num="$DISPLAY_NUM" \
+    --server-args="-screen 0 1280x1000x24" \
     "$LUANTI_CLIENT" --go --address 127.0.0.1 --port 30000 \
+    --config "$CLIENT_CONF" \
     --name "$LTK_USER" --password-file "$LTK_PASSWORD_FILE" \
     >> "$CLIENT_LOG" 2>&1 &
   echo $! > "$PID_FILE"
