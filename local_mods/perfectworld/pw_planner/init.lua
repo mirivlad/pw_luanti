@@ -783,9 +783,58 @@ local function build_road_network(seed_key, center, profile, terrain)
     end
   end
 
+  -- Trim each street to the stretch that is actually walkable ground.
+  --
+  -- Road polylines are laid out geometrically, before any terrain is
+  -- consulted. Left untrimmed, a street runs straight off a clifftop, down a
+  -- rock face and into the sea, which is the single most obvious way a
+  -- generated settlement stops looking built.
+  local MAX_STEP = 3
+  local function trim(points)
+    if #points < 2 then return points end
+    -- Start from the point nearest the settlement centre: that is the part of
+    -- the street the village is actually built around.
+    local anchor, best = 1, math.huge
+    for i, pt in ipairs(points) do
+      local dx, dz = pt.x - cx, pt.z - cz
+      local d = dx * dx + dz * dz
+      if d < best then best, anchor = d, i end
+    end
+
+    local function usable(pt, previous_y)
+      local y = terrain.surface_y(pt.x, pt.z)
+      if not y then return nil end
+      if terrain.is_liquid(pt.x, pt.z) then return nil end
+      if previous_y and math.abs(y - previous_y) > MAX_STEP then return nil end
+      return y
+    end
+
+    local anchor_y = usable(points[anchor])
+    if not anchor_y then return {} end
+
+    local first, last = anchor, anchor
+    local previous_y = anchor_y
+    for i = anchor - 1, 1, -1 do
+      local y = usable(points[i], previous_y)
+      if not y then break end
+      previous_y, first = y, i
+    end
+    previous_y = anchor_y
+    for i = anchor + 1, #points do
+      local y = usable(points[i], previous_y)
+      if not y then break end
+      previous_y, last = y, i
+    end
+
+    local trimmed = {}
+    for i = first, last do table.insert(trimmed, points[i]) end
+    return trimmed
+  end
+
   -- Drop degenerate roads (fewer than two distinct points).
   local cleaned = {}
   for _, road in ipairs(roads) do
+    road.points = trim(road.points)
     local distinct = {}
     local count = 0
     for _, pt in ipairs(road.points) do

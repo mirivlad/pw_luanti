@@ -164,6 +164,36 @@ T.register_test("perfectworld", "village_plan_keeps_roads_out_of_buildings", fun
   end
 end)
 
+T.register_test("perfectworld", "village_roads_stay_on_walkable_ground", function(ctx)
+  -- Regression: road polylines were laid out geometrically before any terrain
+  -- was consulted, so a street ran off the clifftop, down the rock face and
+  -- into the sea. Every consecutive pair of road points must now sit on real
+  -- ground and stay within one terrace step of each other.
+  local specs = {"steep_slope", "cliff", "rolling", "shoreline"}
+  local checked = 0
+  for i, name in ipairs(specs) do
+    local sampler = terrain(name)
+    local candidate = make_candidate("roadtrim_v2_" .. i, i * 4, -i * 2,
+      11000 + i * 420, -11000 - i * 380)
+    local plan = perfectworld.planner.plan_village(candidate, nil, sampler)
+    for _, road in ipairs(plan.roads) do
+      for p = 1, #road.points - 1 do
+        local a, b = road.points[p], road.points[p + 1]
+        local ya = sampler.surface_y(a.x, a.z)
+        local yb = sampler.surface_y(b.x, b.z)
+        ctx.assert.not_nil(ya, "road point without ground in " .. candidate.id)
+        ctx.assert.not_nil(yb, "road point without ground in " .. candidate.id)
+        ctx.assert.is_false(sampler.is_liquid(b.x, b.z),
+          "road crosses unbuildable ground in " .. candidate.id)
+        ctx.assert.is_true(math.abs(yb - ya) <= 3, string.format(
+          "road step of %d blocks in %s (%s)", math.abs(yb - ya), candidate.id, name))
+        checked = checked + 1
+      end
+    end
+  end
+  ctx.assert.is_true(checked > 0, "expected at least one road segment to check")
+end)
+
 T.register_test("perfectworld", "village_lot_rotation_is_supported_by_its_structure", function(ctx)
   -- Regression: wells only support rotation 0, but the old planner assigned a
   -- random rotation from {0,90,180,270}, so 3 out of 4 wells failed to place.
