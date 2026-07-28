@@ -14,6 +14,7 @@ chunksize = 5
 load_mod_pw_core = true
 load_mod_pw_compat_mcl = true
 load_mod_pw_structures = true
+load_mod_pw_schemes = true
 load_mod_pw_planner = true
 load_mod_pw_roads = true
 load_mod_pw_settlements = true
