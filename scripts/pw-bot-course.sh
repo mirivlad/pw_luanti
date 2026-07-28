@@ -14,8 +14,8 @@ DISPLAY_NUMBER="${PW_COURSE_DISPLAY:-121}"
 ACTION="${1:-info}"
 
 case "$ACTION" in
-    build|remove|info|start) ;;
-    *) echo "Usage: scripts/pw-bot-course.sh <build|remove|info|start>" >&2; exit 2 ;;
+    build|remove|info|start|door) ;;
+    *) echo "Usage: scripts/pw-bot-course.sh <build|remove|info|start|door>" >&2; exit 2 ;;
 esac
 
 say() { echo "[course $(date +%T)] $*"; }

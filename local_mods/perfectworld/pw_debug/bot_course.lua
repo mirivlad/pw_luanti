@@ -412,7 +412,7 @@ end
 -- === Command =================================================================
 
 minetest.register_chatcommand("pw_bot_course", {
-  params = "<build|remove|info|start> [player]",
+  params = "<build|remove|info|start|door> [player]",
   description = "Build, remove or inspect the PW Bot obstacle course",
   privs = {server = true},
   func = function(name, param)
@@ -437,6 +437,50 @@ minetest.register_chatcommand("pw_bot_course", {
         built.origin.x, built.origin.y, built.origin.z,
         built.landmarks.start.x, built.landmarks.start.y, built.landmarks.start.z,
         built.landmarks.door.x, built.landmarks.door.y, built.landmarks.door.z)
+    end
+
+    if action == "door" then
+      -- Diagnostic, not part of the course. When the bot clicks the door and
+      -- nothing happens, there are two very different explanations: the click
+      -- never became an interaction, or the door was never a working door. This
+      -- calls the door's own `on_rightclick` from the server, as the player, and
+      -- reports what the node was before and after. If the door does not open
+      -- here it will not open for any client either, and the bot is innocent.
+      local record = course.info()
+      if not record then return false, "no course is built" end
+      local player = minetest.get_player_by_name(who)
+      if not player then return false, who .. " is not connected" end
+
+      local bottom = record.landmarks.door
+      local top = {x = bottom.x, y = bottom.y + 1, z = bottom.z}
+      local rows = {}
+      for label, spot in pairs({bottom = bottom, top = top}) do
+        local node = minetest.get_node(spot)
+        local meta = minetest.get_meta(spot)
+        rows[#rows + 1] = string.format("%s (%d,%d,%d) %s param2=%d is_open=%d",
+          label, spot.x, spot.y, spot.z, node.name, node.param2,
+          meta:get_int("is_open"))
+      end
+
+      local node = minetest.get_node(bottom)
+      local def = minetest.registered_nodes[node.name]
+      if not def then return false, "no definition for " .. node.name end
+      if not def.on_rightclick then
+        return false, node.name .. " has no on_rightclick: it is not a working door"
+      end
+      def.on_rightclick(bottom, node, player, ItemStack(""), nil)
+      local opened_b, opened_t = minetest.get_node(bottom).name, minetest.get_node(top).name
+      rows[#rows + 1] = "after on_rightclick: " .. opened_b .. " / " .. opened_t
+
+      -- Put it back. A diagnostic that leaves the door standing open makes the
+      -- next acceptance run walk through it and call that a success — which is
+      -- exactly the false green this course exists to prevent.
+      local reopened = minetest.registered_nodes[opened_b]
+      if reopened and reopened.on_rightclick then
+        reopened.on_rightclick(bottom, minetest.get_node(bottom), player, ItemStack(""), nil)
+      end
+      rows[#rows + 1] = "restored: " .. minetest.get_node(bottom).name
+      return true, table.concat(rows, " | ")
     end
 
     if action == "remove" then

@@ -193,15 +193,13 @@ class InteractionController:
                 {"distance": round(distance, 2), "reach": REACH_NODES,
                  "diagnosis": "target_out_of_reach"})
 
-        aim = self.movement.face_position(target)
-        if not aim.ok:
+        on_target, pitch_error, crosshair = self._aim_until_on_target(target)
+        if not on_target:
             return InteractionOutcome(
-                aim.status, False, "could not aim at the target",
-                {"diagnosis": "could_not_aim", "aim_status": aim.status})
-
-        # Pitch matters for a door: its lower half sits below eye level, and a
-        # body looking dead ahead points at the wall above it.
-        pitch_error = self._aim_pitch_at(target)
+                "blocked", False, "could not get the crosshair onto the target",
+                {"diagnosis": "could_not_aim", "distance": round(distance, 2),
+                 "pitch_error_degrees": round(math.degrees(pitch_error), 2),
+                 "crosshair": _crosshair_summary(crosshair)})
 
         before = self._observed_state(target)
         if not before["tags"] and not before["node_name"]:
@@ -212,6 +210,15 @@ class InteractionController:
                  "crosshair": _crosshair_summary(self._target_under_crosshair())})
 
         already_open = "door_open" in before["tags"] or "gate_open" in before["tags"]
+
+        # Start from a clean keyboard. A held sneak changes what "use" means:
+        # the engine calls the pointed node's `on_rightclick` only when the
+        # player is *not* sneaking, and otherwise places whatever is in hand
+        # instead. That is exactly what the server log recorded — the bot put a
+        # block down at the doorstep instead of opening the door in front of it —
+        # and with an empty hand the same state makes the press do nothing at
+        # all. Whatever left a key down, an interaction should not inherit it.
+        released = self.input.release_all()
 
         hand_empty, held = self._empty_hand()
 
@@ -265,6 +272,7 @@ class InteractionController:
             "aimed_at": _crosshair_summary(aimed_at),
             "hand_empty": hand_empty,
             "held": held,
+            "keys_released_first": released,
         }
 
         if expect != "state_change":
@@ -316,6 +324,59 @@ class InteractionController:
         wanted = math.atan2(target["y"] - (state.y + EYE_HEIGHT), horizontal)
         return self.movement.look_at_pitch(wanted)
 
+    def _crosshair_is_on(self, target) -> tuple[bool, dict]:
+        """Is the crosshair on the target's column, within a node either way?"""
+        crosshair = self._target_under_crosshair()
+        # The position of what was hit belongs to the *target*, not to the node
+        # description nested inside it. Reading it from the node gave None every
+        # time, and the aim check then rejected a crosshair that was sitting on
+        # the door and naming it correctly.
+        target_document = (crosshair.get("target") or {})
+        spot = target_document.get("position") or {}
+        if not spot:
+            return False, crosshair
+        here = (round(float(spot.get("x", 0))), round(float(spot.get("y", 0))),
+                round(float(spot.get("z", 0))))
+        wanted = (round(float(target["x"])), round(float(target["y"])),
+                  round(float(target["z"])))
+        return ((here[0], here[2]) == (wanted[0], wanted[2])
+                and abs(here[1] - wanted[1]) <= TARGET_VERTICAL_SLACK), crosshair
+
+    def _aim_until_on_target(self, target) -> tuple[bool, float, dict]:
+        """Aim at the target, check, and try its other levels if that missed.
+
+        Aiming once and trusting the arithmetic is what put the crosshair on the
+        floor. A door is named by its lower node, and standing on the doorstep
+        that node is more than a metre below eye level barely a metre away — so
+        "look at the target" resolves to looking almost straight down, and the
+        ray strikes the floor at the bot's own feet long before it reaches the
+        door.
+
+        A person opening a door looks at the door, roughly level. So the levels
+        are tried nearest-to-eye-height first, and each attempt is checked
+        against what the crosshair actually reports rather than assumed.
+        """
+        self.movement.face_position(target)
+        try:
+            eye_y = self.bridge.self_state().y + EYE_HEIGHT
+        except (BridgeUnavailable, BridgeRefused):
+            eye_y = float(target["y"])
+
+        # A door occupies its named node and the one above it. Sort the
+        # candidate heights by how close each is to level with the eyes.
+        levels = sorted((target["y"] + offset for offset in (1, 0, 2)),
+                        key=lambda y: abs(y - eye_y))
+        pitch_error = 0.0
+        crosshair: dict = {}
+        for level in levels:
+            aim = {"x": target["x"], "y": level, "z": target["z"]}
+            pitch_error = self._aim_pitch_at(aim)
+            time.sleep(0.15)
+            on_target, crosshair = self._crosshair_is_on(target)
+            if on_target:
+                return True, pitch_error, crosshair
+        return False, pitch_error, crosshair
+
     def metrics(self) -> dict:
         return {"interactions": self.interactions}
 
@@ -326,6 +387,10 @@ def _crosshair_summary(document) -> dict:
     node = target.get("node") or {}
     return {
         "node": node.get("name"),
-        "position": node.get("position"),
+        # `position` is a field of the target, not of the node description
+        # nested in it. Reading it from the node reported null on every hit and
+        # made a correct crosshair look like a miss.
+        "position": target.get("position"),
+        "distance": target.get("distance"),
         "semantics": node.get("semantics"),
     }
