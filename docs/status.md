@@ -1,11 +1,11 @@
 # Project Status
 
 **Date:** 2026-07-28
-**Test baseline:** 324 total | 322 PASS | 2 FAIL | 0 SKIP | 0 ERROR
-(163 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
+**Test baseline:** 329 total | 327 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+(168 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
 62 in `pw_player_bot`, 6 in `smoke`)
 
-Measured on `master` after the schemes catalogue landed.
+Measured on `master` after the catalogue was wired into the planner.
 
 ## Implemented Modules
 
@@ -39,10 +39,17 @@ there were 10 buildings and no styles at all.
 | Style | Belongs in | What carries it |
 |-------|-----------|-----------------|
 | `vernacular` | anywhere (fallback) | 45° gables, timber posts, stone plinth, local wood |
-| `nordic` | cold, taiga, tundra, snowy, mountain | pitch 2 turf roofs, longhouses, few small windows |
-| `japanese` | temperate, warm, jungle, wet | raised floors, verandas, eaves two nodes past the wall |
-| `mediterranean` | desert, savanna, warm, dry, mesa | flat terraced roofs with parapets, pale stone cubes |
-| `stilt` | wet, jungle, swamp, temperate, warm | everything on posts over open water, light roofs |
+| `nordic` | cold, rocky | pitch 2 turf roofs, longhouses, few small windows |
+| `japanese` | temperate, forest, wet | raised floors, verandas, eaves two nodes past the wall |
+| `mediterranean` | dry, rocky | flat terraced roofs with parapets, pale stone cubes |
+| `stilt` | wet, coastal | everything on posts over open water, light roofs |
+
+The families are the seven `pw_compat_mcl` reports: cold, coastal, dry, forest,
+rocky, temperate, wet. Four styles originally named invented ones — taiga,
+jungle, desert and so on — which matched nothing, so only the fallback was ever
+chosen and every village in the world came out vernacular. A test now rejects a
+style naming a family the game does not have, and another requires every family
+to offer something beyond the fallback.
 
 A scheme names its footprint, wall height, roof kind, door side, interior
 fixtures by role, and the village roles it can fill. A style adds shared
@@ -59,9 +66,20 @@ Roof kinds: `gable`, `hip`, `pent`, `flat`, `wide_eaved_gable`. All of them plac
 stairs rising towards the ridge — the shared builder means one wrong direction
 would be wrong in every style at once, so a test asserts it.
 
-Not yet wired into the planner's grammar: `pw_planner` still composes villages
-from the ten `pw_structures` definitions. Connecting the two is the next step,
-and it is what turns 61 schemes into 61 buildings a player can walk into.
+Wired into the planner. Each scheme registers as an ordinary `pw_structures`
+definition whose generator calls the scheme builder, so terrain analysis,
+rotation, the plinth, rollback and the reachability check all apply unchanged. A
+village picks one style and every lot draws from it.
+
+Roles taken from the catalogue: `dwelling`, `storage`, `barn`. Left with the
+pre-catalogue structures: `central` (the well) and the specialization production
+buildings (`farm`, `fishery`, `sawmill`, `mine_workshop`), because those carry
+worksite contracts the scheme vocabulary does not yet express.
+
+Verified in the world rather than only in the plan, with
+`scripts/pw-village-check.sh`: a radius-9 batch produced 26 new structures, 15
+from the catalogue, japanese and stilt villages both appearing, and no
+settlement mixing two styles.
 
 ## Village Generation System (grammar v3)
 
