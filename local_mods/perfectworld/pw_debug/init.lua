@@ -238,6 +238,107 @@ minetest.register_chatcommand("pw_roads_pave", {
   end,
 })
 
+minetest.register_chatcommand("pw_street_check", {
+  params = "[settlement_id]",
+  description = "Measure how walkable a settlement's own streets are",
+  privs = {interact = true},
+  func = function(name, param)
+    local id = param and param ~= "" and param or nil
+    if not id then
+      local player = minetest.get_player_by_name(name)
+      if not player then return false, "Player not found" end
+      local pos = player:get_pos()
+      if not pos then return false, "No position" end
+      local best, best_distance = nil, math.huge
+      for _, candidate in ipairs(perfectworld.settlements.list_ids()) do
+        local s = perfectworld.settlements.get(candidate)
+        if s and s.center_pos then
+          local dx, dz = pos.x - s.center_pos.x, pos.z - s.center_pos.z
+          local d = dx * dx + dz * dz
+          if d < best_distance then best, best_distance = candidate, d end
+        end
+      end
+      if not best then return false, "No settlements found" end
+      id = best
+    end
+
+    local settlement = perfectworld.settlements.get(id)
+    if not settlement then return false, "Settlement not found: " .. id end
+
+    -- Height, not material. A village street is surfaced from its own biome
+    -- palette, and several of those materials — dirt above all — occur
+    -- naturally everywhere, so asking "is the road material here" answers yes
+    -- on bare ground. What actually changed is the height profile, so that is
+    -- what is measured: the top of each column along the centreline, and how
+    -- far it steps from the one before.
+    local lines = {}
+    for _, road_id in ipairs(settlement.road_ids or {}) do
+      local road = perfectworld.roads.get(road_id)
+      if road and (road.path or road.points) then
+        local cells = perfectworld.planner._link_centreline(road)
+        local previous, biggest, over_one, missing = nil, 0, 0, 0
+        local worst_at, worst_from, worst_to = nil, nil, nil
+        -- Where to start looking: the settlement's own centre, then whatever
+        -- the last cell turned out to be.
+        local hint = settlement.center_pos and settlement.center_pos.y
+        if not hint or hint == 0 then hint = nil end
+        for _, cell in ipairs(cells) do
+          -- The surface a walker would stand on, near the street, not the
+          -- topmost node in the column. Two earlier versions of this check
+          -- measured the wrong thing and reported the road as broken: the
+          -- first found the topmost node of any kind, which is the tree beside
+          -- the street; the second found the topmost walkable one, which under
+          -- an overhang is the mountainside seventy nodes above the road. The
+          -- scan therefore starts a little above where the last cell was.
+          local top = nil
+          for y = (hint or 200) + 8, (hint and hint - 40 or -20), -1 do
+            local node = minetest.get_node({x = cell.x, y = y, z = cell.z}).name
+            if node ~= "air" and node ~= "ignore" then
+              local def = minetest.registered_nodes[node]
+              local above = minetest.get_node({x = cell.x, y = y + 1, z = cell.z}).name
+              local above2 = minetest.get_node({x = cell.x, y = y + 2, z = cell.z}).name
+              if def and def.walkable
+                and (above == "air" or above == "ignore")
+                and (above2 == "air" or above2 == "ignore") then
+                top = y
+                break
+              end
+            end
+          end
+          if not top then
+            missing = missing + 1
+            previous = nil
+          else
+            if previous then
+              local step = math.abs(top - previous)
+              if step > biggest then
+                biggest = step
+                worst_at, worst_from, worst_to = cell, previous, top
+              end
+              if step > 1 then over_one = over_one + 1 end
+            end
+            previous = top
+            hint = top
+          end
+        end
+        table.insert(lines, string.format(
+          "%s %s: %d cells, biggest step %d, %d step(s) above one, %d unreadable%s",
+          road.kind or "street", road_id, #cells, biggest, over_one, missing,
+          worst_at and string.format("  worst at (%d,%d) %d->%d on %s",
+            worst_at.x, worst_at.z, worst_from, worst_to,
+            minetest.get_node({x = worst_at.x, y = worst_to, z = worst_at.z}).name)
+            or ""))
+      end
+    end
+
+    if #lines == 0 then return true, id .. ": no street records" end
+    for _, line in ipairs(lines) do
+      minetest.log("action", "[pw_debug] pw_street_check " .. line)
+    end
+    return true, table.concat(lines, "\n")
+  end,
+})
+
 minetest.register_chatcommand("pw_road_check", {
   params = "[range]",
   description = "Read back the settlement roads on the ground around the player",

@@ -454,6 +454,95 @@ T.register_test("perfectworld", "a_links_centreline_has_no_holes_in_it", functio
     "the centreline skipped cells: " .. table.concat(jumps, " "))
 end)
 
+T.register_test("perfectworld", "a_paved_way_can_be_walked_from_end_to_end", function(ctx)
+  local pave = perfectworld.planner._pave_way
+  if not pave then
+    ctx.assert.not_nil(pave, "the planner must be able to pave a way")
+    return
+  end
+
+  -- Ground that goes wrong in every way a road can: a flat run, a gentle
+  -- climb, a cliff, and a dip. The claim is that what comes out is walkable
+  -- whatever went in — this is the same code village streets and the roads
+  -- between settlements both use, so one wrong profile would be wrong in both.
+  -- Inside the engine's map limit, which is a little over 31000: `set_node`
+  -- past it silently does nothing, and the first version of this test built
+  -- its hillside at 32100 and measured an empty world.
+  local origin = {x = 29800, z = -29800}
+  local base = 40
+  local heights = {}
+  local length = 48
+  for i = 1, length do
+    local y = base
+    if i > 12 and i <= 24 then y = base + math.floor((i - 12) / 2) end
+    if i > 24 and i <= 30 then y = base + 14 end
+    if i > 30 then y = base - 3 end
+    heights[i] = y
+  end
+
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 3, y = base - 12, z = origin.z - 4},
+      {x = origin.x + length + 3, y = base + 24, z = origin.z + 4})
+  end
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+  for i = 1, length do
+    local x = origin.x + i
+    for dz = -3, 3 do
+      for y = base - 10, base + 22 do
+        minetest.set_node({x = x, y = y, z = origin.z + dz},
+          {name = y <= heights[i] and ground or "air"})
+      end
+    end
+  end
+
+  perfectworld.planner._world_terrain.reset()
+  local cells = {}
+  for i = 1, length do cells[i] = {x = origin.x + i, z = origin.z} end
+  local placed = pave(cells, 1, length, {width = 1, surface = "road"})
+  ctx.assert.is_true(placed > 0, "the way must actually be laid")
+
+  local surface = perfectworld.compat.get_material("road", {required = false})
+  local previous, biggest, missing = nil, 0, 0
+  local floating = 0
+  for i = 1, length do
+    local found = nil
+    for y = base + 24, base - 12, -1 do
+      if minetest.get_node({x = cells[i].x, y = y, z = cells[i].z}).name == surface then
+        found = y
+        break
+      end
+    end
+    if not found then
+      missing = missing + 1
+      previous = nil
+    else
+      -- Nothing under the carriageway is a road hanging in the air.
+      local below = minetest.get_node({x = cells[i].x, y = found - 1, z = cells[i].z}).name
+      if below == "air" or below == "ignore" then floating = floating + 1 end
+      if previous then
+        local step = math.abs(found - previous)
+        if step > biggest then biggest = step end
+      end
+      previous = found
+    end
+  end
+
+  ctx.assert.equal(missing, 0, "every cell of the way must be paved")
+  ctx.assert.equal(floating, 0, "no stretch of the way may hang in the air")
+  ctx.assert.is_true(biggest <= 1,
+    "a walker steps up one node, and the way asked for " .. biggest)
+
+  for i = 1, length do
+    for dz = -3, 3 do
+      for y = base - 10, base + 22 do
+        minetest.set_node({x = origin.x + i, y = y, z = origin.z + dz}, {name = "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+end)
+
 T.register_test("perfectworld", "planning_the_same_region_twice_gives_the_same_roads", function(ctx)
   if not network.plan_links then
     ctx.assert.not_nil(network.plan_links, "roads must plan links between settlements")

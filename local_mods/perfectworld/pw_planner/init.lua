@@ -2096,63 +2096,181 @@ local function pave_cell(x, z, material_name)
   return true
 end
 
---- Lay a road surface strip perpendicular to the direction of travel, with a
--- smoothed height profile so the carriageway does not step block by block.
-local function place_road_strip(p1, p2, width, material_name)
-  local dx, dz = p2.x - p1.x, p2.z - p1.z
-  local length = math.sqrt(dx * dx + dz * dz)
-  if length < 0.001 then return 0 end
-  local offsets = perfectworld.roads.cross_section(dx, dz, width)
-  local steps = math.max(math.abs(dx), math.abs(dz), 1)
-  local placed = 0
 
-  -- Centreline profile first, limited to one block of rise per step.
-  local centre = {}
-  for s = 0, steps do
-    local t = s / steps
-    local cx = math.floor(p1.x + dx * t + 0.5)
-    local cz = math.floor(p1.z + dz * t + 0.5)
-    centre[s] = {x = cx, z = cz, y = paving_level(cx, cz)}
+--- The greatest rise between one node of road and the next.
+--
+-- One, because that is what a walker can step up. Everything about the height
+-- profile below exists to hold this, which is the difference between a road
+-- and a line of blocks laid on a hillside.
+local LINK_GRADE = 1
+
+--- How far past the chunk a stretch is paved, so neighbouring passes overlap
+--- instead of meeting at a seam neither of them smoothed.
+local LINK_SEAM_OVERLAP = 8
+
+--- The widest water a road will cross. Beyond this it is not a bridge, it is a
+--- causeway across a sea, and the road simply stops at the shore.
+local BRIDGE_MAX_SPAN = 48
+
+--- The centreline of a way, one cell per node travelled.
+--
+-- Takes anything with a `points` polyline: a village street and a road between
+-- two settlements are the same object as far as the ground is concerned.
+local function link_centreline(way)
+  local cells = {}
+  local last_key = nil
+  local points = way.points or way.path or {}
+  for i = 1, #points - 1 do
+    local from, to = points[i], points[i + 1]
+    local dx, dz = to.x - from.x, to.z - from.z
+    local steps = math.max(math.abs(dx), math.abs(dz), 1)
+    for s = 0, steps do
+      local t = s / steps
+      local x = math.floor(from.x + dx * t + 0.5)
+      local z = math.floor(from.z + dz * t + 0.5)
+      local key = x .. ":" .. z
+      if key ~= last_key then
+        cells[#cells + 1] = {x = x, z = z}
+        last_key = key
+      end
+    end
   end
-  for s = 1, steps do
-    local previous, current = centre[s - 1], centre[s]
-    if previous.y and current.y then
-      if current.y > previous.y + 1 then current.y = previous.y + 1 end
-      if current.y < previous.y - 1 then current.y = previous.y - 1 end
+  return cells
+end
+
+
+--- Flatten a run of ground heights into a profile a walker can follow.
+--
+-- The rule is one-sided: a road may be cut into a hill, never raised above it.
+-- Raising would leave the carriageway floating over the slope it is supposed to
+-- be part of, and every attempt to fill underneath turns a hillside into a
+-- viaduct. Cutting leaves a hollow way, which is what old roads actually are.
+--
+-- Two passes are enough and are exact. `min(raw[j] + |i - j|)` over every j is
+-- the lowest profile that both stays under the ground and never rises faster
+-- than the grade, and a forward min-pass followed by a backward one computes
+-- precisely that.
+local function walkable_profile(raw, first, last, grade)
+  grade = grade or LINK_GRADE
+  local y = {}
+  for i = first, last do y[i] = raw[i] end
+  for i = first + 1, last do
+    if y[i] and y[i - 1] and y[i] > y[i - 1] + grade then y[i] = y[i - 1] + grade end
+  end
+  for i = last - 1, first, -1 do
+    if y[i] and y[i + 1] and y[i] > y[i + 1] + grade then y[i] = y[i + 1] + grade end
+  end
+  return y
+end
+
+perfectworld.planner._walkable_profile = walkable_profile
+
+--- Which cells sit on water, and whether that water is narrow enough to bridge.
+local function bridgeable(water, first, last)
+  local ok = {}
+  local run_start = nil
+  for i = first, last + 1 do
+    if water[i] and i <= last then
+      run_start = run_start or i
+    elseif run_start then
+      local span = i - run_start
+      for j = run_start, i - 1 do ok[j] = span <= BRIDGE_MAX_SPAN end
+      run_start = nil
+    end
+  end
+  return ok
+end
+
+perfectworld.planner._bridgeable = bridgeable
+
+--- Lay one continuous stretch of a way.
+--
+-- The whole stretch shares one height profile. Paving segment by segment
+-- restarts the profile at every corner: on a slope the road drifts away from
+-- the ground within a segment and then jumps back to it at the next, which
+-- reads as a staircase with a cliff in it every forty nodes.
+--
+-- `opts.blocked(x, z)` marks ground the way may cross on the plan but must not
+-- touch in the world — a road drawn to a village centre would otherwise clear
+-- head-room straight through whatever was standing there.
+local function pave_way(cells, first, last, opts)
+  -- An explicit material wins over a role name: a village street is surfaced
+  -- from its own biome palette, so that a settlement in the desert is not
+  -- joined up in the same coarse dirt as one in a forest.
+  local surface = opts.material
+    or perfectworld.compat.get_material(opts.surface or "road", {required = false})
+  local deck = perfectworld.compat.get_material("wood_planks", {required = false})
+  local fill = perfectworld.compat.get_material("ground", {required = false})
+  local width = opts.width or 1
+  local blocked = opts.blocked
+
+  -- What the ground does under the stretch. Water is recorded at its surface:
+  -- a bridge is laid level with the bank, not on the lake bed.
+  local raw, water = {}, {}
+  for i = first, last do
+    local column = world_terrain.sample_column(cells[i].x, cells[i].z)
+    if column then
+      -- A deck already laid over this water reads as solid ground, and the next
+      -- pass — the neighbouring chunk's, overlapping this one — would replace
+      -- the planks with road surface and turn the bridge into a dirt causeway.
+      -- What is underneath still says water, so that is what is asked.
+      local underneath = minetest.get_node(
+        {x = cells[i].x, y = column.y - 1, z = cells[i].z}).name
+      water[i] = column.liquid == true
+        or perfectworld.compat.is_liquid_node(underneath)
+      raw[i] = water[i] and column.y
+        or (paving_level(cells[i].x, cells[i].z) or column.y)
     end
   end
 
-  for s = 0, steps do
-    local cell = centre[s]
-    if cell.y then
+  local y = walkable_profile(raw, first, last)
+  local crossable = bridgeable(water, first, last)
+
+  local placed, bridged, unbridged, deepest_cut = 0, 0, 0, 0
+  for i = first, last do
+    local level = y[i]
+    local skip = water[i] and not crossable[i]
+    if level and not skip then
+      -- Across the direction of travel, taken from the neighbours rather than
+      -- from one segment, so the strip does not kink at a corner.
+      local ahead = cells[math.min(i + 1, last)]
+      local behind = cells[math.max(i - 1, first)]
+      local offsets = perfectworld.roads.cross_section(
+        ahead.x - behind.x, ahead.z - behind.z, width)
+      local material = water[i] and deck or surface
+      local cut = (raw[i] and raw[i] > level) and (raw[i] - level) or 0
+      if cut > deepest_cut then deepest_cut = cut end
+      if water[i] then bridged = bridged + 1 end
+
       for _, offset in ipairs(offsets) do
-        local px = cell.x + offset.x
-        local pz = cell.z + offset.z
-        local y = cell.y
-        local existing = minetest.get_node({x = px, y = y, z = pz}).name
-        if not perfectworld.compat.is_liquid_node(existing) then
-          -- Cut anything above the carriageway, fill anything missing below.
-          for above = 1, 3 do
-            local pos = {x = px, y = y + above, z = pz}
+        local px, pz = cells[i].x + offset.x, cells[i].z + offset.z
+        if not (blocked and blocked(px, pz)) then
+          -- Head-room, and enough of it to see daylight out of a cutting.
+          for above = 1, math.max(3, cut + 3) do
+            local pos = {x = px, y = level + above, z = pz}
             local name = minetest.get_node(pos).name
-            if name ~= "air" and name ~= "ignore"
-              and not perfectworld.compat.is_liquid_node(name) then
+            if name ~= "air" and name ~= "ignore" then
               minetest.set_node(pos, {name = "air"})
             end
           end
-          minetest.set_node({x = px, y = y, z = pz}, {name = material_name})
-          local below = minetest.get_node({x = px, y = y - 1, z = pz}).name
+          minetest.set_node({x = px, y = level, z = pz}, {name = material})
+          local below = minetest.get_node({x = px, y = level - 1, z = pz}).name
           if below == "air" or below == "ignore" then
-            minetest.set_node({x = px, y = y - 1, z = pz},
-              {name = perfectworld.compat.get_material("ground", {required = false})})
+            minetest.set_node({x = px, y = level - 1, z = pz}, {name = fill})
           end
           placed = placed + 1
         end
       end
+    elseif skip then
+      unbridged = unbridged + 1
     end
   end
-  return placed
+
+  return placed, bridged, unbridged, deepest_cut
 end
+
+perfectworld.planner._pave_way = pave_way
+perfectworld.planner._link_centreline = link_centreline
 
 --- Build a walkable way from `from` to `to`, stepping at most one block per
 -- cell and cutting head-room, so a villager on foot can actually use it.
@@ -2405,11 +2523,22 @@ local function materialize_village_plan(plan, profile, candidate)
   end
 
   -- Roads and the short driveways that connect every placed lot to them.
+  --
+  -- A street is laid in one pass over its whole length, sharing one height
+  -- profile, for the same reason the roads between settlements are: paving
+  -- segment by segment restarted the profile at every corner, so on undulating
+  -- ground the carriageway drifted off the surface within a segment and stepped
+  -- back onto it at the next. That is the patchy street this project has been
+  -- looking at since the first screenshots.
   world_terrain.reset()
   for _, road in ipairs(plan.roads) do
     local nodes = 0
-    for i = 1, #road.points - 1 do
-      nodes = nodes + place_road_strip(road.points[i], road.points[i + 1], road.width or 2, road_material)
+    local cells = link_centreline(road)
+    if #cells >= 2 then
+      nodes = pave_way(cells, 1, #cells, {
+        width = road.width or 2,
+        material = road_material,
+      })
     end
     local road_record = {
       id = road.id,
@@ -3490,168 +3619,6 @@ end
 
 perfectworld.planner._standing_buildings = standing_buildings
 
---- The greatest rise between one node of road and the next.
---
--- One, because that is what a walker can step up. Everything about the height
--- profile below exists to hold this, which is the difference between a road
--- and a line of blocks laid on a hillside.
-local LINK_GRADE = 1
-
---- How far past the chunk a stretch is paved, so neighbouring passes overlap
---- instead of meeting at a seam neither of them smoothed.
-local LINK_SEAM_OVERLAP = 8
-
---- The widest water a road will cross. Beyond this it is not a bridge, it is a
---- causeway across a sea, and the road simply stops at the shore.
-local BRIDGE_MAX_SPAN = 48
-
---- The centreline of a link, one cell per node travelled.
-local function link_centreline(link)
-  local cells = {}
-  local last_key = nil
-  for i = 1, #(link.points or {}) - 1 do
-    local from, to = link.points[i], link.points[i + 1]
-    local dx, dz = to.x - from.x, to.z - from.z
-    local steps = math.max(math.abs(dx), math.abs(dz), 1)
-    for s = 0, steps do
-      local t = s / steps
-      local x = math.floor(from.x + dx * t + 0.5)
-      local z = math.floor(from.z + dz * t + 0.5)
-      local key = x .. ":" .. z
-      if key ~= last_key then
-        cells[#cells + 1] = {x = x, z = z}
-        last_key = key
-      end
-    end
-  end
-  return cells
-end
-
-perfectworld.planner._link_centreline = link_centreline
-
---- Flatten a run of ground heights into a profile a walker can follow.
---
--- The rule is one-sided: a road may be cut into a hill, never raised above it.
--- Raising would leave the carriageway floating over the slope it is supposed to
--- be part of, and every attempt to fill underneath turns a hillside into a
--- viaduct. Cutting leaves a hollow way, which is what old roads actually are.
---
--- Two passes are enough and are exact. `min(raw[j] + |i - j|)` over every j is
--- the lowest profile that both stays under the ground and never rises faster
--- than the grade, and a forward min-pass followed by a backward one computes
--- precisely that.
-local function walkable_profile(raw, first, last, grade)
-  grade = grade or LINK_GRADE
-  local y = {}
-  for i = first, last do y[i] = raw[i] end
-  for i = first + 1, last do
-    if y[i] and y[i - 1] and y[i] > y[i - 1] + grade then y[i] = y[i - 1] + grade end
-  end
-  for i = last - 1, first, -1 do
-    if y[i] and y[i + 1] and y[i] > y[i + 1] + grade then y[i] = y[i + 1] + grade end
-  end
-  return y
-end
-
-perfectworld.planner._walkable_profile = walkable_profile
-
---- Which cells sit on water, and whether that water is narrow enough to bridge.
-local function bridgeable(water, first, last)
-  local ok = {}
-  local run_start = nil
-  for i = first, last + 1 do
-    if water[i] and i <= last then
-      run_start = run_start or i
-    elseif run_start then
-      local span = i - run_start
-      for j = run_start, i - 1 do ok[j] = span <= BRIDGE_MAX_SPAN end
-      run_start = nil
-    end
-  end
-  return ok
-end
-
-perfectworld.planner._bridgeable = bridgeable
-
---- Lay one continuous stretch of a link.
---
--- The whole stretch shares one height profile. Paving segment by segment, as
--- village streets do, restarts the profile at every corner: on a slope the road
--- drifts away from the ground within a segment and then jumps back to it at the
--- next, which reads as a staircase with a cliff in it every forty nodes.
-local function pave_link_stretch(link, cells, first, last, blocked)
-  local surface = perfectworld.compat.get_material(link.surface or "road",
-    {required = false})
-  local deck = perfectworld.compat.get_material("wood_planks", {required = false})
-  local fill = perfectworld.compat.get_material("ground", {required = false})
-  local width = link.width or 1
-
-  -- What the ground does under the stretch. Water is recorded at its surface:
-  -- a bridge is laid level with the bank, not on the lake bed.
-  local raw, water = {}, {}
-  for i = first, last do
-    local column = world_terrain.sample_column(cells[i].x, cells[i].z)
-    if column then
-      -- A deck already laid over this water reads as solid ground, and the next
-      -- pass — the neighbouring chunk's, overlapping this one — would replace
-      -- the planks with road surface and turn the bridge into a dirt causeway.
-      -- What is underneath still says water, so that is what is asked.
-      local underneath = minetest.get_node(
-        {x = cells[i].x, y = column.y - 1, z = cells[i].z}).name
-      water[i] = column.liquid == true
-        or perfectworld.compat.is_liquid_node(underneath)
-      raw[i] = water[i] and column.y
-        or (paving_level(cells[i].x, cells[i].z) or column.y)
-    end
-  end
-
-  local y = walkable_profile(raw, first, last)
-  local crossable = bridgeable(water, first, last)
-
-  local placed, bridged, unbridged, deepest_cut = 0, 0, 0, 0
-  for i = first, last do
-    local level = y[i]
-    local skip = water[i] and not crossable[i]
-    if level and not skip then
-      -- Across the direction of travel, taken from the neighbours rather than
-      -- from one segment, so the strip does not kink at a corner.
-      local ahead = cells[math.min(i + 1, last)]
-      local behind = cells[math.max(i - 1, first)]
-      local offsets = perfectworld.roads.cross_section(
-        ahead.x - behind.x, ahead.z - behind.z, width)
-      local material = water[i] and deck or surface
-      local cut = (raw[i] and raw[i] > level) and (raw[i] - level) or 0
-      if cut > deepest_cut then deepest_cut = cut end
-      if water[i] then bridged = bridged + 1 end
-
-      for _, offset in ipairs(offsets) do
-        local px, pz = cells[i].x + offset.x, cells[i].z + offset.z
-        if not (blocked and blocked(px, pz)) then
-          -- Head-room, and enough of it to see daylight out of a cutting.
-          for above = 1, math.max(3, cut + 3) do
-            local pos = {x = px, y = level + above, z = pz}
-            local name = minetest.get_node(pos).name
-            if name ~= "air" and name ~= "ignore" then
-              minetest.set_node(pos, {name = "air"})
-            end
-          end
-          minetest.set_node({x = px, y = level, z = pz}, {name = material})
-          local below = minetest.get_node({x = px, y = level - 1, z = pz}).name
-          if below == "air" or below == "ignore" then
-            minetest.set_node({x = px, y = level - 1, z = pz}, {name = fill})
-          end
-          placed = placed + 1
-        end
-      end
-    elseif skip then
-      unbridged = unbridged + 1
-    end
-  end
-
-  return placed, bridged, unbridged, deepest_cut
-end
-
-perfectworld.planner._pave_link_stretch = pave_link_stretch
 
 --- Lay the stretch of every settlement link that crosses this chunk.
 function perfectworld.planner.pave_links_in_chunk(minp, maxp)
@@ -3692,7 +3659,11 @@ function perfectworld.planner.pave_links_in_chunk(minp, maxp)
       last = math.min(#cells, last + LINK_SEAM_OVERLAP)
       segments = 1
       local bridged, unbridged
-      nodes, bridged, unbridged = pave_link_stretch(link, cells, first, last, blocked)
+      nodes, bridged, unbridged = pave_way(cells, first, last, {
+        width = link.width or 1,
+        surface = link.surface,
+        blocked = blocked,
+      })
       result.bridged = result.bridged + bridged
       result.unbridged = result.unbridged + unbridged
     end
