@@ -134,10 +134,38 @@ worksite cameras.
 | Most settlements come out `hillside` on this mapgen | The hillside fallback fires whenever a flat archetype finds no viable layout, which is common on `carpathian` | On flat ground hillside looks like linear |
 | No complete fishing village was found inside valid world coordinates in this seed's acceptance sample | Viable shore geometry must fit two houses, a fishery and a dock without using water or a cliff | Fishery and dock components pass physical tests, but full real-world fishing composition still needs a deterministic acceptance fixture |
 | `/pw_village_batch` accepts radii beyond the engine's usable coordinate range | The development command enumerates arbitrary region coordinates and does not clamp to `mapgen_limit` | It can write non-visualizable diagnostic records; normal mapgen does not generate those regions |
+| House interiors are close to empty | A dwelling places a bed and a chest and nothing else | A village reads as a shell from the inside |
 
-Fix directions: add a valid-coordinate deterministic fishing acceptance seed,
-order lots by approach quality before accepting them, clamp debug batch radius,
-and widen carriageway smoothing to bridge one-block gaps.
+Fixed: roof stairs pointed downhill, so every course rose at its outer edge and
+dropped at its inner one and the roof read as a row of combs from the gable end.
+`roof_stairs_rise_towards_the_ridge` now measures orientation; nothing did
+before.
+
+Fix directions: furnish interiors, add a valid-coordinate deterministic fishing
+acceptance seed, order lots by approach quality before accepting them, clamp
+debug batch radius, and widen carriageway smoothing to bridge one-block gaps.
+
+## PW Bot: measured on the obstacle course
+
+The third part exists. `pw_bot_runtime` drives a real client through XTEST; the
+course in `pw_debug/bot_course.lua` gives it deliberate obstacles, half of which
+it is meant to fail. Run it with `scripts/pw-bot-course.sh build` then
+`pw-bot-runtime scenario course`.
+
+| Step | Verdict |
+|------|---------|
+| `walk_straight`, `turn_corner`, `step_up`, `climb_stairs` | reached — the body walks, turns, climbs a kerb and takes stairs |
+| `open_door` | **fails**: `the target is no longer observable after the click` |
+| `enter_room`, `leave_room` | **fail**: blocked by the door that did not open |
+| the five obstacles that must fail | all report `blocked`, but by the *door*, not by their own obstacle — green for the wrong reason, and proving nothing |
+
+Established about the door: the course builds it correctly (bottom at the
+walking surface, top above, metadata set so `mcl_doors` will answer a click);
+the bot aims at the top half, which `mcl_doors`' `on_rightclick` handles; the
+node is still `_b_1`, i.e. closed, afterwards; and `client.conf` does resolve and
+exist, so the client is launched with the keyboard `place` binding. What has not
+been established is whether the key press reaches the server as a rightclick at
+all. That is where to look next.
 
 ## Missing Systems
 
