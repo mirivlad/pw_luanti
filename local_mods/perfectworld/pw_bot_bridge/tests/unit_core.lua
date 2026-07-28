@@ -128,6 +128,30 @@ test("oracle_road_cells_match_the_shared_world_raster", function(ctx)
     "oracle and world must report the same road cells")
 end)
 
+test("oracle_prefers_persisted_actual_structure_entrances", function(ctx)
+  local entrances = B.impl.oracle_perception.structure_entrances({
+    structure_id = "oracle_persisted_entrance",
+    structure_name = "pw_house_small_v1",
+    position = {x = 10, y = 20, z = 30},
+    rotation = 0,
+    road_point = {x = 8, z = 30},
+    entrances = {{
+      position = {x = 14, y = 22, z = 35},
+      road_point = {x = 13, z = 35},
+    }},
+  })
+  ctx.assert.equal(#entrances, 1,
+    "a persisted actual entrance must replace definition-derived guesses")
+  ctx.assert.equal(entrances[1].source, "structure_record",
+    "oracle must identify the persisted source")
+  ctx.assert.equal(entrances[1].position.x, 14,
+    "oracle must report the actual persisted threshold")
+  ctx.assert.equal(entrances[1].position.y, 22,
+    "actual threshold height must survive")
+  ctx.assert.equal(entrances[1].road_point.x, 13,
+    "actual entrance road point must survive")
+end)
+
 -- === Registry ===
 
 test("registry_stores_and_returns_a_bot_record", function(ctx)

@@ -297,6 +297,14 @@ T.register_test("perfectworld", "materialize_chunk_places_farmstead_once", funct
   )
   if not record then return end
   ctx.assert.equal(record.structure_name, "pw_farmstead_v1", "farmstead structure name")
+  ctx.assert.is_true(#(record.entrances or {}) >= 1,
+    "materialized structure record must persist its actual entrance")
+  if record.entrances and record.entrances[1] then
+    local entrance = record.entrances[1].position
+    ctx.assert.not_nil(entrance, "persisted entrance must have a position")
+    ctx.assert.equal(entrance.y, record.position.y,
+      "persisted entrance must retain the materialized floor height")
+  end
 
   local placed_before = #perfectworld.planner.list_placed()
   perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)

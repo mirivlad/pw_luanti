@@ -23,12 +23,47 @@ end
 -- === Settlement Record API ===
 -- Persisted via pw_planner mod_storage. This module provides accessors.
 
+function perfectworld.settlements.normalize(data)
+  if type(data) ~= "table" then return nil end
+  local settlement
+  if type(data.settlement) == "table" then
+    settlement = data.settlement
+  elseif data.settlement_id then
+    settlement = data
+  end
+  if type(settlement) ~= "table" then return nil end
+
+  local plan = type(data.plan) == "table" and data.plan or {}
+  local profile = type(data.profile) == "table" and data.profile or {}
+  local normalized = deep_copy(settlement)
+
+  normalized.settlement_grammar_version =
+    tonumber(settlement.settlement_grammar_version)
+    or tonumber(plan.settlement_grammar_version)
+    or tonumber(profile.settlement_grammar_version)
+    or 2
+  normalized.center_pos = deep_copy(settlement.center_pos
+    or plan.center
+    or profile.selected_site)
+  normalized.bounds = deep_copy(settlement.bounds or plan.bounds)
+  normalized.archetype = settlement.archetype or plan.archetype
+  normalized.size_class = settlement.size_class or plan.size_class
+  normalized.plan_lots = deep_copy(plan.lots or settlement.plan_lots or {})
+  normalized.ecology = deep_copy(settlement.ecology or profile.ecology or {})
+  normalized.worksite_ids = deep_copy(settlement.worksite_ids or {})
+  normalized.worksite_kinds = deep_copy(settlement.worksite_kinds or {})
+  normalized.worksites = deep_copy(settlement.worksites or {})
+  normalized.resource_features = deep_copy(settlement.resource_features
+    or profile.resource_features or {})
+  normalized.errors = deep_copy(settlement.errors or {})
+  normalized.warnings = deep_copy(settlement.warnings or {})
+
+  return normalized
+end
+
 function perfectworld.settlements.get(settlement_id)
   local data = perfectworld.planner.get_settlement_plan(settlement_id)
-  if data and data.settlement then
-    return deep_copy(data.settlement)
-  end
-  return nil
+  return perfectworld.settlements.normalize(data)
 end
 
 function perfectworld.settlements.list_ids()

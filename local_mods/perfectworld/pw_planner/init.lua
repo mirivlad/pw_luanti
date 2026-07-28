@@ -2366,6 +2366,14 @@ local function materialize_village_plan(plan, profile, candidate)
       -- foot cannot climb into a door hanging above the ground.
       local floor_y = (lot.position and lot.position.y) or paving_level(door.x, door.z)
       lot.door = {x = door.x, y = floor_y, z = door.z}
+      local structure_record = perfectworld.planner.get_structure(lot.structure_id)
+      if structure_record then
+        structure_record.entrances = {{
+          position = deep_copy(lot.door),
+          road_point = deep_copy(lot.road_point),
+        }}
+        perfectworld.planner.record_structure(structure_record)
+      end
       build_door_approach(door, floor_y, lot.road_point, road_material, profile,
         function(x, z)
           for _, other in ipairs(plan.lots) do
@@ -3188,6 +3196,20 @@ local function materialize_single_structure(candidate)
 				region_id = candidate.region_id,
 				settlement_id = candidate.id,
 			}
+			record.entrances = {}
+			for _, connector in ipairs((def and def.connectors) or {}) do
+				if connector.type == "road" and connector.offset_pos then
+					local rotated = perfectworld.structures.rotate_point(
+						connector.offset_pos, result.rotation or 0)
+					record.entrances[#record.entrances + 1] = {
+						position = {
+							x = result.position.x + rotated.x,
+							y = result.position.y + (rotated.y or 0),
+							z = result.position.z + rotated.z,
+						},
+					}
+				end
+			end
 			perfectworld.planner.record_structure(record)
 			perfectworld.planner.mark_placed(sid)
 			return true, record

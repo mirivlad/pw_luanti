@@ -111,6 +111,88 @@ T.register_test("perfectworld", "ecology_specialization_definitions_are_defensiv
     "callers must not mutate registered specialization definitions")
 end)
 
+T.register_test("perfectworld", "settlement_records_normalize_legacy_and_grammar_v3_data", function(ctx)
+  ctx.assert.not_nil(perfectworld.settlements.normalize,
+    "settlements must expose defensive record normalization")
+  if not perfectworld.settlements.normalize then return end
+
+  local legacy = {
+    plan = {
+      center = {x = 10, z = 20},
+      bounds = {min_x = 1, max_x = 2, min_z = 3, max_z = 4},
+      lots = {{index = 1, role = "dwelling"}},
+    },
+    profile = {},
+    settlement = {
+      settlement_id = "legacy_normalization",
+      center_pos = {x = 101, y = 12, z = 202},
+      bounds = {min_x = 90, max_x = 112, min_z = 190, max_z = 214},
+      structure_ids = {"legacy_house"},
+      road_ids = {"legacy_road"},
+    },
+  }
+  local normalized_legacy = perfectworld.settlements.normalize(legacy)
+  ctx.assert.not_nil(normalized_legacy, "legacy wrapped record must normalize")
+  if not normalized_legacy then return end
+  ctx.assert.equal(normalized_legacy.settlement_grammar_version, 2,
+    "legacy records must report grammar version 2")
+  ctx.assert.equal(normalized_legacy.center_pos.x, 101,
+    "actual settlement center must beat planned center")
+  ctx.assert.equal(normalized_legacy.bounds.max_z, 214,
+    "actual settlement bounds must beat planned bounds")
+  ctx.assert.equal(#normalized_legacy.plan_lots, 1,
+    "legacy plan lots must remain available separately")
+  ctx.assert.equal(#normalized_legacy.ecology, 0,
+    "legacy ecology defaults to an empty table")
+  ctx.assert.equal(#normalized_legacy.worksite_ids, 0,
+    "legacy worksite ids default to an empty array")
+  ctx.assert.equal(#normalized_legacy.worksite_kinds, 0,
+    "legacy worksite kinds default to an empty array")
+  ctx.assert.equal(#normalized_legacy.worksites, 0,
+    "legacy worksite records default to an empty array")
+
+  normalized_legacy.center_pos.x = -1
+  normalized_legacy.plan_lots[1].role = "mutated"
+  ctx.assert.equal(legacy.settlement.center_pos.x, 101,
+    "normalization must not expose the stored center by reference")
+  ctx.assert.equal(legacy.plan.lots[1].role, "dwelling",
+    "normalization must not expose plan lots by reference")
+
+  local current = {
+    plan = {
+      settlement_grammar_version = 3,
+      center = {x = -10, z = -20},
+      bounds = {min_x = -2, max_x = 2, min_z = -2, max_z = 2},
+      lots = {{index = 2, role = "fishery"}},
+    },
+    profile = {settlement_grammar_version = 3},
+    settlement = {
+      settlement_id = "current_normalization",
+      settlement_grammar_version = 3,
+      center_pos = {x = 501, y = 22, z = 601},
+      bounds = {min_x = 480, max_x = 530, min_z = 580, max_z = 635},
+      specialization = "fishing",
+      ecology = {water_ratio = 0.4},
+      worksite_ids = {"dock_1"},
+      worksite_kinds = {"dock"},
+      worksites = {{id = "dock_1", kind = "dock"}},
+    },
+  }
+  local normalized_current = perfectworld.settlements.normalize(current)
+  ctx.assert.not_nil(normalized_current, "grammar-v3 record must normalize")
+  if not normalized_current then return end
+  ctx.assert.equal(normalized_current.settlement_grammar_version, 3,
+    "grammar-v3 version must survive normalization")
+  ctx.assert.equal(normalized_current.center_pos.x, 501,
+    "grammar-v3 actual center must beat planned center")
+  ctx.assert.equal(normalized_current.bounds.max_z, 635,
+    "grammar-v3 actual bounds must beat planned bounds")
+  ctx.assert.equal(normalized_current.specialization, "fishing",
+    "specialization must survive normalization")
+  ctx.assert.equal(normalized_current.worksites[1].kind, "dock",
+    "worksite records must survive normalization")
+end)
+
 T.register_test("perfectworld", "ecology_profiles_require_their_local_work", function(ctx)
   local cases = {
     fishing = {role = "fishery", worksite = "dock"},

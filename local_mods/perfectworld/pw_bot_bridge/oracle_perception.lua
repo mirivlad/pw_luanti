@@ -28,6 +28,10 @@ local function roads_api()
   return perfectworld and perfectworld.roads
 end
 
+local function settlements_api()
+  return perfectworld and perfectworld.settlements
+end
+
 -- === Geometry helpers ===
 
 local function sorted_box(min, max)
@@ -173,34 +177,62 @@ local function road_records()
     api = planner()
     list = api and api.list_roads
   end
-  if not list then return {} end
+  if not list then return nil, "road_provider_unavailable" end
   local ok, roads = pcall(list)
-  if not ok or type(roads) ~= "table" then return {} end
+  if not ok or type(roads) ~= "table" then
+    return nil, "road_provider_failed"
+  end
   return roads
 end
 
 local function structure_records()
   local api = planner()
-  if not api or not api.list_structures then return {} end
+  if not api or not api.list_structures then
+    return nil, "structure_provider_unavailable"
+  end
   local ok, records = pcall(api.list_structures)
-  if not ok or type(records) ~= "table" then return {} end
+  if not ok or type(records) ~= "table" then
+    return nil, "structure_provider_failed"
+  end
   return records
 end
 
 local function settlement_ids()
-  local api = planner()
-  if not api or not api.list_settlements then return {} end
-  local ok, ids = pcall(api.list_settlements)
-  if not ok or type(ids) ~= "table" then return {} end
+  local api = settlements_api()
+  local list = api and api.list_ids
+  if not list then
+    api = planner()
+    list = api and api.list_settlements
+  end
+  if not list then return nil, "settlement_provider_unavailable" end
+  local ok, ids = pcall(list)
+  if not ok or type(ids) ~= "table" then
+    return nil, "settlement_provider_failed"
+  end
   return ids
 end
 
 local function settlement_plan(settlement_id)
   local api = planner()
-  if not api or not api.get_settlement_plan then return nil end
+  if not api or not api.get_settlement_plan then
+    return nil, "settlement_plan_provider_unavailable"
+  end
   local ok, data = pcall(api.get_settlement_plan, settlement_id)
-  if not ok then return nil end
+  if not ok then return nil, "settlement_plan_provider_failed" end
   return data
+end
+
+local function settlement_record(settlement_id)
+  local api = settlements_api()
+  if api and api.get then
+    local ok, record = pcall(api.get, settlement_id)
+    if ok and type(record) == "table" then return record end
+  end
+  local data, reason = settlement_plan(settlement_id)
+  if data and type(data.settlement) == "table" then
+    return data.settlement
+  end
+  return nil, reason or "settlement_not_found"
 end
 
 local function road_path(road)
@@ -242,6 +274,31 @@ oracle.road_cells = road_cells
 -- diagnostic honest about what it actually knows.
 function oracle.structure_entrances(record)
   local out = {}
+  local function finish()
+    table.sort(out, function(a, b)
+      if a.position.x ~= b.position.x then return a.position.x < b.position.x end
+      if a.position.y ~= b.position.y then return a.position.y < b.position.y end
+      if a.position.z ~= b.position.z then return a.position.z < b.position.z end
+      return a.source < b.source
+    end)
+    if #out == 0 then return canonical.EMPTY_ARRAY end
+    return out
+  end
+
+  for _, entrance in ipairs(record.entrances or {}) do
+    local position = entrance.position or entrance
+    if position.x and position.y and position.z then
+      local road_point = entrance.road_point or record.road_point
+      out[#out + 1] = {
+        source = "structure_record",
+        position = canonical.node_vector(position),
+        road_point = road_point
+          and {x = road_point.x, z = road_point.z} or canonical.NULL,
+      }
+    end
+  end
+  if #out > 0 then return finish() end
+
   local plan_data = record.settlement_id and settlement_plan(record.settlement_id) or nil
   if plan_data and plan_data.plan and plan_data.plan.lots then
     for _, lot in ipairs(plan_data.plan.lots) do
@@ -254,6 +311,8 @@ function oracle.structure_entrances(record)
       end
     end
   end
+  if #out > 0 then return finish() end
+
   local api = structures_api()
   if api and api.get and record.structure_name then
     local def = api.get(record.structure_name)
@@ -275,14 +334,7 @@ function oracle.structure_entrances(record)
       end
     end
   end
-  table.sort(out, function(a, b)
-    if a.position.x ~= b.position.x then return a.position.x < b.position.x end
-    if a.position.y ~= b.position.y then return a.position.y < b.position.y end
-    if a.position.z ~= b.position.z then return a.position.z < b.position.z end
-    return a.source < b.source
-  end)
-  if #out == 0 then return canonical.EMPTY_ARRAY end
-  return out
+  return finish()
 end
 
 -- === Operations ===
@@ -367,7 +419,7 @@ end
 function oracle.records_in_box(min, max)
   local roads, structures, settlements = {}, {}, {}
 
-  for _, record in ipairs(structure_records()) do
+  for _, record in ipairs(structure_records() or {}) do
     local fp_min = record.footprint_min
     local fp_max = record.footprint_max
     if fp_min and fp_max
@@ -387,7 +439,7 @@ function oracle.records_in_box(min, max)
   end
   table.sort(structures, function(a, b) return a.structure_id < b.structure_id end)
 
-  for _, road in ipairs(road_records()) do
+  for _, road in ipairs(road_records() or {}) do
     local touches = false
     for _, cell in pairs(road_cells(road)) do
       if in_box_xz(cell.x, cell.z, min, max) then touches = true break end
@@ -405,21 +457,24 @@ function oracle.records_in_box(min, max)
   end
   table.sort(roads, function(a, b) return a.road_id < b.road_id end)
 
-  for _, id in ipairs(settlement_ids()) do
-    local data = settlement_plan(id)
-    local bounds = data and data.plan and data.plan.bounds
+  for _, id in ipairs(settlement_ids() or {}) do
+    local settlement = settlement_record(id)
+    local bounds = settlement and settlement.bounds
     if bounds
       and bounds.max_x >= min.x and bounds.min_x <= max.x
       and bounds.max_z >= min.z and bounds.min_z <= max.z then
       settlements[#settlements + 1] = {
         settlement_id = id,
-        archetype = data.plan.archetype or "unknown",
-        center = data.plan.center and {x = data.plan.center.x, z = data.plan.center.z} or canonical.NULL,
+        archetype = settlement.archetype or "unknown",
+        center = settlement.center_pos
+          and {x = settlement.center_pos.x, z = settlement.center_pos.z}
+          or canonical.NULL,
         bounds = {
           min_x = math.floor(bounds.min_x), max_x = math.floor(bounds.max_x),
           min_z = math.floor(bounds.min_z), max_z = math.floor(bounds.max_z),
         },
-        lot_count = data.plan.lots and #data.plan.lots or 0,
+        lot_count = math.floor(settlement.lot_count
+          or #(settlement.plan_lots or {})),
       }
     end
   end
@@ -490,7 +545,7 @@ function oracle.get_surface(player, session, bot, params, budget)
 end
 
 function oracle.get_structure(player, session, bot, params, budget)
-  local records = structure_records()
+  local records = structure_records() or {}
   local matches = {}
   for _, record in ipairs(records) do
     local hit = false
@@ -568,7 +623,7 @@ end
 
 function oracle.get_road(player, session, bot, params, budget)
   local matches = {}
-  for _, road in ipairs(road_records()) do
+  for _, road in ipairs(road_records() or {}) do
     local hit = false
     if params.road_id and road.id == params.road_id then hit = true end
     if params.settlement_id and road.from_settlement == params.settlement_id then hit = true end
@@ -607,7 +662,7 @@ function oracle.get_road_topology(player, session, bot, params, budget)
   local roads = scoped.roads == canonical.EMPTY_ARRAY and {} or scoped.roads
   local cell_owner = {}
   local raw = {}
-  for _, road in ipairs(road_records()) do raw[road.id] = road end
+  for _, road in ipairs(road_records() or {}) do raw[road.id] = road end
 
   for _, road in ipairs(roads) do
     for key, cell in pairs(road_cells(raw[road.road_id] or {})) do
@@ -661,40 +716,40 @@ function oracle.get_settlement(player, session, bot, params, budget)
   if params.settlement_id then
     ids = {params.settlement_id}
   else
-    ids = settlement_ids()
+    ids = settlement_ids() or {}
   end
   local out = {}
   for _, id in ipairs(ids) do
-    local data = settlement_plan(id)
-    if data and data.settlement then
+    local settlement = settlement_record(id)
+    if settlement then
       local include = true
       if params.min and params.max then
         local min, max = sorted_box(params.min, params.max)
-        local bounds = data.plan and data.plan.bounds
+        local bounds = settlement.bounds
         include = bounds
           and bounds.max_x >= min.x and bounds.min_x <= max.x
           and bounds.max_z >= min.z and bounds.min_z <= max.z
       end
-      if params.position and data.plan and data.plan.bounds then
-        local bounds = data.plan.bounds
+      if params.position and settlement.bounds then
+        local bounds = settlement.bounds
         include = params.position.x >= bounds.min_x and params.position.x <= bounds.max_x
           and params.position.z >= bounds.min_z and params.position.z <= bounds.max_z
       end
       if include then
-        local settlement = data.settlement
         out[#out + 1] = {
           settlement_id = id,
-          archetype = data.plan and data.plan.archetype or "unknown",
-          size_class = data.plan and data.plan.size_class or "unknown",
+          archetype = settlement.archetype or "unknown",
+          size_class = settlement.size_class or "unknown",
           biome_family = settlement.biome_family or canonical.NULL,
           palette_id = settlement.palette_id or canonical.NULL,
-          center = data.plan and data.plan.center
-            and {x = data.plan.center.x, z = data.plan.center.z} or canonical.NULL,
-          bounds = data.plan and data.plan.bounds and {
-            min_x = math.floor(data.plan.bounds.min_x),
-            max_x = math.floor(data.plan.bounds.max_x),
-            min_z = math.floor(data.plan.bounds.min_z),
-            max_z = math.floor(data.plan.bounds.max_z),
+          center = settlement.center_pos
+            and {x = settlement.center_pos.x, z = settlement.center_pos.z}
+            or canonical.NULL,
+          bounds = settlement.bounds and {
+            min_x = math.floor(settlement.bounds.min_x),
+            max_x = math.floor(settlement.bounds.max_x),
+            min_z = math.floor(settlement.bounds.min_z),
+            max_z = math.floor(settlement.bounds.max_z),
           } or canonical.NULL,
           structure_ids = canonical.sorted_unique(settlement.structure_ids or {}),
           road_ids = canonical.sorted_unique(settlement.road_ids or {}),
@@ -715,8 +770,15 @@ end
 
 --- Lots of a settlement: the plot, the building on it, the door and the street.
 function oracle.get_lots(player, session, bot, params, budget)
-  local data = params.settlement_id and settlement_plan(params.settlement_id) or nil
-  if not data or not data.plan then
+  local settlement = params.settlement_id
+    and settlement_record(params.settlement_id) or nil
+  local lots = settlement and settlement.plan_lots
+  if type(lots) ~= "table" then
+    local data = params.settlement_id
+      and settlement_plan(params.settlement_id) or nil
+    lots = data and data.plan and data.plan.lots
+  end
+  if type(lots) ~= "table" then
     return {
       mode = "oracle",
       settlement_id = params.settlement_id or canonical.NULL,
@@ -727,7 +789,7 @@ function oracle.get_lots(player, session, bot, params, budget)
     }
   end
   local out = {}
-  for _, lot in ipairs(data.plan.lots or {}) do
+  for _, lot in ipairs(lots) do
     out[#out + 1] = {
       index = math.floor(lot.index or 0),
       role = lot.role or "unknown",
@@ -808,7 +870,7 @@ function oracle.inspect_position(player, session, bot, params, budget)
     {x = pos.x, y = pos.y, z = pos.z})
 
   local on_road = {}
-  for _, road in ipairs(road_records()) do
+  for _, road in ipairs(road_records() or {}) do
     local cells = road_cells(road)
     if cells[pos.x .. ":" .. pos.z] then
       on_road[#on_road + 1] = road.id
@@ -833,7 +895,7 @@ function oracle.validate_access_point(player, session, bot, params, budget)
   -- Is there any road cell adjacent enough to walk from?
   local nearest_road, nearest_distance = canonical.NULL, canonical.NULL
   local radius = math.min(tonumber(params.road_search_radius) or 8, 32)
-  for _, road in ipairs(road_records()) do
+  for _, road in ipairs(road_records() or {}) do
     for key, cell in pairs(road_cells(road)) do
       local dx, dz = cell.x - pos.x, cell.z - pos.z
       local distance = math.sqrt(dx * dx + dz * dz)
@@ -882,13 +944,13 @@ function oracle.validate_area(player, session, bot, params, budget)
 
   local checked_road_cells = 0
   local footprints = {}
-  for _, record in ipairs(structure_records()) do
+  for _, record in ipairs(structure_records() or {}) do
     if record.footprint_min and record.footprint_max then
       footprints[#footprints + 1] = record
     end
   end
 
-  for _, road in ipairs(road_records()) do
+  for _, road in ipairs(road_records() or {}) do
     for _, cell in pairs(road_cells(road)) do
       if in_box_xz(cell.x, cell.z, min, max) then
         if not perception.spend(budget, 4) then break end
