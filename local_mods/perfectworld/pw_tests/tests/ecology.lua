@@ -436,7 +436,7 @@ T.register_test("perfectworld", "ecology_selects_a_viable_shore_site_instead_of_
     "fishing selection must retain its physical water anchor")
 end)
 
-T.register_test("perfectworld", "ecology_rejects_a_water_center_even_with_good_shore_score", function(ctx)
+T.register_test("perfectworld", "ecology_moves_a_water_center_to_measured_shore_land", function(ctx)
   local api = ecology_api(ctx)
   if not api then return end
   local candidate = {id = "ecology_water_center", x = 512, z = 512, rx = 0, rz = 0}
@@ -466,8 +466,16 @@ T.register_test("perfectworld", "ecology_rejects_a_water_center_even_with_good_s
     }
   end)
 
-  ctx.assert.is_nil(selected,
-    "a liquid village center must not be rescued by the surrounding shore score")
+  ctx.assert.not_nil(selected,
+    "a measured buildable shore must rescue the survey without building in water")
+  if selected then
+    ctx.assert.equal(selected.specialization, "fishing",
+      "the relocated site must retain the shoreline specialization")
+    ctx.assert.equal(selected.site.x, selected.evidence.shore_land_anchor.x,
+      "fishing center x must use the measured land anchor")
+    ctx.assert.equal(selected.site.z, selected.evidence.shore_land_anchor.z,
+      "fishing center z must use the measured land anchor")
+  end
 end)
 
 local function village_candidate(id)

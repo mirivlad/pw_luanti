@@ -198,6 +198,19 @@ end
 function ecology.select_site(candidate, terrain, environment_provider)
   local pairs = {}
   local key = seed_key(candidate)
+  local rx = candidate.rx or math.floor(candidate.x / perfectworld.REGION_SIZE)
+  local rz = candidate.rz or math.floor(candidate.z / perfectworld.REGION_SIZE)
+  local margin = perfectworld.planner.REGION_MARGIN or 80
+  local min_x = rx * perfectworld.REGION_SIZE + margin
+  local max_x = (rx + 1) * perfectworld.REGION_SIZE - margin - 1
+  local min_z = rz * perfectworld.REGION_SIZE + margin
+  local max_z = (rz + 1) * perfectworld.REGION_SIZE - margin - 1
+
+  local function inside_region(site)
+    return site.x >= min_x and site.x <= max_x
+      and site.z >= min_z and site.z <= max_z
+  end
+
   for _, site in ipairs(ecology.enumerate_sites(candidate)) do
     local center_column = terrain.sample_column(site.x, site.z)
     local environment = environment_provider(site, center_column) or {}
@@ -208,12 +221,21 @@ function ecology.select_site(candidate, terrain, environment_provider)
       scores[item.id] = {score = item.score, viable = item.viable, reasons = item.reasons}
     end
     for _, item in ipairs(ranked) do
-      -- The survey describes the neighbourhood, but the village grammar
-      -- starts its road network at the site itself. A strong shoreline score
-      -- must not place that origin in open water.
-      if item.viable and center_column and not center_column.liquid then
+      local selected_site = deep_copy(site)
+      local center_is_land = center_column and not center_column.liquid
+      -- A shoreline survey may be centred one sample step into the water.
+      -- Move only fishing villages to the already measured adjacent land
+      -- anchor; this adds no scan and keeps the road origin out of the sea.
+      if item.id == "fishing" and not center_is_land
+        and evidence.shore_land_anchor then
+        selected_site.x = evidence.shore_land_anchor.x
+        selected_site.z = evidence.shore_land_anchor.z
+        center_is_land = true
+      end
+      if item.viable and center_is_land and inside_region(selected_site) then
         pairs[#pairs + 1] = {
-          site = deep_copy(site),
+          site = selected_site,
+          survey_site = deep_copy(site),
           evidence = evidence,
           environment = deep_copy(environment),
           specialization = item.id,
