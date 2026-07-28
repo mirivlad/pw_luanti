@@ -6,36 +6,16 @@ local MARGIN = 80
 local MIN_DISTANCE = 200
 perfectworld.planner.REGION_MARGIN = MARGIN
 local cache = {}
-local storage = minetest.get_mod_storage()
-local PLACED_KEY = "pw_placed_settlements"
-local STRUCTURES_KEY = "pw_materialized_structures"
-local SETTLEMENTS_KEY = "pw_settlement_plans"
-local ROADS_KEY = "pw_roads"
-local storage_cache = {}
+
+-- Persistence lives in store.lua, which groups records by the region their id
+-- names. Saving one structure used to rewrite every settlement, structure and
+-- road in the world; now it rewrites one region.
+local store = dofile(minetest.get_modpath("pw_planner") .. "/store.lua")
+perfectworld.planner.store = store
+store.migrate()
 
 local deep_copy = perfectworld.core.deep_copy
 local choice = perfectworld.core.choice
-
-local function read_json(key)
-	local cached = storage_cache[key]
-	if cached then return cached end
-	local raw = storage:get_string(key)
-	if raw and raw ~= "" then
-		local ok, data = pcall(minetest.parse_json, raw)
-		if ok and type(data) == "table" then
-			storage_cache[key] = data
-			return data
-		end
-	end
-	local empty = {}
-	storage_cache[key] = empty
-	return empty
-end
-
-local function write_json(key, data)
-	storage:set_string(key, minetest.write_json(data))
-	storage_cache[key] = data
-end
 
 -- === Region Planning ===
 
@@ -183,124 +163,86 @@ end
 -- === Settlement Tracking ===
 
 function perfectworld.planner.is_placed(settlement_id)
-	return read_json(PLACED_KEY)[settlement_id] == true
+	return store.get("placed", settlement_id) == true
 end
 
 function perfectworld.planner.mark_placed(settlement_id)
-	local data = read_json(PLACED_KEY)
-	data[settlement_id] = true
-	write_json(PLACED_KEY, data)
+	store.put("placed", settlement_id, true)
 end
 
 function perfectworld.planner.list_placed()
-	local data = read_json(PLACED_KEY)
-	local ids = {}
-	for id, _ in pairs(data) do
-		table.insert(ids, id)
-	end
-	table.sort(ids)
-	return ids
+	return store.ids("placed")
 end
 
 function perfectworld.planner._test_unmark_placed(settlement_id)
-	local data = read_json(PLACED_KEY)
-	data[settlement_id] = nil
-	write_json(PLACED_KEY, data)
+	store.delete("placed", settlement_id)
 end
 
 -- === Structure Tracking ===
 
 function perfectworld.planner.record_structure(record)
-	local data = read_json(STRUCTURES_KEY)
-	data[record.structure_id] = deep_copy(record)
-	write_json(STRUCTURES_KEY, data)
+	store.put("structures", record.structure_id, deep_copy(record))
 end
 
 function perfectworld.planner.save_structure(structure_id, record)
-	local data = read_json(STRUCTURES_KEY)
-	data[structure_id] = deep_copy(record)
-	write_json(STRUCTURES_KEY, data)
+	store.put("structures", structure_id, deep_copy(record))
 end
 
 function perfectworld.planner.get_structure(structure_id)
-	return deep_copy(read_json(STRUCTURES_KEY)[structure_id])
+	return deep_copy(store.get("structures", structure_id))
 end
 
 function perfectworld.planner.list_structures()
-	local data = read_json(STRUCTURES_KEY)
-	local ids = {}
-	for id, _ in pairs(data) do
-		table.insert(ids, id)
-	end
-	table.sort(ids)
+	local data = store.all("structures")
 	local out = {}
-	for _, id in ipairs(ids) do
+	for _, id in ipairs(store.ids("structures")) do
 		table.insert(out, deep_copy(data[id]))
 	end
 	return out
 end
 
 function perfectworld.planner._test_clear_structure(structure_id)
-	local data = read_json(STRUCTURES_KEY)
-	data[structure_id] = nil
-	write_json(STRUCTURES_KEY, data)
+	store.delete("structures", structure_id)
 end
 
 -- === Settlement Plan Persistence ===
 
 function perfectworld.planner.save_settlement_plan(settlement_id, plan)
-	local data = read_json(SETTLEMENTS_KEY)
-	data[settlement_id] = deep_copy(plan)
-	write_json(SETTLEMENTS_KEY, data)
+	store.put("settlements", settlement_id, deep_copy(plan))
 end
 
 function perfectworld.planner.get_settlement_plan(settlement_id)
-	return deep_copy(read_json(SETTLEMENTS_KEY)[settlement_id])
+	return deep_copy(store.get("settlements", settlement_id))
 end
 
 function perfectworld.planner.list_settlements()
-	local data = read_json(SETTLEMENTS_KEY)
-	local ids = {}
-	for id, _ in pairs(data) do
-		table.insert(ids, id)
-	end
-	table.sort(ids)
-	return ids
+	return store.ids("settlements")
 end
 
 function perfectworld.planner._test_clear_settlement(settlement_id)
-	local data = read_json(SETTLEMENTS_KEY)
-	data[settlement_id] = nil
-	write_json(SETTLEMENTS_KEY, data)
+	store.delete("settlements", settlement_id)
 end
 
 -- === Road Persistence ===
 
 function perfectworld.planner.save_road(road)
-	local data = read_json(ROADS_KEY)
 	local record = deep_copy(road)
 	if record.cells == nil
 		and perfectworld.roads
 		and perfectworld.roads.rasterize_record then
 		record.cells = perfectworld.roads.rasterize_record(record)
 	end
-	data[record.id] = record
-	write_json(ROADS_KEY, data)
+	store.put("roads", record.id, record)
 end
 
 function perfectworld.planner.get_road(road_id)
-	return deep_copy(read_json(ROADS_KEY)[road_id])
+	return deep_copy(store.get("roads", road_id))
 end
 
 function perfectworld.planner.list_roads()
-	local data = read_json(ROADS_KEY)
-	local ids = {}
-	for id, _ in pairs(data) do
-		table.insert(ids, id)
-	end
-	table.sort(ids)
+	local data = store.all("roads")
 	local out = {}
-	for _, id in ipairs(ids) do
+	for _, id in ipairs(store.ids("roads")) do
 		table.insert(out, deep_copy(data[id]))
 	end
 	return out
@@ -316,7 +258,7 @@ perfectworld.roads.set_provider({
 
 function perfectworld.planner._test_clear_cache()
 	cache = {}
-	storage_cache = {}
+	store.drop_cache()
 end
 
 -- === Candidate Type Helpers ===

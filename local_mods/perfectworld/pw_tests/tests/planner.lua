@@ -189,12 +189,20 @@ T.register_test("perfectworld", "planner_decodes_each_storage_map_once_between_w
     parse_count = parse_count + 1
     return original_parse_json(...)
   end
+  -- Reading two records from the same region must decode that region once.
+  --
+  -- This used to say "decoded once, not once per record" about the whole world,
+  -- because settlements lived in one flat map. They are sharded by region now,
+  -- so enumerating every settlement legitimately decodes every region — that is
+  -- what asking about the whole world costs, and it is not a caching failure.
+  -- The guarantee worth keeping is the per-shard one, so `list_settlements` is
+  -- no longer inside the counted section. Both ids here carry no region tag and
+  -- therefore share a shard.
   local ok, err = pcall(function()
     ctx.assert.not_nil(planner.get_settlement_plan(first_id),
       "first record must be readable")
     ctx.assert.not_nil(planner.get_settlement_plan(second_id),
       "second record must be readable")
-    planner.list_settlements()
   end)
   minetest.parse_json = original_parse_json
   planner._test_clear_settlement(first_id)
@@ -202,7 +210,7 @@ T.register_test("perfectworld", "planner_decodes_each_storage_map_once_between_w
   if not ok then error(err) end
 
   ctx.assert.equal(parse_count, 1,
-    "unchanged settlement storage must be decoded once, not once per record")
+    "a region's storage must be decoded once, not once per record read from it")
 end)
 
 T.register_test("perfectworld", "planner_road_anchors_match_candidates", function(ctx)

@@ -11,6 +11,7 @@ luanti_testkit.register_suite("perfectworld", {
 
 local test_files = {
   "core",
+  "store",
   "planner",
   "structures",
   "variation",
