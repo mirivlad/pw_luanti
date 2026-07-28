@@ -223,11 +223,11 @@ function ecology.select_site(candidate, terrain, environment_provider)
     for _, item in ipairs(ranked) do
       local selected_site = deep_copy(site)
       local center_is_land = center_column and not center_column.liquid
-      -- A shoreline survey may be centred one sample step into the water.
-      -- Move only fishing villages to the already measured adjacent land
-      -- anchor; this adds no scan and keeps the road origin out of the sea.
-      if item.id == "fishing" and not center_is_land
-        and evidence.shore_land_anchor then
+      -- The survey centre describes the neighbourhood; it is not necessarily
+      -- the usable shoreline. Anchor every fishing village on the already
+      -- measured adjacent land cell so its road origin cannot remain inland
+      -- on a cliff merely because that one column is technically dry.
+      if item.id == "fishing" and evidence.shore_land_anchor then
         selected_site.x = evidence.shore_land_anchor.x
         selected_site.z = evidence.shore_land_anchor.z
         center_is_land = true
