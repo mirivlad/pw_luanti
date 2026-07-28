@@ -140,15 +140,18 @@ class InputBackend(abc.ABC):
         not have to be a mouse button. A button goes to whatever is under the X
         pointer, and the pointer is not where the crosshair is looking.
 
-        The hold is 0.18 s for two reasons that pull against each other. Luanti
-        samples the place key once per rendered frame, and a software-rendered
-        client can take longer than a short tap to draw one — so anything much
-        briefer is missed intermittently. But `repeat_place_time` defaults to
-        0.25 s, and a hold past that fires the action twice, which on a door
-        means opened and closed again. 0.18 s clears the first problem without
-        reaching the second.
+        The hold is long on purpose. Luanti samples the place key once per
+        rendered frame, and this client draws through software GL on an Xvfb
+        display, where a frame can take a good fraction of a second — a 0.18 s
+        press at the course door did nothing, while a 0.5 s press of the dig key
+        destroyed a node. Duration was the difference, not the binding.
+
+        Holding this long would normally repeat the action, and two activations
+        on a door means opened and closed again — indistinguishable from nothing
+        happening. `client.conf` pins `repeat_place_time` to its maximum so that
+        one hold, however long, is one action.
         """
-        self.tap("place", 0.18)
+        self.tap("place", 0.5)
 
     def right_click(self) -> None:
         """The mouse-button form. Kept for completeness and not used to interact.

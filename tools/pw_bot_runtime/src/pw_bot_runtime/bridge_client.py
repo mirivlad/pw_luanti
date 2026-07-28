@@ -38,6 +38,10 @@ class SelfState:
     on_ground: bool
     in_liquid: bool
     hp: float
+    #: Name of the item in hand, or "" for an empty hand. What is held decides
+    #: what "use" means, so this is not a curiosity: with a throwable in hand the
+    #: item's own handler runs and the node under the crosshair is never asked.
+    wielded_item: str
     sequence: int
     raw: dict
 
@@ -181,6 +185,7 @@ class BridgeClient:
             on_ground=_as_bool(state.get("on_ground")),
             in_liquid=_as_bool(state.get("in_liquid")),
             hp=float(state.get("hp", 20)),
+            wielded_item=str(state.get("wielded_item") or ""),
             sequence=int(data.get("sequence", 0) or 0),
             raw=data,
         )

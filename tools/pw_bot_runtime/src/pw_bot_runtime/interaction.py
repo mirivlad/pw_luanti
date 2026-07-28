@@ -79,13 +79,17 @@ class InteractionController:
         self.interactions = 0
 
     def _wielded(self) -> str | None:
-        """What the bridge says is in the bot's hand, or None if it cannot say."""
+        """What the bridge says is in the bot's hand, or None if it cannot say.
+
+        Read from the parsed field rather than out of the raw envelope: the
+        first version of this reached into the whole response for a key that
+        lives inside its ``self_state`` object, got ``None`` every time, and
+        reported an empty hand without ever having checked one.
+        """
         try:
-            state = self.bridge.self_state()
+            return self.bridge.self_state().wielded_item
         except (BridgeUnavailable, BridgeRefused):
             return None
-        item = state.raw.get("wielded_item")
-        return "" if item is None else str(item)
 
     def _empty_hand(self) -> tuple[bool, str]:
         """Select hotbar slots until the bridge reports an empty hand.
