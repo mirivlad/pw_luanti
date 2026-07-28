@@ -436,6 +436,40 @@ T.register_test("perfectworld", "ecology_selects_a_viable_shore_site_instead_of_
     "fishing selection must retain its physical water anchor")
 end)
 
+T.register_test("perfectworld", "ecology_rejects_a_water_center_even_with_good_shore_score", function(ctx)
+  local api = ecology_api(ctx)
+  if not api then return end
+  local candidate = {id = "ecology_water_center", x = 512, z = 512, rx = 0, rz = 0}
+  local target = api.enumerate_sites(candidate)[2]
+  local terrain = {
+    sample_column = function(x, z)
+      local dx = x - target.x
+      local dz = z - target.z
+      if math.abs(dx) <= 24 and math.abs(dz) <= 24 then
+        if dx >= 12 or (dx == 0 and dz == 0) then
+          return {y = 30, liquid = true, buildable = false, soil = false,
+            tree = false, stone = false}
+        end
+        return {y = 31, liquid = false, buildable = true, soil = false,
+          tree = false, stone = false}
+      end
+      return {y = 60, liquid = false, buildable = false, soil = false,
+        tree = false, stone = false}
+    end,
+  }
+  local selected = api.select_site(candidate, terrain, function()
+    return {
+      biome_name = "test:coastal",
+      biome_family = "coastal",
+      heat = 50,
+      humidity = 50,
+    }
+  end)
+
+  ctx.assert.is_nil(selected,
+    "a liquid village center must not be rescued by the surrounding shore score")
+end)
+
 local function village_candidate(id)
   return {
     id = id,

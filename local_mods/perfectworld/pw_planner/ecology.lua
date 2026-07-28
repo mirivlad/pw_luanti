@@ -208,7 +208,10 @@ function ecology.select_site(candidate, terrain, environment_provider)
       scores[item.id] = {score = item.score, viable = item.viable, reasons = item.reasons}
     end
     for _, item in ipairs(ranked) do
-      if item.viable then
+      -- The survey describes the neighbourhood, but the village grammar
+      -- starts its road network at the site itself. A strong shoreline score
+      -- must not place that origin in open water.
+      if item.viable and center_column and not center_column.liquid then
         pairs[#pairs + 1] = {
           site = deep_copy(site),
           evidence = evidence,
