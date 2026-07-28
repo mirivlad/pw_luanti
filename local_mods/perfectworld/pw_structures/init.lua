@@ -987,4 +987,8 @@ if not well_ok then
   minetest.log("error", "[pw_structures] failed to register pw_well_v1")
 end
 
+local register_specialized = dofile(
+  minetest.get_modpath("pw_structures") .. "/village_specialized.lua")
+register_specialized({register_building = register_building})
+
 minetest.log("action", "[pw_structures] loaded")

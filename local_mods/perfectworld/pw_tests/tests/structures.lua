@@ -103,6 +103,81 @@ T.register_test("perfectworld", "structure_registry_validates_schema_and_returns
   ctx.assert.contains(err, "size", "invalid definition should explain missing size")
 end)
 
+T.register_test("perfectworld", "ecological_production_buildings_are_registered", function(ctx)
+  local expected = {
+    pw_fishery_v1 = "fishery",
+    pw_sawmill_v1 = "sawmill",
+    pw_mine_workshop_v1 = "mine_workshop",
+  }
+  for name, category in pairs(expected) do
+    local def = perfectworld.structures.get(name)
+    ctx.assert.not_nil(def, name .. " must be registered")
+    if def then
+      local categories = {}
+      for _, value in ipairs(def.categories or {}) do categories[value] = true end
+      ctx.assert.is_true(categories[category] == true,
+        name .. " must declare category " .. category)
+      ctx.assert.is_true(perfectworld.structures.validate(def),
+        name .. " must pass the structure schema")
+      local road_connectors = 0
+      for _, connector in ipairs(def.connectors or {}) do
+        if connector.type == "road" and connector.offset_pos then
+          road_connectors = road_connectors + 1
+        end
+      end
+      ctx.assert.equal(road_connectors, 1,
+        name .. " must expose one physical road entrance")
+    end
+  end
+end)
+
+T.register_test("perfectworld", "ecological_production_buildings_place_in_every_rotation", function(ctx)
+  local names = {
+    "pw_fishery_v1",
+    "pw_sawmill_v1",
+    "pw_mine_workshop_v1",
+  }
+  local rotations = {0, 90, 180, 270}
+  local palette = perfectworld.compat.get_family_palette("temperate")
+
+  for structure_index, name in ipairs(names) do
+    local def = perfectworld.structures.get(name)
+    ctx.assert.not_nil(def, name .. " must exist before placement")
+    if def then
+      for rotation_index, rotation in ipairs(rotations) do
+        local center = {
+          x = -1700 - structure_index * 120,
+          y = 30,
+          z = -1700 - rotation_index * 120,
+        }
+        fill_flat_area(center, 7, center.y, center.y + 12)
+        local ok, result = perfectworld.structures.place(name, {
+          pos = {x = center.x, y = 0, z = center.z},
+          rotation = rotation,
+          palette = palette,
+        })
+        ctx.assert.is_true(ok, name .. " rotation " .. rotation
+          .. " must place: " .. tostring(result and result.reason or result))
+        if ok then
+          local solid = 0
+          for x = center.x - 12, center.x + 12 do
+            for y = center.y + 1, center.y + 16 do
+              for z = center.z - 12, center.z + 12 do
+                local node = minetest.get_node({x = x, y = y, z = z})
+                if node.name ~= "air" and node.name ~= "ignore" then
+                  solid = solid + 1
+                end
+              end
+            end
+          end
+          ctx.assert.is_true(solid >= 40,
+            name .. " rotation " .. rotation .. " must build a physical shell")
+        end
+      end
+    end
+  end
+end)
+
 T.register_test("perfectworld", "farmstead_rotations_transform_points_and_connectors", function(ctx)
   local p0 = perfectworld.structures.rotate_point({x = 2, y = 0, z = 4}, 0)
   local p90 = perfectworld.structures.rotate_point({x = 2, y = 0, z = 4}, 90)
