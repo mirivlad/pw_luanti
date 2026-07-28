@@ -197,6 +197,62 @@ after a full server restart. A batch of eight fresh villages populated itself as
 it was built, two to five people each. A hamlet materialized on its own at
 (27105, 27320) reported one bed and one villager moved in.
 
+## Towns
+
+Region planning now makes towns as well as farms, hamlets and villages — six
+candidates in a hundred, because a world where one settlement in five is a town
+is a world with no countryside in it.
+
+A town is not a large village. It is planned to fourteen to twenty-four lots,
+allowed a street twice as long, given up to six side lanes, walled, and built
+partly out of the tall catalogue.
+
+**Two to four storeys, stone below and timber above.** The `urban` schemes are
+not a regional style: height belongs to the place, not to the region's way of
+building, so a town draws on the tall catalogue *and* its regional one and comes
+out mixed. Stone under timber is what the bottom of a tall building does
+everywhere that has ever built one, and it is the single thing that stops a
+four-storey plank box from reading as a four-storey plank box. Upper storeys are
+reached by a ladder through a hole in each floor: without one they are sealed
+rooms, which is worse than not having them, because a villager that cannot reach
+its bed never sleeps.
+
+**A wall with gates.** It follows the ground rather than being levelled into it,
+so it steps down a slope the way a built wall does. Gates are cut wherever a way
+crosses the line — and the ways include the roads arriving from other
+settlements, which come from outside and would otherwise end at a wall. A wall
+without them seals the town and everything that was reachable stops being
+reachable, which does not look wrong from outside.
+
+**Guards.** Two to four iron golems are posted at the gates when the town is
+built, rather than waiting for the population to reach the threshold Mineclonia
+raises golems at. That mechanism is untouched and still applies.
+
+Measured, on a town built at (-3236, -9533):
+
+    size_class=town  lot_count=14  planned_lot_count=14
+    structure_variants: urban_tower_four_hip, urban_house_three,
+                        urban_house_two x2, vern_cottage_corner x2,
+                        vern_stable x3, vern_barn, vern_house_long,
+                        pw_farmstead_v1, pw_well_v1
+    warnings=wall:1706 nodes, 11 gate(s)
+    11 beds, 11 villagers moved in
+
+Eleven gates is more than a town wants — the rule opens one wherever any way
+crosses, and six streets plus the roads to other settlements cross a lot. It is
+honest rather than right, and tightening it to major ways only is the obvious
+next pass.
+
+Two things had to be built before any of this could work. Emerging the ground
+for a town in one request would ask for more mapblocks than the emerge queue
+accepts, and the surplus is dropped **silently** — the final callback never
+fires and the caller waits forever. The area is emerged in tiles small enough
+that no configuration can refuse one, nearest the centre first. And
+`/pw_find_candidate` is bounded by the engine's map limit: region planning will
+happily name coordinates the world does not extend to, and the first town this
+project ever tried to build sat at x=33357, past the limit of about 31000, and
+reported a failure with no visible cause.
+
 ## Work
 
 A village of six was one farmer and five people standing still. Mineclonia hands
@@ -468,11 +524,12 @@ chasing on its own.
   `/pw_roads_pave`, and villages built before people existed need `/pw_populate`
 - Production simulation, inventories, economy and trading — deliberately out of
   scope for now
-- Towns and cities: the settlement types exist in `pw_settlements` but region
-  planning never produces them, and a street longer than 96 nodes needs a wider
-  `emerge_village_area` than the emerge queue comfortably allows. What the world
-  has today is farms and hamlets (40% each, and both place the same single
-  farmstead — they differ only in priority) and villages (20%, 3 to 12 lots)
+- Cities: the type exists in `pw_settlements` but region planning does not
+  produce it. Towns do exist now
+- Farms and hamlets are the same building under two names — both place a single
+  `pw_farmstead_v1` and differ only in priority
+- Fields outside a town wall: a town gets the one worksite its specialization
+  requires, like any other settlement, rather than farmland ringing it
 - Tunnels, and bridges over water wider than forty-eight nodes
 - Global route pathfinding over the settlement link network
 - Save migration between planner versions

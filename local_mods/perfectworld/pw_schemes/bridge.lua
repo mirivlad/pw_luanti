@@ -40,7 +40,11 @@ local function total_height(scheme)
   else
     roof = math.ceil((half_w + eaves) * pitch) + 1
   end
-  return (scheme.raised_floor or 0) + scheme.wall_height + roof + 2
+  -- Every storey is `wall_height` of wall and one node of floor above it. A
+  -- three-storey building declared as tall as a one-storey one gets its terrain
+  -- clearance wrong and comes out with its top floor inside the hill.
+  local storeys = math.max(math.floor(tonumber(scheme.storeys) or 1), 1)
+  return (scheme.raised_floor or 0) + storeys * (scheme.wall_height + 1) + roof + 1
 end
 
 --- The ground the building actually needs to be flat.
@@ -184,10 +188,25 @@ schemes.PLANNER_ROLES = {
 }
 
 --- The variant list for a role in a given style, or nil to leave it alone.
-function schemes.variants_for(style_id, planner_role)
+--
+-- `opts.urban` adds the town catalogue: two to four storeys with a stone
+-- ground floor, drawn on by a settlement that is a town whatever regional style
+-- it otherwise has. Height is a property of the place, not of the region's way
+-- of building, so a northern town builds nordic *and* tall rather than having
+-- to choose.
+function schemes.variants_for(style_id, planner_role, opts)
   local scheme_role = schemes.PLANNER_ROLES[planner_role]
   if not scheme_role then return nil end
   local ids = schemes.for_role(style_id, scheme_role)
+  if opts and opts.urban then
+    local urban = schemes.for_role("urban", scheme_role)
+    -- Town buildings first, so the town is mostly tall and the regional style
+    -- shows in the buildings between them rather than the other way round.
+    local merged = {}
+    for _, id in ipairs(urban) do merged[#merged + 1] = id end
+    for _, id in ipairs(ids) do merged[#merged + 1] = id end
+    ids = merged
+  end
   if #ids == 0 then return nil end
   return ids
 end

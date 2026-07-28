@@ -122,6 +122,57 @@ minetest.register_chatcommand("pw_plan", {
   end,
 })
 
+minetest.register_chatcommand("pw_find_candidate", {
+  params = "<type> [max_region_radius]",
+  description = "Find the nearest planned settlement of a type that has not been built",
+  privs = {interact = true},
+  func = function(name, params)
+    local kind, radius_s = tostring(params or ""):match("^%s*(%S+)%s*(%d*)%s*$")
+    if not kind or kind == "" then
+      return false, "Usage: /pw_find_candidate <farm|hamlet|village|town> [radius]"
+    end
+    local radius = math.min(tonumber(radius_s) or 24, 28)
+
+    -- Bounded to the engine's own map limit. Region planning will happily name
+    -- coordinates the world does not extend to, and materializing there writes
+    -- nothing: the first town this found sat at x=33357, past the limit of
+    -- about 31000, and reported a failure with no visible cause.
+    local limit = tonumber(minetest.settings:get("mapgen_limit")) or 31000
+    local cells = {}
+    for rx = -radius, radius do
+      for rz = -radius, radius do
+        cells[#cells + 1] = {rx = rx, rz = rz}
+      end
+    end
+    table.sort(cells, function(a, b)
+      local da = a.rx * a.rx + a.rz * a.rz
+      local db = b.rx * b.rx + b.rz * b.rz
+      if da ~= db then return da < db end
+      if a.rx ~= b.rx then return a.rx < b.rx end
+      return a.rz < b.rz
+    end)
+
+    local scanned = 0
+    for _, cell in ipairs(cells) do
+      local plan = perfectworld.planner.plan_region(cell.rx, cell.rz)
+      scanned = scanned + 1
+      for index, candidate in ipairs(plan.settlement_candidates or {}) do
+        if candidate.type == kind
+          and math.abs(candidate.x) < limit - 256
+          and math.abs(candidate.z) < limit - 256
+          and not perfectworld.planner.is_placed(candidate.id) then
+          return true, string.format(
+            "%s %s region %d %d index %d at %d %d (scanned %d regions)",
+            candidate.type, candidate.id, cell.rx, cell.rz, index - 1,
+            candidate.x, candidate.z, scanned)
+        end
+      end
+    end
+    return false, string.format("no unbuilt %s within %d regions (scanned %d)",
+      kind, radius, scanned)
+  end,
+})
+
 minetest.register_chatcommand("pw_road_network", {
   params = "[radius] | <rx> <rz> [radius]",
   description = "Report the planned roads between settlements around the player",
@@ -590,7 +641,20 @@ minetest.register_chatcommand("pw_materialize", {
       {force = force}
     )
     if not ok then
-      return false, "materialized=false reason=" .. tostring(result)
+      -- The reason is often a table, and `tostring` on a table is an address:
+      -- a diagnostic that prints `table: 0x7f3c...` has told you nothing.
+      local why = result
+      if type(result) == "table" then
+        local parts = {}
+        for key, value in pairs(result) do
+          if type(value) ~= "table" then
+            parts[#parts + 1] = tostring(key) .. "=" .. tostring(value)
+          end
+        end
+        table.sort(parts)
+        why = #parts > 0 and table.concat(parts, " ") or "(no detail)"
+      end
+      return false, "materialized=false reason=" .. tostring(why)
     end
     if result.settlement then
       return true, table.concat({
@@ -1383,6 +1447,8 @@ minetest.register_chatcommand("pw_village_info", {
       "road_graph_fingerprint=" .. tostring(s.road_graph_fingerprint),
       "seed_key=" .. tostring(s.seed_key),
       "generator=" .. tostring(s.generator_version),
+      "warnings=" .. table.concat(s.warnings or {}, "; "),
+      "errors=" .. table.concat(s.errors or {}, "; "),
     }
     return true, table.concat(lines, "\n")
   end,

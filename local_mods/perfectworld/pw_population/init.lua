@@ -391,6 +391,32 @@ function population.professions(bounds, margin)
   return counts
 end
 
+--- The guard. A town that has walls and gates should have somebody at them.
+--
+-- Mineclonia raises iron golems on its own where enough villagers gather round
+-- a bell, and that mechanism is left alone: this only makes sure a walled town
+-- starts with a guard on it rather than waiting for the population to reach the
+-- threshold. One per gate, capped, and never on water.
+population.GOLEM_ENTITY = "mobs_mc:iron_golem"
+population.MAX_GOLEMS = 4
+
+function population.post_guards(spots, wanted)
+  if not minetest.registered_entities[population.GOLEM_ENTITY] then
+    return 0, "no_golem_entity"
+  end
+  wanted = math.min(math.max(math.floor(tonumber(wanted) or 0), 0),
+    population.MAX_GOLEMS)
+  local posted = 0
+  for _, spot in ipairs(spots or {}) do
+    if posted >= wanted then break end
+    local stand = population.standing_spot_near(spot)
+    if stand and minetest.add_entity(stand, population.GOLEM_ENTITY) then
+      posted = posted + 1
+    end
+  end
+  return posted
+end
+
 --- What the record and the world each say about a settlement's people.
 function population.status(settlement_id)
   local settlement = perfectworld.settlements

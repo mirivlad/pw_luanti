@@ -77,10 +77,14 @@ function perfectworld.planner.plan_region(rx, rz)
 			break
 		end
 
+		-- Towns are rare on purpose. A world where one settlement in five is a
+		-- town is a world with no countryside in it, and the point of a town is
+		-- that arriving at one means something.
 		local stype = choice.weighted(seed_key, "candidate:" .. i .. ":type", {
-			{value = "farm", weight = 40},
-			{value = "hamlet", weight = 40},
-			{value = "village", weight = 20},
+			{value = "farm", weight = 38},
+			{value = "hamlet", weight = 38},
+			{value = "village", weight = 18},
+			{value = "town", weight = 6},
 		})
 
 		local priority
@@ -88,6 +92,8 @@ function perfectworld.planner.plan_region(rx, rz)
 			priority = choice.int(seed_key, "candidate:" .. i .. ":priority", 1, 2)
 		elseif stype == "hamlet" then
 			priority = choice.int(seed_key, "candidate:" .. i .. ":priority", 2, 4)
+		elseif stype == "town" then
+			priority = choice.int(seed_key, "candidate:" .. i .. ":priority", 6, 8)
 		else
 			priority = choice.int(seed_key, "candidate:" .. i .. ":priority", 4, 5)
 		end
@@ -97,7 +103,7 @@ function perfectworld.planner.plan_region(rx, rz)
 		local rotation = choice.pick(seed_key, "candidate:" .. i .. ":rotation", {0, 90, 180, 270})
 
 		local structure_name
-		if stype == "village" then
+		if stype == "village" or stype == "town" then
 			structure_name = "__village__" -- marker: will be processed by village planner
 		elseif stype == "hamlet" then
 			structure_name = "pw_farmstead_v1"
@@ -289,6 +295,9 @@ local SETTLEMENT_GRAMMAR_VERSION = 3
 --- The longest a village street may be, so the settlement stays inside the
 --- area `emerge_village_area` generates for it.
 perfectworld.planner.MAX_STREET_LENGTH = 96
+
+--- The same for a town, which emerges twice the ground around it.
+perfectworld.planner.MAX_TOWN_STREET_LENGTH = 190
 perfectworld.planner.SETTLEMENT_GRAMMAR_VERSION = SETTLEMENT_GRAMMAR_VERSION
 
 local ARCHETYPES = {"linear", "compact", "hillside"}
@@ -641,10 +650,16 @@ function perfectworld.planner.street_plan_for(profile)
   local average_gap = (spacing.min_gap + spacing.max_gap) / 2
   local frontage = math.ceil(profile.target_lots / 2 * average_gap * 1.5)
 
+  local town = profile.settlement_type == "town" or profile.settlement_type == "city"
   local branches
   if profile.archetype == "compact" then
-    -- A larger settlement grows side lanes rather than one endless street.
-    branches = math.max(1, math.min(3, 1 + math.floor(profile.target_lots / 5)))
+    -- A larger settlement grows side lanes rather than one endless street. A
+    -- town is allowed more of them: past a certain size a single street with
+    -- three turnings is a village that got long, not a town.
+    branches = math.max(1, math.min(town and 6 or 3,
+      1 + math.floor(profile.target_lots / 5)))
+  elseif town then
+    branches = math.max(1, math.min(4, math.floor(profile.target_lots / 6)))
   elseif profile.target_lots >= 8 then
     branches = 1
   else
@@ -656,7 +671,14 @@ function perfectworld.planner.street_plan_for(profile)
   -- The cap keeps the whole settlement inside the area `emerge_village_area`
   -- generates: a street running past it would be planned against terrain that
   -- does not exist yet and rejected for having no surface.
-  local main_length = math.max(30, math.min(perfectworld.planner.MAX_STREET_LENGTH,
+  -- A town emerges twice the ground a village does, so its streets may be twice
+  -- as long. The cap is not a style choice: a street past the emerged area is
+  -- planned against terrain that does not exist and rejected for having none.
+  local cap = perfectworld.planner.MAX_STREET_LENGTH
+  if profile.settlement_type == "town" or profile.settlement_type == "city" then
+    cap = perfectworld.planner.MAX_TOWN_STREET_LENGTH
+  end
+  local main_length = math.max(30, math.min(cap,
     math.max(choice.int(seed_key, "road:main_length", 30, 80), frontage)))
 
   return {
@@ -684,20 +706,32 @@ function perfectworld.planner.create_village_profile(candidate, environment)
 
   profile.archetype = select_archetype(seed_key, environment)
 
-  profile.size_class = choice.weighted(seed_key, "size_class", {
-    {value = "small", weight = 30},
-    {value = "medium", weight = 50},
-    {value = "large", weight = 20},
-  })
-  if profile.size_class == "small" then
-    profile.target_lots = choice.int(seed_key, "target_lots:small", 3, 5)
-    profile.density = choice.range(seed_key, "density:small", 0.30, 0.45)
-  elseif profile.size_class == "medium" then
-    profile.target_lots = choice.int(seed_key, "target_lots:medium", 5, 8)
-    profile.density = choice.range(seed_key, "density:medium", 0.35, 0.55)
+  -- What the region asked for. A town is not a large village: it is planned to
+  -- a different size, walled, and built out of stone as well as timber, so the
+  -- type has to survive into the profile rather than being inferred from the
+  -- lot count afterwards.
+  profile.settlement_type = candidate.type or "village"
+
+  if profile.settlement_type == "town" then
+    profile.size_class = "town"
+    profile.target_lots = choice.int(seed_key, "target_lots:town", 14, 24)
+    profile.density = choice.range(seed_key, "density:town", 0.50, 0.75)
   else
-    profile.target_lots = choice.int(seed_key, "target_lots:large", 8, 12)
-    profile.density = choice.range(seed_key, "density:large", 0.40, 0.65)
+    profile.size_class = choice.weighted(seed_key, "size_class", {
+      {value = "small", weight = 30},
+      {value = "medium", weight = 50},
+      {value = "large", weight = 20},
+    })
+    if profile.size_class == "small" then
+      profile.target_lots = choice.int(seed_key, "target_lots:small", 3, 5)
+      profile.density = choice.range(seed_key, "density:small", 0.30, 0.45)
+    elseif profile.size_class == "medium" then
+      profile.target_lots = choice.int(seed_key, "target_lots:medium", 5, 8)
+      profile.density = choice.range(seed_key, "density:medium", 0.35, 0.55)
+    else
+      profile.target_lots = choice.int(seed_key, "target_lots:large", 8, 12)
+      profile.density = choice.range(seed_key, "density:large", 0.40, 0.65)
+    end
   end
 
   profile.lot_spacing = {
@@ -759,11 +793,25 @@ function perfectworld.planner.create_village_profile(candidate, environment)
     for _ = 1, count do roles[#roles + 1] = role end
   end
   profile.target_lots = math.max(profile.target_lots, #roles)
+
+  -- Roles a settlement only ever wants one of. A village square with three
+  -- wells in it is not a bigger village square; the optional-role draw is
+  -- uniform and a large settlement drew the well again and again.
+  local once_only = {central = true}
+  local taken = {}
+  for _, role in ipairs(roles) do taken[role] = true end
+
   while #roles < profile.target_lots do
     local slot = #roles + 1
     local role = choice.pick(seed_key, "roles:optional:" .. slot,
       profile.optional_roles)
     if not role then break end
+    if once_only[role] and taken[role] then
+      -- Already have one. Fall back to a dwelling, which a settlement can
+      -- always use another of, rather than leaving the slot empty.
+      role = "dwelling"
+    end
+    taken[role] = true
     roles[#roles + 1] = role
   end
   profile.structure_roles = roles
@@ -790,15 +838,20 @@ function perfectworld.planner.create_village_profile(candidate, environment)
   if perfectworld.schemes and profile.village_id then
     local style = perfectworld.schemes.style_for(profile.village_id, family)
     profile.style = style
+    -- A town draws on the tall catalogue as well as its regional one. Height
+    -- belongs to the place, not to the region's way of building, so a northern
+    -- town builds nordic and tall rather than having to choose.
+    local opts = {urban = profile.settlement_type == "town"
+      or profile.settlement_type == "city"}
     if style then
       for role, _ in pairs(profile.role_variants) do
-        local variants = perfectworld.schemes.variants_for(style, role)
+        local variants = perfectworld.schemes.variants_for(style, role, opts)
         if variants then profile.role_variants[role] = variants end
       end
       -- Roles the specialization never named a variant for still need one.
       for _, role in ipairs(profile.structure_roles or {}) do
         if not profile.role_variants[role] then
-          local variants = perfectworld.schemes.variants_for(style, role)
+          local variants = perfectworld.schemes.variants_for(style, role, opts)
           if variants then profile.role_variants[role] = variants end
         end
       end
@@ -1753,24 +1806,44 @@ function perfectworld.planner.plan_village(candidate, env_override, terrain)
   return first_plan, first_profile, first_environment
 end
 
---- Emerge (generate if needed) the map area a village plan will inspect.
--- minetest.load_area only loads already-generated blocks, so a village planned
--- near the edge of the generated world would see no terrain at all.
-function perfectworld.planner.emerge_village_area(candidate, callback)
+--- Emerge (generate if needed) the map area a settlement plan will inspect.
+--
+-- `minetest.load_area` only loads already-generated blocks, so a settlement
+-- planned near the edge of the generated world would see no terrain at all.
+--
+-- The area is emerged in tiles rather than in one request. A town needs a far
+-- wider area than a village, and one request for it would ask for more
+-- mapblocks than the emerge queue accepts — the surplus is dropped silently,
+-- the final callback never fires, and the caller waits forever. That failure
+-- mode is invisible and was worth designing out rather than tuning around: the
+-- tiles are small enough that no configuration of the queue can refuse one.
+local EMERGE_TILE = 48
+
+function perfectworld.planner.emerge_settlement_area(candidate, radius, callback)
   if not minetest.emerge_area then
     callback()
     return
   end
+  radius = math.max(math.floor(tonumber(radius) or 64), 16)
 
-  -- Keep the request well under emergequeue_limit_total. Asking for more
-  -- mapblocks than the queue accepts gets the surplus dropped silently, the
-  -- final callback never fires, and the caller waits forever. get_spawn_level
-  -- is noise-based, so the surface height is known before generating anything.
-  local radius = 64
+  -- get_spawn_level is noise-based, so the surface height is known before
+  -- anything is generated.
   local surface = (minetest.get_spawn_level
     and minetest.get_spawn_level(candidate.x, candidate.z)) or 32
-  local minp = {x = candidate.x - radius, y = surface - 24, z = candidate.z - radius}
-  local maxp = {x = candidate.x + radius, y = surface + 32, z = candidate.z + radius}
+  local low_y, high_y = surface - 24, surface + 32
+
+  -- The tiles, nearest to the centre first: if the watchdog fires the ground
+  -- that matters most is the ground already there.
+  local tiles = {}
+  local step = EMERGE_TILE * 2
+  for x = -radius, radius, step do
+    for z = -radius, radius, step do
+      tiles[#tiles + 1] = {x = x, z = z}
+    end
+  end
+  table.sort(tiles, function(a, b)
+    return a.x * a.x + a.z * a.z < b.x * b.x + b.z * b.z
+  end)
 
   local done = false
   local function finish()
@@ -1779,18 +1852,59 @@ function perfectworld.planner.emerge_village_area(candidate, callback)
     callback()
   end
 
-  minetest.emerge_area(minp, maxp, function(_, _, calls_remaining)
-    if calls_remaining == 0 then finish() end
-  end)
+  local index = 0
+  local function next_tile()
+    if done then return end
+    index = index + 1
+    local tile = tiles[index]
+    if not tile then
+      finish()
+      return
+    end
+    local minp = {
+      x = candidate.x + tile.x, y = low_y,
+      z = candidate.z + tile.z,
+    }
+    local maxp = {
+      x = math.min(candidate.x + tile.x + step - 1, candidate.x + radius), y = high_y,
+      z = math.min(candidate.z + tile.z + step - 1, candidate.z + radius),
+    }
+    minetest.emerge_area(minp, maxp, function(_, _, calls_remaining)
+      if calls_remaining == 0 then next_tile() end
+    end)
+  end
+  next_tile()
 
-  -- Watchdog: a stalled emerge must not stall the whole run.
-  minetest.after(45, function()
+  -- Watchdog: a stalled emerge must not stall the whole run. It scales with the
+  -- work asked for, because a town is a great deal more ground than a village
+  -- and a fixed timeout would cut every town short.
+  minetest.after(20 + #tiles * 8, function()
     if not done then
       minetest.log("warning", "[pw_planner] emerge timed out for "
-        .. tostring(candidate.id or "site") .. ", continuing with what is loaded")
+        .. tostring(candidate.id or "site") .. " after " .. index .. " of "
+        .. #tiles .. " tiles, continuing with what is loaded")
       finish()
     end
   end)
+end
+
+--- How much ground a settlement of this kind needs generated around it.
+--
+-- The survey reaches `SITE_RADIUS + SURVEY_RADIUS` from the candidate, and the
+-- streets reach half their length plus the depth of a lot. Getting this wrong
+-- is not a crash: the plan is simply made against terrain that does not exist,
+-- every probe returns no surface, and the settlement is recorded as unbuildable
+-- ground it never saw.
+function perfectworld.planner.emerge_radius_for(candidate)
+  local kind = candidate and candidate.type or "village"
+  if kind == "town" or kind == "city" then return 128 end
+  return 64
+end
+
+--- Backwards-compatible entry point: a village, at the village radius.
+function perfectworld.planner.emerge_village_area(candidate, callback)
+  perfectworld.planner.emerge_settlement_area(candidate,
+    perfectworld.planner.emerge_radius_for(candidate), callback)
 end
 
 -- === Diversity Analysis ===
@@ -2742,6 +2856,46 @@ local function materialize_village_plan(plan, profile, candidate)
     end
     if not bell_placed then
       warnings[#warnings + 1] = "no_bell_site"
+    end
+  end
+
+  -- The town wall.
+  --
+  -- A wall is what tells you, from outside and at a distance, that the place
+  -- you are approaching is a town and not a big village. It follows the ground
+  -- rather than being levelled into it, so it steps down a slope the way a
+  -- built wall does.
+  --
+  -- The gates are not decoration either: a wall without them seals the town,
+  -- and everything that was reachable before — the streets, the doors, the
+  -- roads to the next settlement — stops being reachable. So every way that
+  -- crosses the line gets an opening, and the ways include the roads to other
+  -- settlements, which arrive from outside and would otherwise end at a wall.
+  local wall_result = nil
+  if profile.settlement_type == "town" or profile.settlement_type == "city" then
+    local ways = {}
+    for _, road in ipairs(placed_roads) do
+      if road.kind ~= "driveway" then ways[#ways + 1] = road end
+    end
+    if perfectworld.roads.links_for_settlement then
+      local rx, rz = candidate.rx, candidate.rz
+      if not rx then rx, rz = perfectworld.get_region_coords({x = candidate.x, y = 0, z = candidate.z}) end
+      for _, link in ipairs(perfectworld.roads.links_for_settlement(candidate.id, rx, rz)) do
+        ways[#ways + 1] = link
+      end
+    end
+    wall_result = perfectworld.planner.build_town_wall(plan.bounds, profile, ways)
+    if wall_result then
+      warnings[#warnings + 1] = string.format("wall:%d nodes, %d gate(s)",
+        wall_result.nodes, wall_result.gates)
+      -- A guard on the gates from the first day, rather than waiting for the
+      -- population to reach the threshold Mineclonia raises golems at. That
+      -- mechanism is left alone and still applies.
+      if perfectworld.population and perfectworld.population.post_guards
+        and wall_result.gate_spots then
+        perfectworld.population.post_guards(wall_result.gate_spots,
+          math.max(2, math.min(4, wall_result.gates)))
+      end
     end
   end
 
@@ -3701,6 +3855,113 @@ end
 
 perfectworld.planner._standing_buildings = standing_buildings
 
+
+--- Ring a town with a wall, leaving a gate wherever a way crosses it.
+--
+-- The wall follows the ground: each column is built from the surface up, so on
+-- a slope it steps rather than floating or burying itself. Two nodes go below
+-- the surface as well, because a wall whose foot sits exactly on the grass
+-- lifts off the ground the moment anything erodes under it.
+--
+-- Gates are cut where a way passes, three wide and three high with a lintel
+-- over them. Getting this wrong does not look wrong — it looks like a town —
+-- and the symptom is that nobody can get in or out, which is why the ways
+-- include the roads arriving from other settlements and not only the streets
+-- inside.
+function perfectworld.planner.build_town_wall(bounds, profile, ways)
+  if type(bounds) ~= "table" or not bounds.min_x then return nil end
+  local stone = perfectworld.structures.palette_material(
+    profile.material_palette, "foundation", "foundation")
+  local cap = perfectworld.structures.palette_material(
+    profile.material_palette, "roof_slab", "roof")
+
+  local margin = 8
+  local height = 4
+  local min_x = math.floor(bounds.min_x - margin)
+  local max_x = math.ceil(bounds.max_x + margin)
+  local min_z = math.floor(bounds.min_z - margin)
+  local max_z = math.ceil(bounds.max_z + margin)
+
+  -- Where the ways cross the line. A cell within two of a way's centreline is
+  -- a gate cell, which makes the opening three wide for a road drawn straight
+  -- and a little wider for one crossing at an angle — which is what a gate
+  -- through a thick wall looks like anyway.
+  local gate_cells = {}
+  local gates = 0
+  for _, way in ipairs(ways or {}) do
+    local points = way.path or way.points or {}
+    for i = 1, #points - 1 do
+      local from, to = points[i], points[i + 1]
+      local dx, dz = to.x - from.x, to.z - from.z
+      local steps = math.max(math.abs(dx), math.abs(dz), 1)
+      for step = 0, steps do
+        local t = step / steps
+        local x = math.floor(from.x + dx * t + 0.5)
+        local z = math.floor(from.z + dz * t + 0.5)
+        for ox = -2, 2 do
+          for oz = -2, 2 do
+            gate_cells[(x + ox) .. ":" .. (z + oz)] = true
+          end
+        end
+      end
+    end
+  end
+
+  local perimeter = {}
+  for x = min_x, max_x do
+    perimeter[#perimeter + 1] = {x = x, z = min_z}
+    perimeter[#perimeter + 1] = {x = x, z = max_z}
+  end
+  for z = min_z + 1, max_z - 1 do
+    perimeter[#perimeter + 1] = {x = min_x, z = z}
+    perimeter[#perimeter + 1] = {x = max_x, z = z}
+  end
+
+  world_terrain.reset()
+  local nodes = 0
+  local in_gate = false
+  local gate_spots = {}
+  for _, cell in ipairs(perimeter) do
+    local ground = paving_level(cell.x, cell.z)
+    if ground then
+      local gate = gate_cells[cell.x .. ":" .. cell.z]
+      if gate then
+        if not in_gate then
+          gates = gates + 1
+          gate_spots[#gate_spots + 1] = {x = cell.x, y = ground, z = cell.z}
+        end
+        in_gate = true
+        -- Clear the opening and put a lintel over it, so the wall reads as
+        -- continuous rather than as two walls with a hole between them.
+        for y = ground + 1, ground + 3 do
+          local existing = minetest.get_node({x = cell.x, y = y, z = cell.z}).name
+          if existing ~= "air" and existing ~= "ignore" then
+            minetest.set_node({x = cell.x, y = y, z = cell.z}, {name = "air"})
+          end
+        end
+        minetest.set_node({x = cell.x, y = ground + 4, z = cell.z}, {name = stone})
+        nodes = nodes + 1
+      else
+        in_gate = false
+        for depth = 0, 2 do
+          minetest.set_node({x = cell.x, y = ground - depth, z = cell.z}, {name = stone})
+        end
+        for y = ground + 1, ground + height do
+          minetest.set_node({x = cell.x, y = y, z = cell.z}, {name = stone})
+          nodes = nodes + 1
+        end
+        if cap and cap ~= "air" then
+          minetest.set_node({x = cell.x, y = ground + height + 1, z = cell.z}, {name = cap})
+          nodes = nodes + 1
+        end
+      end
+    end
+  end
+
+  return {nodes = nodes, gates = gates, gate_spots = gate_spots,
+    min_x = min_x, max_x = max_x,
+    min_z = min_z, max_z = max_z, height = height}
+end
 
 --- Lay the stretch of every settlement link that crosses this chunk.
 function perfectworld.planner.pave_links_in_chunk(minp, maxp)

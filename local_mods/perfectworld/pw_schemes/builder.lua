@@ -14,6 +14,14 @@ local put, put_facing, fill = schemes.put, schemes.put_facing, schemes.fill
 
 --- Window columns along a wall run: spaced, never in a corner, never in the
 --- door's column.
+--- The first of these node names this game actually registers, or nil.
+local function first_registered_node(...)
+  for _, name in ipairs({...}) do
+    if name and minetest.registered_nodes[name] then return name end
+  end
+  return nil
+end
+
 local function window_columns(span, skip, spacing)
   spacing = spacing or 2
   local out = {}
@@ -66,9 +74,20 @@ function schemes.build(scheme, context)
   local door_x = scheme.door and scheme.door.offset or 0
   local floor_y = raise
 
+  -- How many floors this building has. One storey is a house; a town needs
+  -- buildings that stand two, three and four, because what makes a town look
+  -- like a town from outside it is height, not count.
+  --
+  -- A storey occupies `wall_height` of wall and one node of floor above it. The
+  -- top storey's ceiling is the roof base, so the whole building measures
+  -- `storeys * (wall_height + 1)` above its own floor.
+  local storeys = math.max(math.floor(tonumber(scheme.storeys) or 1), 1)
+  local storey_rise = height + 1
+  local top_y = floor_y + storeys * storey_rise
+
   -- The volume, cleared. Everything below is written into known-empty space.
   fill(origin, rotation, {x = -half_w, y = floor_y + 1, z = -half_d},
-    {x = half_w, y = floor_y + height + 1, z = half_d}, "air")
+    {x = half_w, y = top_y, z = half_d}, "air")
 
   fill(origin, rotation, {x = -half_w, y = floor_y, z = -half_d},
     {x = half_w, y = floor_y, z = half_d}, mat.floor)
@@ -97,25 +116,45 @@ function schemes.build(scheme, context)
     end
   end
 
-  -- Walls, with the lowest course in the secondary material when the scheme
-  -- asks for a plinth.
-  for y = floor_y + 1, floor_y + height do
-    local course = mat.wall
-    if scheme.plinth ~= false and y == floor_y + 1 then course = mat.base end
-    for x = -half_w, half_w do
-      put(origin, rotation, {x = x, y = y, z = -half_d}, course)
-      put(origin, rotation, {x = x, y = y, z = half_d}, course)
+  -- Walls, storey by storey.
+  --
+  -- The ground storey of a town building is stone to its full height rather
+  -- than only at the plinth: a four-storey timber box does not read as a town
+  -- house, and stone under timber is what every real one does for the same
+  -- reason — the bottom carries the rest.
+  for storey = 0, storeys - 1 do
+    local base = floor_y + storey * storey_rise
+    local ground_stone = scheme.stone_ground_floor and storey == 0
+    for y = base + 1, base + height do
+      local course = mat.wall
+      if ground_stone then
+        course = mat.base
+      elseif scheme.plinth ~= false and y == base + 1 then
+        course = mat.base
+      end
+      for x = -half_w, half_w do
+        put(origin, rotation, {x = x, y = y, z = -half_d}, course)
+        put(origin, rotation, {x = x, y = y, z = half_d}, course)
+      end
+      for z = -half_d + 1, half_d - 1 do
+        put(origin, rotation, {x = -half_w, y = y, z = z}, course)
+        put(origin, rotation, {x = half_w, y = y, z = z}, course)
+      end
     end
-    for z = -half_d + 1, half_d - 1 do
-      put(origin, rotation, {x = -half_w, y = y, z = z}, course)
-      put(origin, rotation, {x = half_w, y = y, z = z}, course)
+
+    -- The floor of the storey above, laid over this one's ceiling line. The
+    -- top storey has no floor above it; the roof sits there.
+    if storey < storeys - 1 then
+      fill(origin, rotation,
+        {x = -half_w + 1, y = base + height + 1, z = -half_d + 1},
+        {x = half_w - 1, y = base + height + 1, z = half_d - 1}, mat.floor)
     end
   end
 
-  -- Timber corner posts, full height. They are what stops a plank box from
-  -- reading as a plank box.
+  -- Timber corner posts, full height of the building. They are what stops a
+  -- plank box from reading as a plank box.
   if scheme.posts ~= false then
-    for y = floor_y + 1, floor_y + height do
+    for y = floor_y + 1, top_y - 1 do
       for _, corner in ipairs({
         {x = -half_w, z = -half_d}, {x = half_w, z = -half_d},
         {x = -half_w, z = half_d}, {x = half_w, z = half_d},
@@ -125,19 +164,43 @@ function schemes.build(scheme, context)
     end
   end
 
-  -- Windows. `rows` counts them up from the course above the plinth.
+  -- Windows, on every storey. `rows` counts them up from the course above the
+  -- plinth of the storey they are in.
   local rows = scheme.windows and scheme.windows.rows or 1
   if rows > 0 and mat.window ~= "air" then
     local spacing = scheme.windows and scheme.windows.spacing or 2
-    for row = 1, math.min(rows, height - 1) do
-      local y = floor_y + 1 + row
-      for _, x in ipairs(window_columns(half_w, door_x, spacing)) do
-        put(origin, rotation, {x = x, y = y, z = half_d}, mat.window)
-        put(origin, rotation, {x = x, y = y, z = -half_d}, mat.window)
+    for storey = 0, storeys - 1 do
+      local base = floor_y + storey * storey_rise
+      for row = 1, math.min(rows, height - 1) do
+        local y = base + 1 + row
+        for _, x in ipairs(window_columns(half_w, door_x, spacing)) do
+          put(origin, rotation, {x = x, y = y, z = half_d}, mat.window)
+          put(origin, rotation, {x = x, y = y, z = -half_d}, mat.window)
+        end
+        for _, z in ipairs(window_columns(half_d, nil, spacing)) do
+          put(origin, rotation, {x = -half_w, y = y, z = z}, mat.window)
+          put(origin, rotation, {x = half_w, y = y, z = z}, mat.window)
+        end
       end
-      for _, z in ipairs(window_columns(half_d, nil, spacing)) do
-        put(origin, rotation, {x = -half_w, y = y, z = z}, mat.window)
-        put(origin, rotation, {x = half_w, y = y, z = z}, mat.window)
+    end
+  end
+
+  -- A way up. Without it the upper storeys are sealed rooms, which is worse
+  -- than not having them: a villager that cannot reach its bed is a villager
+  -- that never sleeps.
+  if storeys > 1 then
+    local ladder = first_registered_node("mcl_core:ladder", "mcl_stairs:stair_oak")
+    local shaft_x = -half_w + 1
+    local shaft_z = -half_d + 1
+    for storey = 1, storeys - 1 do
+      local base = floor_y + storey * storey_rise
+      -- The hole through the floor, and the one above it so a head fits.
+      put(origin, rotation, {x = shaft_x, y = base, z = shaft_z}, "air")
+      for y = floor_y + (storey - 1) * storey_rise + 1, base + 1 do
+        if ladder then
+          put_facing(origin, rotation, {x = shaft_x, y = y, z = shaft_z},
+            ladder, {x = 0, y = 0, z = -1})
+        end
       end
     end
   end
@@ -179,10 +242,10 @@ function schemes.build(scheme, context)
     end
   end
 
-  -- Ceiling, then the roof on top of it.
+  -- Ceiling of the top storey, then the roof on top of it.
   fill(origin, rotation,
-    {x = -half_w + 1, y = floor_y + height + 1, z = -half_d + 1},
-    {x = half_w - 1, y = floor_y + height + 1, z = half_d - 1}, mat.floor)
+    {x = -half_w + 1, y = top_y, z = -half_d + 1},
+    {x = half_w - 1, y = top_y, z = half_d - 1}, mat.floor)
 
   local roof_kind = scheme.roof.kind
   local build_roof = schemes.ROOFS[roof_kind]
@@ -190,7 +253,7 @@ function schemes.build(scheme, context)
   build_roof({
     origin = origin, rotation = rotation,
     half_w = half_w, half_d = half_d,
-    base_y = floor_y + height + 1,
+    base_y = top_y,
     stair = mat.stair, slab = mat.slab, gable = mat.wall,
     pitch = scheme.roof.pitch or (style and style.roof and style.roof.pitch) or 1,
     eaves = scheme.roof.eaves or (style and style.roof and style.roof.eaves) or 1,
