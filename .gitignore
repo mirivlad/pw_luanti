@@ -45,3 +45,6 @@ __pycache__/
 
 # Docker
 .env
+runtime/pw-bot-artifacts/
+runtime/pwbot.toml
+runtime/secrets/

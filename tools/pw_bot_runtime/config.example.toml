@@ -1,0 +1,81 @@
+# pw_bot_runtime — example configuration
+#
+# Copy to runtime/pwbot.toml and edit. Paths are relative to the repository root.
+#
+# The password is NOT in this file and must never be. Point password_file at a
+# file containing it, mode 0600. The runtime passes the path to the client and
+# never reads the value into a log, a report or an exception.
+
+[server]
+address = "127.0.0.1"
+port = 30000
+player_name = "pwbot"
+password_file = "./secrets/pwbot.password"
+world_path = "./data/worlds/perfectworld"
+
+[client]
+binary = "luanti"
+startup_timeout_seconds = 60
+display_size = "1280x720"
+# Leave the client running when the run finishes, so an operator can look around.
+keep_open_after_run = false
+# On a failure in visible mode, keep the window: the state at the moment of
+# failure is usually the most informative thing in the whole run.
+keep_open_on_failure = true
+
+[display]
+# headless -> Xvfb, nobody watching. visible -> a window an operator can watch.
+mode = "headless"
+# xephyr (preferred), mirror (Xvfb + ffplay, read-only), host (see below).
+visible_backend = "xephyr"
+# The host display is the operator's own desktop. Turning this on means the bot
+# types into a display that also has your editor on it. Off, deliberately.
+allow_host_display_fallback = false
+window_position_x = 100
+window_position_y = 100
+display_search_start = 90
+display_search_end = 120
+
+[bridge]
+protocol = "pw_bot_bridge/v1"
+poll_interval_ms = 100
+request_timeout_ms = 3000
+
+[brain]
+protocol = "pw_player_bot/v1"
+think_interval_ms = 250
+intent_timeout_seconds = 30
+
+[movement]
+# How close counts as arrived, in nodes.
+position_tolerance = 0.55
+yaw_tolerance_degrees = 6.0
+# No ground made for this long means stuck.
+stuck_timeout_seconds = 3.0
+maximum_action_seconds = 30.0
+progress_epsilon = 0.08
+# Radians of yaw per pixel of pointer motion. Measured for this project's test
+# client: 200 px produced 0.698 rad. Re-measured at startup unless disabled.
+yaw_radians_per_pixel = 0.00349
+yaw_gain = 0.9
+calibrate_yaw_on_start = true
+control_tick_ms = 120
+
+[input]
+# auto prefers xtest (python-xlib) and falls back to xdotool.
+backend = "auto"
+key_forward = "w"
+key_backward = "s"
+key_left = "a"
+key_right = "d"
+key_jump = "space"
+key_sneak = "shift"
+key_chat = "t"
+# Digging is not something a first walking bot should be able to do by accident.
+allow_left_click = false
+
+[artifacts]
+directory = "./runtime/pw-bot-artifacts"
+screenshots_on_failure = true
+screenshot_on_finish = true
+keep_runs = 50

@@ -85,6 +85,11 @@ function brain.start(player_name)
     },
   }
   minds[player_name] = mind
+  -- A bot that has started thinking needs somewhere to publish to, whether or
+  -- not the spool was running when the transport last swept its directories.
+  if P.impl.transport and P.impl.transport.is_running() then
+    P.impl.transport.ensure_bot(player_name)
+  end
   minetest.log("action", "[pw_player_bot] thinking for " .. player_name
     .. " (memory " .. (info.loaded and "restored" or "fresh")
     .. ", " .. memo.cell_count .. " cells)")
