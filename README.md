@@ -158,4 +158,9 @@ See [MIGRATION.md](MIGRATION.md) for details.
 
 ## License
 
-This project does not yet have a formal license. All rights reserved until one is chosen.
+MIT. See [LICENSE](LICENSE).
+
+Mineclonia and Luanti are separate projects under their own licenses, and
+nothing here redistributes their content. The village houses are modelled on the
+vanilla plains blueprints as *described* on the Minecraft Wiki and written from
+scratch in Lua; no Mojang asset is copied or converted into this repository.
