@@ -152,20 +152,56 @@ course in `pw_debug/bot_course.lua` gives it deliberate obstacles, half of which
 it is meant to fail. Run it with `scripts/pw-bot-course.sh build` then
 `pw-bot-runtime scenario course`.
 
+**The course passes end to end.** Every step behaves as expected.
+
 | Step | Verdict |
 |------|---------|
 | `walk_straight`, `turn_corner`, `step_up`, `climb_stairs` | reached — the body walks, turns, climbs a kerb and takes stairs |
-| `open_door` | **fails**: `the target is no longer observable after the click` |
-| `enter_room`, `leave_room` | **fail**: blocked by the door that did not open |
-| the five obstacles that must fail | all report `blocked`, but by the *door*, not by their own obstacle — green for the wrong reason, and proving nothing |
+| `open_door` | reached — `door_acacia_t_1` → `_t_2`, closed to open, empty hand, crosshair on the door |
+| `enter_room`, `leave_room` | reached — through the doorway it opened, and out the far side |
+| the five obstacles that must fail | all `blocked`, and no longer by an unopened door |
 
-Established about the door: the course builds it correctly (bottom at the
-walking surface, top above, metadata set so `mcl_doors` will answer a click);
-the bot aims at the top half, which `mcl_doors`' `on_rightclick` handles; the
-node is still `_b_1`, i.e. closed, afterwards; and `client.conf` does resolve and
-exist, so the client is launched with the keyboard `place` binding. What has not
-been established is whether the key press reaches the server as a rightclick at
-all. That is where to look next.
+Everything physical the bot does goes through XTEST into a real client. Nothing
+teleports it after the start line.
+
+### What was wrong, and how it was found
+
+Four defects, each of which alone stopped every interaction, and all four found
+by measuring rather than reasoning:
+
+1. **The pointer warp destroyed the aim.** The runtime aimed, then warped the
+   pointer to the window centre, then pressed. Luanti turns the head from
+   *relative* pointer motion and never grabs the pointer on a bare Xvfb, so the
+   warp arrived as a large mouse movement between aiming and pressing.
+2. **The "empty" hotbar slot held a block.** Twice guessed, twice wrong —
+   `players.sqlite` has snowballs in slots 1 and 2 and oak wood in 5. The
+   runtime now asks the bridge what is in hand instead of assuming.
+3. **The crosshair position was read from the wrong field.** `inspect_target`
+   reports it on the *target*, with the node nested inside; the code looked in
+   the node, got null on every hit, and called a correct aim a miss.
+4. **Aiming once at the named node pointed at the floor.** A door is named by
+   its lower node, which from the doorstep is a node below eye level a node
+   away — the ray hit the floor at the bot's feet. Aiming is now closed-loop
+   against what the crosshair reports.
+
+Ruled out along the way, with evidence rather than argument: the client does
+read `client.conf` and its bindings are live (moving `keymap_forward` to a
+non-default key stops the bot walking); `keymap_place` is a setting Luanti
+recognises and `SYSTEM_SCANCODE_21` is R (it normalises `KEY_KEY_R` to exactly
+that); the place action reaches the server (`pwbot places node …` in the server
+log); and the course's door is a working door (`/pw_bot_course door` calls its
+`on_rightclick` server-side, and puts it back afterwards).
+
+### What the course does not yet prove
+
+The five obstacles that must fail stand in series, and the runtime walks in
+straight lines. All five report `blocked by mcl_trees:wood_oak` — the two-node
+wall of the *first* of them. Only that first obstacle is genuinely under test;
+the other four sit behind a wall the bot cannot pass. Better than being stopped
+by an unopened door, and still not proof.
+
+Interaction is also tested against one door and nothing else. Chests, gates,
+levers and buttons go through the same path but have never been tried.
 
 ## Missing Systems
 
