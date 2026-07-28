@@ -638,6 +638,26 @@ end
 
 perfectworld.planner._archetype_weights = archetype_weights
 
+local shore_tangent_indices = {
+  ["1:0"] = 1,
+  ["1:1"] = 2,
+  ["0:1"] = 3,
+  ["-1:1"] = 4,
+  ["-1:0"] = 5,
+  ["-1:-1"] = 6,
+  ["0:-1"] = 7,
+  ["1:-1"] = 8,
+}
+
+local function shore_tangent_index(direction)
+  if type(direction) ~= "table" then return nil end
+  local tangent_x = -(tonumber(direction.z) or 0)
+  local tangent_z = tonumber(direction.x) or 0
+  local sign_x = tangent_x == 0 and 0 or (tangent_x > 0 and 1 or -1)
+  local sign_z = tangent_z == 0 and 0 or (tangent_z > 0 and 1 or -1)
+  return shore_tangent_indices[sign_x .. ":" .. sign_z]
+end
+
 -- === Village Profile ===
 
 function perfectworld.planner.create_village_profile(candidate, environment)
@@ -723,6 +743,13 @@ function perfectworld.planner.create_village_profile(candidate, environment)
   profile.role_variants = deep_copy(definition.role_variants or {})
   profile.required_roles = ordered_requirement_roles(profile.required_role_counts)
   profile.optional_roles = deep_copy(definition.optional_roles or {})
+  if specialization == "fishing" then
+    local direction_index = shore_tangent_index(
+      environment.ecology and environment.ecology.shore_direction)
+    if direction_index then
+      profile.road_character.direction_index = direction_index
+    end
+  end
 
   -- Mandatory roles come first so terrain can never leave a decorative lot
   -- while silently dropping the work that defines the settlement.

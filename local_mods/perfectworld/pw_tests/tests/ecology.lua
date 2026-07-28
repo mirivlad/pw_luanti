@@ -243,6 +243,41 @@ T.register_test("perfectworld", "ecology_profiles_require_their_local_work", fun
   end
 end)
 
+T.register_test("perfectworld", "fishing_main_street_runs_along_the_measured_shore", function(ctx)
+  local candidate = {
+    id = "fishing_shore_road_axis",
+    x = 320,
+    z = 320,
+    rx = 0,
+    rz = 0,
+  }
+  local function profile_for(direction)
+    return perfectworld.planner.create_village_profile(candidate, {
+      biome_name = "test:coastal",
+      biome_family = "coastal",
+      heat = 50,
+      humidity = 50,
+      elevation = 20,
+      roughness = 0,
+      water_proximity = 6,
+      vegetation_density = 0,
+      specialization = "fishing",
+      ecology = {shore_direction = direction},
+    })
+  end
+
+  local water_east = profile_for({x = 6, z = 0})
+  local water_north = profile_for({x = 0, z = 6})
+  ctx.assert.is_true(
+    water_east.road_character.direction_index == 3
+      or water_east.road_character.direction_index == 7,
+    "east-facing water needs a north-south shore road")
+  ctx.assert.is_true(
+    water_north.road_character.direction_index == 1
+      or water_north.road_character.direction_index == 5,
+    "north-facing water needs an east-west shore road")
+end)
+
 local function ecology_api(ctx)
   local api = perfectworld.planner.ecology
   ctx.assert.not_nil(api, "planner must expose bounded ecological site selection")
