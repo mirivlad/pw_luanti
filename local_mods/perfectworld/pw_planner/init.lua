@@ -2619,7 +2619,9 @@ local function materialize_village_plan(plan, profile, candidate)
       -- who eventually claims it decides the rest for itself.
       local trade
       if lot.role == "dwelling" and perfectworld.settlements.trades_for then
-        local offered = perfectworld.settlements.trades_for(profile.specialization)
+        local offered = perfectworld.settlements.trades_for(profile.specialization, {
+          town = profile.settlement_type == "town" or profile.settlement_type == "city",
+        })
         trade = choice.pick(profile.seed_key, "lot:" .. lot.index .. ":trade", offered)
       end
 
@@ -2896,6 +2898,13 @@ local function materialize_village_plan(plan, profile, candidate)
         perfectworld.population.post_guards(wall_result.gate_spots,
           math.max(2, math.min(4, wall_result.gates)))
       end
+
+      -- Farmland outside the wall. A town eats more than it can grow inside
+      -- itself, and a walled town with nothing but wall around it is a fort.
+      local fields = perfectworld.planner.ring_town_with_fields(
+        plan, profile, candidate, wall_result)
+      warnings[#warnings + 1] = string.format("fields:%d of %d placed",
+        fields.placed, fields.wanted)
     end
   end
 
@@ -3855,6 +3864,52 @@ end
 
 perfectworld.planner._standing_buildings = standing_buildings
 
+
+--- Ring a town with fields, outside its wall.
+--
+-- A town eats more than it can grow inside itself, and a walled town with
+-- nothing but wall outside it reads as a fort. The fields go beyond the wall
+-- because that is where farmland is when there is a wall — the ground inside is
+-- worth too much to plant.
+--
+-- Each one is an ordinary `field` worksite, the same kind a farming village
+-- gets, so it is fenced, watered, cropped and recorded exactly as those are and
+-- nothing here needs to know how a field is built.
+function perfectworld.planner.ring_town_with_fields(plan, profile, candidate, wall)
+  if not wall then return {placed = 0, tried = 0} end
+  local centre_x = (wall.min_x + wall.max_x) / 2
+  local centre_z = (wall.min_z + wall.max_z) / 2
+  -- Far enough out that a field's fence clears the wall, and its own nine by
+  -- seven does not reach back over it.
+  local reach = math.max(wall.max_x - centre_x, wall.max_z - centre_z) + 14
+
+  -- One field for every three or four buildings, bounded. A ring of twenty
+  -- fields is a farm with a town in the middle.
+  local wanted = math.max(3, math.min(6, math.floor(#(plan.lots or {}) / 3)))
+  local turn = choice.range(profile.seed_key, "town:fields:turn", 0, math.pi * 2)
+
+  local placed, tried = 0, 0
+  for index = 1, wanted do
+    local angle = turn + (index - 1) * (math.pi * 2 / wanted)
+    local x = math.floor(centre_x + math.cos(angle) * reach + 0.5)
+    local z = math.floor(centre_z + math.sin(angle) * reach + 0.5)
+    local y = paving_level(x, z)
+    if y then
+      tried = tried + 1
+      local ok = perfectworld.planner.worksites.place("field", {
+        worksite_id = candidate.id .. "_field_ring_" .. index,
+        required = false,
+        anchor = {x = x, y = y, z = z},
+        candidate_anchors = {{x = x, y = y, z = z}},
+        surface_y = function(px, pz) return paving_level(px, pz, y) end,
+        palette = profile.material_palette,
+        seed_key = profile.seed_key,
+      })
+      if ok then placed = placed + 1 end
+    end
+  end
+  return {placed = placed, tried = tried, wanted = wanted}
+end
 
 --- Ring a town with a wall, leaving a gate wherever a way crosses it.
 --

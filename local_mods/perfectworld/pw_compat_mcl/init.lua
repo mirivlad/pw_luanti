@@ -74,6 +74,13 @@ local materials = {
   job_cartographer  = "mcl_cartography_table:cartography_table",
   job_leatherworker = "mcl_cauldrons:cauldron",
 
+  -- Trades this world adds and Mineclonia does not have. Their nodes are ours
+  -- too: every node the game uses as a workstation is already spoken for by one
+  -- of its own professions, and sharing one would mean two trades competing for
+  -- the same block.
+  job_miner         = "pw_population:ore_table",
+  job_caravaneer    = "pw_population:loading_stage",
+
   -- The meeting point. A bell is what makes a cluster of houses read as a
   -- village to the game: villagers gather at it, raise the alarm from it, and
   -- the iron golems that defend the place are counted around it.

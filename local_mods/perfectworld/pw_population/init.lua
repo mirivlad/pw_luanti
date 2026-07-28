@@ -334,6 +334,13 @@ end
 -- A villager with no job either had nowhere to work or has not got round to it
 -- yet, and those are different problems. This answers the first: it asks the
 -- world what is actually there to claim.
+--- The workstation node a trade of ours claims, if it is one of ours.
+function population.custom_workstation(trade)
+  local profession = population.CUSTOM_PROFESSIONS
+    and population.CUSTOM_PROFESSIONS[trade]
+  return profession and profession.workstation or nil
+end
+
 function population.workstations(bounds, margin)
   if type(bounds) ~= "table" or not bounds.min_x then return {}, 0 end
   margin = margin or population.BOUNDS_MARGIN
@@ -441,5 +448,8 @@ function population.status(settlement_id)
     workstation_kinds = population.workstations(bounds),
   }
 end
+
+dofile(minetest.get_modpath("pw_population") .. "/professions.lua")
+population.register_professions()
 
 minetest.log("action", "[pw_population] loaded")

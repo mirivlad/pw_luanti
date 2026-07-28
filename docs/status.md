@@ -238,6 +238,12 @@ Measured, on a town built at (-3236, -9533):
     warnings=wall:1706 nodes, 11 gate(s)
     11 beds, 11 villagers moved in
 
+**Fields outside the wall.** A town eats more than it can grow inside itself,
+and a walled town with nothing but wall around it reads as a fort. The fields
+are ordinary `field` worksites — the same kind a farming village gets — ringed
+beyond the wall, because that is where farmland is when there is a wall: the
+ground inside is worth too much to plant.
+
 Eleven gates is more than a town wants — the rule opens one wherever any way
 crosses, and six streets plus the roads to other settlements cross a lot. It is
 honest rather than right, and tightening it to major ways only is the obvious
@@ -252,6 +258,51 @@ that no configuration can refuse one, nearest the centre first. And
 happily name coordinates the world does not extend to, and the first town this
 project ever tried to build sat at x=33357, past the limit of about 31000, and
 reported a failure with no visible cause.
+
+## Trades This World Adds
+
+Mineclonia's profession system is open: `mobs_mc.register_villager` takes a
+name, a point-of-interest id, the workstation node the trade claims, a texture,
+a trade list and a gift list. Everything a villager then does with it — finding
+the workstation, claiming it, walking to it on a schedule, working, trading,
+going home to sleep — is the game's own behaviour, generic over the profession.
+Nothing was copied.
+
+Two are added, for different reasons:
+
+| Trade | Workstation | Why |
+|---|---|---|
+| `miner` | `pw_population:ore_table` | The game has a mason who cuts stone and a toolsmith who works iron, and nobody who goes and gets it. A world whose settlements are sited on measured ore should have somebody whose living is ore |
+| `caravaneer` | `pw_population:loading_stage` | The roads between settlements exist and nothing uses them |
+
+The workstations are our own nodes. Every node the game uses as a workstation is
+already spoken for by one of its own professions, so sharing one would put two
+trades in competition for the same block and whichever villager arrived first
+would decide what the building was for.
+
+**What the caravaneer is not, yet.** Registering the profession gives a villager
+who claims a loading stage, works at it and trades other places' goods. It does
+*not* give a villager who walks to the next town with a load: that is new
+behaviour, not a new profession, and it is not written. `mcl_mobs` has `gopath`
+and the settlement links are the waypoints it would need — the road is open, but
+the journey is not made.
+
+Miners are offered by mining settlements; caravaneers only by towns, because a
+hamlet does not have a caravan.
+
+Measured in a town at (357, 11727):
+
+    trades: butcher=1 caravaneer=2 farmer=3 librarian=2
+    workstations 15: barrel_closed=6 composter=4 lectern=2
+                     loading_stage=2 smoker=1
+
+Eight villagers, eight in work, and two of them in a trade this game did not
+have until this mod registered it.
+
+The one thing that had to be got right for any of it to load: `pw_population`
+declares `optional_depends = mobs_mc`. Without it our mod loaded first, `mobs_mc`
+was an undeclared global, and the registration silently did nothing but log that
+this game had no profession API.
 
 ## Work
 
@@ -528,8 +579,8 @@ chasing on its own.
   produce it. Towns do exist now
 - Farms and hamlets are the same building under two names — both place a single
   `pw_farmstead_v1` and differ only in priority
-- Fields outside a town wall: a town gets the one worksite its specialization
-  requires, like any other settlement, rather than farmland ringing it
+- The caravaneer's journey: the profession exists and is taken, but nobody yet
+  walks a load from one settlement to the next
 - Tunnels, and bridges over water wider than forty-eight nodes
 - Global route pathfinding over the settlement link network
 - Save migration between planner versions

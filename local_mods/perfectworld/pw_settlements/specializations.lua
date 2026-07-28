@@ -73,17 +73,30 @@ local trades = {
   fishing  = {"fisherman", "fisherman", "fletcher", "cartographer", "leatherworker"},
   farming  = {"farmer", "farmer", "shepherd", "butcher", "librarian"},
   forestry = {"fletcher", "shepherd", "librarian", "leatherworker", "farmer"},
-  mining   = {"mason", "toolsmith", "weaponsmith", "armorer", "mason"},
+  -- `miner` is this project's own profession, not one of the game's. A world
+  -- whose settlements are sited on measured ore should have somebody whose
+  -- living is ore, and Mineclonia has a mason who cuts stone and a toolsmith
+  -- who works iron and nobody who goes and gets it.
+  mining   = {"miner", "miner", "mason", "toolsmith", "weaponsmith", "armorer"},
 }
+
+--- Trades that only a town is large enough to support.
+--
+-- A hamlet does not have a caravan. Somebody whose living is carrying other
+-- places' goods needs somewhere those goods are worth carrying to.
+local town_trades = {"caravaneer", "cartographer", "librarian"}
 
 --- The trades a settlement of this kind offers, in a fixed order.
 --
 -- Repeats are deliberate: a fishing village should be mostly fishermen, and
 -- weighting by repetition keeps the choice a plain indexed pick rather than a
 -- second scoring system.
-function settlements.trades_for(specialization)
-  local list = trades[specialization] or trades.farming
-  return deep_copy(list)
+function settlements.trades_for(specialization, opts)
+  local list = deep_copy(trades[specialization] or trades.farming)
+  if opts and opts.town then
+    for _, trade in ipairs(town_trades) do list[#list + 1] = trade end
+  end
+  return list
 end
 
 --- The material role of the workstation a trade claims.
