@@ -1,28 +1,14 @@
 # Project Status
 
 **Date:** 2026-07-28
-**Test baseline:** 332 total | 329 PASS | 3 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 334 total | 332 PASS | 2 FAIL | 0 SKIP | 0 ERROR
 (171 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
-62 in `pw_player_bot`, 6 in `smoke`)
+64 in `pw_player_bot`, 6 in `smoke`)
 
-Two of the three failures are the long-standing `external_transport`
-configuration contradiction. The third is new and is **not** a code regression:
-
-`pw_player_bot.brain_holds_a_fresh_intent_instead_of_dithering` asserts that the
-brain reuses an intent for at least four of five ticks. The hold breaks on any of
-three conditions, and the one that fires here is `stuck_ticks >= 2`: nothing
-executes the intent during a test, so the bot never moves, and after two ticks
-the brain correctly concludes its plan is not working and re-decides. Whether
-that happens depends on which goal was chosen, which depends on what the bot can
-see — so the test's result is a function of where the test player is standing
-and what the development world looks like around it.
-
-Established rather than assumed: the failure persists with the newest test
-removed, with the player moved out of the settlement a diagnostic had parked it
-in, and with the player moved onto flat artificial ground. It began after this
-world had an obstacle course built and removed at several heights and its
-villages rebuilt. The test is environment-sensitive by construction; a bot that
-holds a plan it can see is failing would be the actual defect.
+The two failures are the long-standing `external_transport` configuration
+contradiction: two `pw_bot_bridge` tests require the setting to be off by
+default, while `config/luanti.conf` turns it on so `pw_bot_runtime` can reach
+the spool.
 
 Measured on `master` after the catalogue was wired into the planner.
 
@@ -38,7 +24,7 @@ Measured on `master` after the catalogue was wired into the planner.
 | `pw_settlements` | ✅ Implemented | Four specialization definitions, scoring and normalized legacy/current settlement records |
 | `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
 | `pw_bot_bridge` | ✅ Implemented | Server-side perception: `player`/`oracle` modes, stable `pw_bot_bridge/v1`, normalized oracle settlement records, semantic registry and bounded transport; player-mode contract unchanged |
-| `pw_player_bot` | ✅ Complete | Bounded memory, beliefs, navigation over remembered ground, needs, goals and `pw_player_bot/v1`. Decides only — never acts |
+| `pw_player_bot` | ✅ Complete | Bounded memory, beliefs, navigation over remembered ground, needs, goals and `pw_player_bot/v1`. Movement is judged over elapsed time, so thinking faster than the world moves is not mistaken for being stuck. Decides only — never acts |
 | `pw_schemes` | ✅ Implemented | 61 declarative building schemes across five architectural styles, five roof kinds, interiors by role, deterministic per-settlement style choice |
 | `pw_tests` | ✅ Complete | 163 PerfectWorld tests across core, store, schemes, planner, structures, ecology, worksites, roads, variation, fingerprints, village and diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
