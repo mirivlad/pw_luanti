@@ -271,6 +271,44 @@ T.register_test("perfectworld", "village_profile_always_requests_min_dwellings",
   end
 end)
 
+T.register_test("perfectworld", "village_missing_production_role_is_not_viable", function(ctx)
+  local candidate = make_candidate(
+    "missing_production_v3", 71, 71, 71000, 71000)
+  local env = make_env("forest", 1, 300)
+  env.specialization = "forestry"
+  env.ecology = {
+    buildable_ratio = 0.8,
+    soil_ratio = 0.7,
+    water_ratio = 0,
+    tree_ratio = 0.5,
+    exposed_stone_ratio = 0,
+    roughness = 1,
+    humidity = 0.8,
+    biome_family = "forest",
+  }
+  local profile = perfectworld.planner.create_village_profile(candidate, env)
+  ctx.assert.not_nil(profile.required_role_counts,
+    "profile must expose generic role requirements")
+  ctx.assert.not_nil(perfectworld.planner.missing_required_roles,
+    "planner must expose generic missing-role validation")
+  if not profile.required_role_counts
+    or not perfectworld.planner.missing_required_roles then
+    return
+  end
+
+  profile.role_variants.sawmill = {"pw_missing_sawmill_for_test"}
+  local plan = perfectworld.planner.build_village_plan(
+    candidate, profile, env, terrain("flat_upland"))
+  ctx.assert.is_true((plan.role_counts.dwelling or 0) >= 2,
+    "the fixture must still fit its required dwellings")
+  ctx.assert.equal(plan.role_counts.sawmill or 0, 0,
+    "the missing production structure must not be invented")
+  ctx.assert.is_false(plan.viable,
+    "two houses without the required sawmill are not a viable forestry village")
+  ctx.assert.contains(table.concat(plan.missing_required_roles or {}, ","),
+    "sawmill<1", "the plan must explain the missing production role")
+end)
+
 T.register_test("perfectworld", "village_palette_follows_biome_family", function(ctx)
   local seen = {}
   for _, family in ipairs(perfectworld.compat.list_families()) do

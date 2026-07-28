@@ -111,6 +111,56 @@ T.register_test("perfectworld", "ecology_specialization_definitions_are_defensiv
     "callers must not mutate registered specialization definitions")
 end)
 
+T.register_test("perfectworld", "ecology_profiles_require_their_local_work", function(ctx)
+  local cases = {
+    fishing = {role = "fishery", worksite = "dock"},
+    farming = {role = "farm", worksite = "field"},
+    forestry = {role = "sawmill", worksite = "forestry_yard"},
+    mining = {role = "mine_workshop", worksite = "minehead"},
+  }
+
+  for specialization, expected in pairs(cases) do
+    local definition = perfectworld.settlements.get_specialization(specialization)
+    local environment = evidence({
+      specialization = specialization,
+      ecology = evidence(),
+      biome_id = "test:" .. specialization,
+      biome_name = "test:" .. specialization,
+      water_proximity = 20,
+      vegetation_density = 50,
+      available_material_profile = "temperate",
+    })
+    local profile = perfectworld.planner.create_village_profile({
+      id = "ecology_profile_" .. specialization,
+      x = 320, z = 320, rx = 0, rz = 0,
+    }, environment)
+
+    ctx.assert.equal(profile.specialization, specialization,
+      specialization .. " profile must retain the selected specialization")
+    ctx.assert.not_nil(profile.required_role_counts,
+      specialization .. " profile must expose required role counts")
+    if profile.required_role_counts then
+      ctx.assert.equal(profile.required_role_counts.dwelling, 2,
+        specialization .. " must require two dwellings")
+      ctx.assert.equal(profile.required_role_counts[expected.role], 1,
+        specialization .. " must require one " .. expected.role)
+    end
+    ctx.assert.equal(profile.required_worksite, expected.worksite,
+      specialization .. " worksite must follow its ecology")
+    ctx.assert.equal(minetest.write_json(profile.resource_features),
+      minetest.write_json(definition.resource_features),
+      specialization .. " resource features must come from its definition")
+    ctx.assert.not_nil(profile.role_variants and profile.role_variants[expected.role],
+      specialization .. " must expose variants for its production role")
+    ctx.assert.equal(table.concat({
+      profile.structure_roles[1] or "?",
+      profile.structure_roles[2] or "?",
+      profile.structure_roles[3] or "?",
+    }, ","), "dwelling,dwelling," .. expected.role,
+      specialization .. " required roles must be scheduled before optional lots")
+  end
+end)
+
 local function ecology_api(ctx)
   local api = perfectworld.planner.ecology
   ctx.assert.not_nil(api, "planner must expose bounded ecological site selection")
@@ -313,6 +363,12 @@ T.register_test("perfectworld", "ecology_plan_uses_selected_physical_site", func
   ctx.assert.equal(plan.settlement_grammar_version, 3, "new plan grammar version")
   ctx.assert.equal(profile.settlement_grammar_version, 3, "new profile grammar version")
   ctx.assert.equal(profile.specialization, "farming", "flat soil must select farming")
+  ctx.assert.equal(profile.required_role_counts.farm, 1,
+    "flat-soil village must require a farm")
+  ctx.assert.is_true((plan.role_counts.farm or 0) >= 1,
+    "flat-soil village must physically plan its farm")
+  ctx.assert.is_true(plan.viable,
+    "a farming plan is viable only after the farm and dwellings fit")
   ctx.assert.equal(environment.specialization, "farming",
     "environment must carry the selected specialization")
   ctx.assert.equal(plan.center.x, expected.site.x, "roads must use selected site x")

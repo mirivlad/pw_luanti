@@ -325,22 +325,48 @@ perfectworld.planner.SETTLEMENT_GRAMMAR_VERSION = SETTLEMENT_GRAMMAR_VERSION
 local ARCHETYPES = {"linear", "compact", "hillside"}
 perfectworld.planner.ARCHETYPES = ARCHETYPES
 
--- Roles a lot can carry. `dwelling` is the only role a finished settlement
--- must contain (at least MIN_DWELLINGS of them).
-local ROLE_ORDER = {"dwelling", "farm", "utility", "central", "optional"}
+-- Stable presentation order for known village roles. Validation itself is
+-- generic and also handles roles added by later grammar versions.
+local ROLE_ORDER = {
+  "dwelling", "fishery", "farm", "sawmill", "mine_workshop",
+  "barn", "apiary", "storage", "central",
+}
 local MIN_DWELLINGS = 2
 perfectworld.planner.ROLE_ORDER = ROLE_ORDER
 perfectworld.planner.MIN_DWELLINGS = MIN_DWELLINGS
 
-local ROLE_VARIANTS = {
-  dwelling = {"pw_house_small_v1", "pw_house_small_v2",
-              "pw_house_long_v1", "pw_house_tall_v1"},
-  farm = {"pw_farmstead_v1", "pw_barn_v1"},
-  utility = {"pw_barn_v1", "pw_house_small_v2"},
-  central = {"pw_well_v1"},
-  optional = {"pw_house_small_v1", "pw_house_small_v2", "pw_house_long_v1",
-              "pw_house_tall_v1", "pw_barn_v1", "pw_well_v1"},
-}
+local function ordered_requirement_roles(requirements)
+  local roles = {}
+  if (requirements and requirements.dwelling or 0) > 0 then
+    roles[#roles + 1] = "dwelling"
+  end
+  for role, count in pairs(requirements or {}) do
+    if role ~= "dwelling" and (tonumber(count) or 0) > 0 then
+      roles[#roles + 1] = role
+    end
+  end
+  table.sort(roles, function(a, b)
+    if a == "dwelling" then return true end
+    if b == "dwelling" then return false end
+    return a < b
+  end)
+  return roles
+end
+
+function perfectworld.planner.missing_required_roles(plan_or_counts, requirements)
+  local counts = plan_or_counts or {}
+  if type(counts.role_counts) == "table" then
+    counts = counts.role_counts
+  end
+  local missing = {}
+  for _, role in ipairs(ordered_requirement_roles(requirements)) do
+    local required = math.max(math.floor(tonumber(requirements[role]) or 0), 0)
+    if (tonumber(counts[role]) or 0) < required then
+      missing[#missing + 1] = role .. "<" .. required
+    end
+  end
+  return missing
+end
 
 -- === Terrain sampling ===
 --
@@ -650,49 +676,54 @@ function perfectworld.planner.create_village_profile(candidate, environment)
     profile.lot_spacing.max_gap = profile.lot_spacing.min_gap + 4
   end
 
-  -- Role composition. Mandatory roles come first so that, when terrain trims
-  -- the lot list, the surviving lots are the ones the contract requires.
-  local roles = {}
-  local remaining = profile.target_lots
-  local dwellings = MIN_DWELLINGS
-  if profile.size_class == "large" then
-    dwellings = dwellings + choice.int(seed_key, "roles:extra_dwellings", 0, 2)
-  elseif profile.size_class == "medium" then
-    dwellings = dwellings + choice.int(seed_key, "roles:extra_dwellings", 0, 1)
-  end
-  dwellings = math.min(dwellings, remaining)
-  for _ = 1, dwellings do table.insert(roles, "dwelling") end
-  remaining = remaining - dwellings
-
-  if remaining >= 2 and choice.bool(seed_key, "roles:farm", 0.8) then
-    table.insert(roles, "farm")
-    remaining = remaining - 1
-  end
-  if remaining >= 2 then
-    table.insert(roles, "utility")
-    remaining = remaining - 1
-  end
-  if profile.size_class ~= "small" and remaining >= 1 then
-    table.insert(roles, "central")
-    remaining = remaining - 1
-  end
-  while remaining > 0 do
-    table.insert(roles, "optional")
-    remaining = remaining - 1
-  end
-  profile.structure_roles = roles
-
-  profile.required_roles = {"dwelling"}
-  profile.optional_roles = {}
-  do
-    local seen = {dwelling = true}
-    for _, role in ipairs(roles) do
-      if not seen[role] then
-        seen[role] = true
-        table.insert(profile.optional_roles, role)
+  local specialization = environment.specialization
+  local definition = specialization
+    and perfectworld.settlements.get_specialization(specialization) or nil
+  if not definition and type(environment.ecology) == "table" then
+    for _, result in ipairs(
+      perfectworld.settlements.evaluate_specializations(environment.ecology)) do
+      if result.viable then
+        specialization = result.id
+        definition = result.definition
+        break
       end
     end
   end
+  -- `create_village_profile` remains a public pure helper used by analysis
+  -- tools that predate ecological site selection. Real village planning always
+  -- supplies a selected viable specialization.
+  if not definition then
+    specialization = "farming"
+    definition = perfectworld.settlements.get_specialization(specialization)
+  end
+
+  profile.specialization = specialization
+  profile.specialization_score = environment.specialization_score
+  profile.specialization_definition = deep_copy(definition)
+  profile.required_role_counts = deep_copy(definition.required_role_counts or {})
+  profile.required_worksite = definition.required_worksite
+  profile.resource_features = deep_copy(definition.resource_features or {})
+  profile.role_variants = deep_copy(definition.role_variants or {})
+  profile.required_roles = ordered_requirement_roles(profile.required_role_counts)
+  profile.optional_roles = deep_copy(definition.optional_roles or {})
+
+  -- Mandatory roles come first so terrain can never leave a decorative lot
+  -- while silently dropping the work that defines the settlement.
+  local roles = {}
+  for _, role in ipairs(profile.required_roles) do
+    local count = math.max(
+      math.floor(tonumber(profile.required_role_counts[role]) or 0), 0)
+    for _ = 1, count do roles[#roles + 1] = role end
+  end
+  profile.target_lots = math.max(profile.target_lots, #roles)
+  while #roles < profile.target_lots do
+    local slot = #roles + 1
+    local role = choice.pick(seed_key, "roles:optional:" .. slot,
+      profile.optional_roles)
+    if not role then break end
+    roles[#roles + 1] = role
+  end
+  profile.structure_roles = roles
 
   local family = environment.biome_family or "temperate"
   local palette = perfectworld.compat.get_family_palette(family)
@@ -1118,11 +1149,23 @@ end
 
 perfectworld.planner._road_graph_signature = road_graph_signature
 
+local function required_counts_signature(requirements)
+  local tokens = {}
+  for _, role in ipairs(ordered_requirement_roles(requirements)) do
+    tokens[#tokens + 1] =
+      role .. "x" .. tostring(math.floor(tonumber(requirements[role]) or 0))
+  end
+  return table.concat(tokens, ",")
+end
+
 --- Exact plan signature: full normalised geometry, no quantisation.
 local function exact_plan_signature(plan)
   local center = plan.center
   local parts = {
-    "exact1",
+    "exact2",
+    tostring(plan.settlement_grammar_version or SETTLEMENT_GRAMMAR_VERSION),
+    tostring(plan.specialization or "?"),
+    required_counts_signature(plan.required_role_counts),
     plan.archetype,
     tostring(plan.environment and plan.environment.biome_family),
     plan.size_class,
@@ -1177,9 +1220,10 @@ local function structural_plan_signature(plan)
   table.sort(cells)
 
   local roles = {}
-  for _, role in ipairs(ROLE_ORDER) do
-    if role_counts[role] then table.insert(roles, role .. "x" .. role_counts[role]) end
+  for role, count in pairs(role_counts) do
+    table.insert(roles, role .. "x" .. count)
   end
+  table.sort(roles)
   local structures_list = {}
   for name, count in pairs(structure_counts) do
     table.insert(structures_list, name .. "x" .. count)
@@ -1192,7 +1236,10 @@ local function structural_plan_signature(plan)
   end
 
   return table.concat({
-    "struct1",
+    "struct2",
+    tostring(plan.settlement_grammar_version or SETTLEMENT_GRAMMAR_VERSION),
+    tostring(plan.specialization or "?"),
+    required_counts_signature(plan.required_role_counts),
     plan.archetype,
     plan.size_class,
     plan.palette_id or "?",
@@ -1249,12 +1296,18 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
 
     local role = profile.structure_roles[role_index + 1]
     if not role then break end
-    local structure_name = choice.pick(seed_key,
-      "lot:" .. anchor_index .. ":variant", ROLE_VARIANTS[role] or ROLE_VARIANTS.dwelling)
-    local def = perfectworld.structures.get(structure_name)
-    if not def then
-      reject("unknown_structure")
+    local variants = profile.role_variants and profile.role_variants[role]
+    local structure_name
+    if type(variants) ~= "table" or #variants == 0 then
+      reject("missing_role_variants")
     else
+      structure_name = choice.pick(seed_key,
+        "lot:" .. anchor_index .. ":" .. role .. ":variant", variants)
+    end
+    local def = structure_name and perfectworld.structures.get(structure_name)
+    if structure_name and not def then
+      reject("unknown_structure")
+    elseif def then
       -- Setback is a property of the building, not a constant: a nine-block
       -- barn needs to stand further back from the kerb than a three-block
       -- well. Push the lot away from the road until its footprint clears the
@@ -1412,10 +1465,18 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
     role_counts[lot.role] = (role_counts[lot.role] or 0) + 1
   end
 
+  local missing_required = perfectworld.planner.missing_required_roles(
+    role_counts, profile.required_role_counts)
   local plan = {
     village_id = profile.village_id,
     generator_version = profile.generator_version,
+    settlement_grammar_version = profile.settlement_grammar_version,
     seed_key = seed_key,
+    specialization = profile.specialization,
+    specialization_score = profile.specialization_score,
+    required_role_counts = deep_copy(profile.required_role_counts),
+    required_worksite = profile.required_worksite,
+    resource_features = deep_copy(profile.resource_features),
     archetype = profile.archetype,
     size_class = profile.size_class,
     environment = environment,
@@ -1430,8 +1491,9 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
     required_roles = profile.required_roles,
     optional_roles = profile.optional_roles,
     role_counts = role_counts,
+    missing_required_roles = missing_required,
     rejections = rejections,
-    viable = #lots > 0 and (role_counts.dwelling or 0) >= MIN_DWELLINGS,
+    viable = #lots > 0 and #missing_required == 0,
   }
 
   plan.road_graph_signature = road_graph_signature(roads, center)
@@ -1506,6 +1568,11 @@ function perfectworld.planner.plan_village(candidate, env_override, terrain)
       generator_version = profile.generator_version,
       settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION,
       seed_key = profile.seed_key,
+      specialization = profile.specialization,
+      specialization_score = profile.specialization_score,
+      required_role_counts = deep_copy(profile.required_role_counts),
+      required_worksite = profile.required_worksite,
+      resource_features = deep_copy(profile.resource_features),
       archetype = profile.archetype,
       size_class = profile.size_class,
       environment = environment,
@@ -1522,6 +1589,8 @@ function perfectworld.planner.plan_village(candidate, env_override, terrain)
       required_roles = profile.required_roles,
       optional_roles = profile.optional_roles,
       role_counts = {},
+      missing_required_roles = perfectworld.planner.missing_required_roles(
+        {}, profile.required_role_counts),
       rejections = {[selection_error or "no_suitable_ecological_site"] = 1},
       viable = false,
       regional_anchor = {x = candidate.x, z = candidate.z},
@@ -2478,10 +2547,8 @@ local function materialize_village_plan(plan, profile, candidate)
   for _, s in ipairs(placed_structures) do
     placed_roles[s.role] = (placed_roles[s.role] or 0) + 1
   end
-  local missing_required = {}
-  if (placed_roles.dwelling or 0) < MIN_DWELLINGS then
-    table.insert(missing_required, "dwelling<" .. MIN_DWELLINGS)
-  end
+  local missing_required = perfectworld.planner.missing_required_roles(
+    placed_roles, profile.required_role_counts)
   for _, structure_id in ipairs(unreachable) do
     table.insert(errors, "unreachable_door:" .. structure_id)
   end
@@ -2514,8 +2581,17 @@ local function materialize_village_plan(plan, profile, candidate)
     candidate_id = candidate.id,
     region_id = candidate.region_id or perfectworld.get_region_id(candidate.rx or 0, candidate.rz or 0),
     generator_version = profile.generator_version,
+    settlement_grammar_version = profile.settlement_grammar_version,
     seed_key = profile.seed_key,
     status = settlement_status,
+    specialization = profile.specialization,
+    specialization_score = profile.specialization_score,
+    resource_features = deep_copy(profile.resource_features),
+    required_worksite = profile.required_worksite,
+    required_role_counts = deep_copy(profile.required_role_counts),
+    regional_anchor = deep_copy(profile.regional_anchor),
+    selected_site = deep_copy(profile.selected_site),
+    ecology = deep_copy(profile.ecology),
     center_pos = settlement_center,
     street_anchor = street_anchor,
     bounds = bounds,
@@ -2600,8 +2676,21 @@ function perfectworld.planner.materialize_village_new(candidate)
       candidate_id = candidate.id,
       region_id = candidate.region_id or perfectworld.get_region_id(candidate.rx or 0, candidate.rz or 0),
       generator_version = profile.generator_version,
+      settlement_grammar_version = profile.settlement_grammar_version,
       status = "failed",
       reason = "no_viable_layout",
+      specialization = profile.specialization,
+      specialization_score = profile.specialization_score,
+      resource_features = deep_copy(profile.resource_features),
+      required_worksite = profile.required_worksite,
+      required_role_counts = deep_copy(profile.required_role_counts),
+      required_roles = deep_copy(profile.required_roles),
+      optional_roles = deep_copy(profile.optional_roles),
+      missing_required_roles = deep_copy(plan.missing_required_roles),
+      role_counts = deep_copy(plan.role_counts),
+      regional_anchor = deep_copy(profile.regional_anchor),
+      selected_site = deep_copy(profile.selected_site),
+      ecology = deep_copy(profile.ecology),
       rejections = plan.rejections,
       center_pos = {x = candidate.x, y = 0, z = candidate.z},
       bounds = plan.bounds,
