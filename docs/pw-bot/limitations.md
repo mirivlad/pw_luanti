@@ -5,18 +5,23 @@ that reports less.
 
 ## Not implemented
 
-PW Bot cannot yet do anything. None of this is built:
+`pw_bot_runtime` executes intents through a real client: it walks, turns, climbs
+stairs, and opens doors, fence gates and trapdoors, all measured against the
+obstacle course in `pw_debug/bot_course.lua`. None of the following is built:
 
-* client control of any kind — nothing executes an intent
-* Xvfb, Xephyr, a `--visible` mode
-* actual movement: the bot plans routes and never walks one
+* **errands** — no goal goes somewhere in order to do something. `interact` is
+  in the intent vocabulary and the runtime performs it; no goal emits it, so in
+  a normal closed-loop run the bot explores and never uses anything
 * building, crafting, fighting, trading, NPCs
 * any LLM integration
 * computer vision, screenshot analysis
 
-What exists is two halves of a bot that is missing its third: `pw_bot_bridge`,
-the server-side senses, and `pw_player_bot`, the decision layer that reads them.
-Neither acts, and nothing between them and a running client is written.
+The body is also the most fragile layer. It depends on frame rate, key hold
+duration, X11 focus, the client's key bindings, the hotbar's contents and this
+particular Luanti version — a press too short is lost between frames, and one
+too long opens a door and closes it again. It is a real body for experiments,
+not a portable client. What keeps it honest is that every action is checked
+against the bridge afterwards rather than assumed to have worked.
 
 ## Screenshots are not vision
 

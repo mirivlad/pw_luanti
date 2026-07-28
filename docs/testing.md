@@ -161,9 +161,16 @@ directory. The default `data/worlds/perfectworld/` is for development.
 
 ### Current Baseline
 
-204 total | 204 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+310 total | 308 PASS | 2 FAIL | 0 SKIP | 0 ERROR
 
-118 in the `perfectworld` suite, 86 in `pw_bot_bridge`, 54 in `pw_player_bot`.
+149 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`, 62 in
+`pw_player_bot`, 6 in `smoke`.
+
+The two failures are a configuration contradiction rather than a regression:
+`pw_bot_bridge.integration_transport_follows_its_setting` and
+`transport_is_off_by_default_and_needs_no_insecure_environment` both require
+`pw_bot_bridge.external_transport` to be off, while `config/luanti.conf` turns
+it on so `pw_bot_runtime` can reach the spool.
 
 The baseline must stay green. See `docs/status.md` for the current state and
 `python3 scripts/report-summary.py <report.json>` to print a summary.

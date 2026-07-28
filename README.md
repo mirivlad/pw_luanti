@@ -25,8 +25,10 @@ integration.
 
 ## What It Doesn't Do (Yet)
 
-- PW Bot itself: movement, navigation, memory, behaviour, client control
-  (only its senses exist — see [docs/pw-bot/](docs/pw-bot/README.md))
+- Errands. PW Bot has a body now: it walks a course, climbs stairs and opens
+  doors, gates and trapdoors through a real client. What it has no goal for is
+  going somewhere *in order to do something* — see
+  [docs/pw-bot/](docs/pw-bot/README.md)
 - NPCs, villagers, economy
 - Roads between settlements
 - Bridges or tunnels
@@ -90,7 +92,12 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 ls -t data/worlds/perfectworld/ltk_report_*.json | head -1
 ```
 
-Current: **258 total | 258 PASS | 0 FAIL | 0 SKIP | 0 ERROR**
+Current: **310 total | 308 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
+
+The two failures are a configuration contradiction, not a regression: two
+`pw_bot_bridge` tests require `external_transport` to be off by default, while
+`config/luanti.conf` turns it on for `pw_bot_runtime`. See
+[docs/status.md](docs/status.md).
 
 See [docs/testing.md](docs/testing.md) for full test documentation.
 

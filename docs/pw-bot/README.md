@@ -3,17 +3,24 @@
 PW Bot is the planned automated inhabitant of PerfectWorld: a program that
 connects to the server as an ordinary player, looks around, and walks.
 
-Two of its three parts exist:
+All three of its parts exist:
 
 ```
 pw_bot_bridge     perceives    -- never acts
 pw_player_bot     decides      -- never acts
-a real client     acts         -- not written
+pw_bot_runtime    acts         -- a hand on a keyboard, nothing else
 ```
 
 The bridge answers structured questions about what a connected player could
 know. The brain reads those answers, remembers them, and writes down what it has
-decided to do. Nothing yet reads that decision and presses a key.
+decided to do. The runtime reads that decision and presses the keys, in a real
+client, on a display it created — and then asks the bridge whether the world
+actually changed.
+
+What is missing is not a part but a *purpose*: the brain's goals are explore,
+approach, retreat, leave liquid, look, unstick and stand still. None of them
+goes somewhere in order to do something. `interact` is in the intent vocabulary
+and the runtime executes it; no goal emits it.
 
 ## Documents
 
@@ -54,8 +61,11 @@ decided to do. Nothing yet reads that decision and presses a key.
 | External file transport | implemented, **off by default** |
 | `pw_player_bot` brain | implemented, tested, documented |
 | `pw_player_bot/v1` intent protocol | implemented |
-| Client control — anything that executes an intent | **not implemented** |
-| Actual movement, building, NPCs, LLM integration | **not implemented** |
+| `pw_bot_runtime` — the body that executes an intent | implemented, measured against the obstacle course |
+| Movement: walking, turning, kerbs, stairs | works |
+| Interaction: doors, fence gates, trapdoors | works, by hand, through a real client |
+| Errands — a goal that goes somewhere *in order to do something* | **not implemented** |
+| Building, NPCs, LLM integration | **not implemented** |
 
 Nothing in this directory should be read as a claim that PW Bot walks. It
 decides, in writing, and stops.
