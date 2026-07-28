@@ -11,23 +11,30 @@ local PLACED_KEY = "pw_placed_settlements"
 local STRUCTURES_KEY = "pw_materialized_structures"
 local SETTLEMENTS_KEY = "pw_settlement_plans"
 local ROADS_KEY = "pw_roads"
+local storage_cache = {}
 
 local deep_copy = perfectworld.core.deep_copy
 local choice = perfectworld.core.choice
 
 local function read_json(key)
+	local cached = storage_cache[key]
+	if cached then return cached end
 	local raw = storage:get_string(key)
 	if raw and raw ~= "" then
 		local ok, data = pcall(minetest.parse_json, raw)
 		if ok and type(data) == "table" then
+			storage_cache[key] = data
 			return data
 		end
 	end
-	return {}
+	local empty = {}
+	storage_cache[key] = empty
+	return empty
 end
 
 local function write_json(key, data)
 	storage:set_string(key, minetest.write_json(data))
+	storage_cache[key] = data
 end
 
 -- === Region Planning ===
@@ -309,6 +316,7 @@ perfectworld.roads.set_provider({
 
 function perfectworld.planner._test_clear_cache()
 	cache = {}
+	storage_cache = {}
 end
 
 -- === Candidate Type Helpers ===
