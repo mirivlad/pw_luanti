@@ -21,7 +21,7 @@ perfectworld.schemes.register_style({
   id = "mediterranean",
   title = "Mediterranean",
   description = "Pale stone, flat terraced roofs, deep small windows, stacked cubes.",
-  biomes = {"desert", "savanna", "warm", "dry", "mesa"},
+  biomes = {"dry", "rocky"},
   materials = {
     wall_primary = first("mcl_colorblocks:hardened_clay_white",
                          "mcl_core:sandstonesmooth", "mcl_core:sandstone"),

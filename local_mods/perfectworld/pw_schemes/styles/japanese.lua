@@ -27,7 +27,7 @@ perfectworld.schemes.register_style({
   id = "japanese",
   title = "Japanese",
   description = "Shallow wide-eaved roofs, raised floors, verandas, pale panelled walls.",
-  biomes = {"temperate", "warm", "jungle", "wet"},
+  biomes = {"temperate", "forest", "wet"},
   materials = {
     -- Pale panels between the posts. Left to the palette if the game has
     -- neither, which costs the colour and keeps the shape.

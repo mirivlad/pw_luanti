@@ -95,18 +95,27 @@ end)
 T.register_test("perfectworld", "styles_respect_the_biomes_they_belong_in", function(ctx)
   -- Nordic turf halls in a jungle would be as wrong as a paper-walled minka on
   -- a tundra. A style says where it belongs and the chooser must honour it.
+  -- The families are the seven `pw_compat_mcl` actually reports — cold, coastal,
+  -- dry, forest, rocky, temperate, wet. Naming any other here would make this
+  -- test agree with a style list that is equally wrong, which is how the
+  -- invented families survived registration in the first place.
   local cold = {}
-  for _, id in ipairs(perfectworld.schemes.styles_for_biome("tundra")) do cold[id] = true end
-  ctx.assert.is_true(cold["nordic"], "nordic belongs on a tundra")
+  for _, id in ipairs(perfectworld.schemes.styles_for_biome("cold")) do cold[id] = true end
+  ctx.assert.is_true(cold["nordic"], "nordic belongs in the cold")
   ctx.assert.is_true(not cold["japanese"], "japanese does not")
 
   local wet = {}
-  for _, id in ipairs(perfectworld.schemes.styles_for_biome("jungle")) do wet[id] = true end
-  ctx.assert.is_true(wet["japanese"], "japanese belongs in a jungle")
+  for _, id in ipairs(perfectworld.schemes.styles_for_biome("wet")) do wet[id] = true end
+  ctx.assert.is_true(wet["stilt"], "stilt belongs on wet ground")
   ctx.assert.is_true(not wet["nordic"], "nordic does not")
 
+  local dry = {}
+  for _, id in ipairs(perfectworld.schemes.styles_for_biome("dry")) do dry[id] = true end
+  ctx.assert.is_true(dry["mediterranean"], "mediterranean belongs where it is dry")
+  ctx.assert.is_true(not dry["stilt"], "stilt does not")
+
   -- The fallback names no biomes, so it is at home anywhere.
-  for _, family in ipairs({"tundra", "jungle", "temperate", "desert"}) do
+  for _, family in ipairs(perfectworld.compat.list_families()) do
     local found = false
     for _, id in ipairs(perfectworld.schemes.styles_for_biome(family)) do
       if id == "vernacular" then found = true end
@@ -343,4 +352,51 @@ T.register_test("perfectworld", "villages_draw_dwellings_from_the_catalogue", fu
     "villages must draw dwellings from the scheme catalogue")
   ctx.assert.equal(legacy, 0,
     "a styled village should not be offered the pre-catalogue houses, got " .. legacy)
+end)
+
+T.register_test("perfectworld", "styles_name_biome_families_that_exist", function(ctx)
+  -- A style that names a family the game does not have is never chosen, and
+  -- nothing says so. Four of the five styles shipped with invented families —
+  -- taiga, tundra, jungle, swamp, desert, savanna, mesa — none of which
+  -- `pw_compat_mcl` knows, so every village came out vernacular while the
+  -- catalogue looked like it was working.
+  --
+  -- Same shape as the defect that once made every biome resolve to temperate
+  -- and killed the palette system: a name that does not match is silence.
+  local known = {}
+  for _, family in ipairs(perfectworld.compat.list_families()) do
+    known[family] = true
+  end
+  ctx.assert.is_true(next(known) ~= nil, "the game must report some biome families")
+
+  local invented = {}
+  for _, id in ipairs(perfectworld.schemes.list_styles()) do
+    local style = perfectworld.schemes.get_style(id)
+    for _, family in ipairs(style.biomes or {}) do
+      if not known[family] then
+        invented[#invented + 1] = id .. " names '" .. family .. "'"
+      end
+    end
+  end
+  ctx.assert.equal(#invented, 0,
+    "styles naming biome families that do not exist: "
+    .. table.concat(invented, ", ", 1, math.min(#invented, 5)))
+end)
+
+T.register_test("perfectworld", "every_biome_family_builds_beyond_the_fallback", function(ctx)
+  -- Vernacular is available everywhere, so a broken biome list still leaves
+  -- every family with buildings — which is exactly why the previous defect was
+  -- invisible. A world where the fallback is the only style anywhere has a
+  -- catalogue of five styles and the variety of one.
+  local bare = {}
+  for _, family in ipairs(perfectworld.compat.list_families()) do
+    local others = 0
+    for _, id in ipairs(perfectworld.schemes.styles_for_biome(family)) do
+      if id ~= "vernacular" then others = others + 1 end
+    end
+    if others == 0 then bare[#bare + 1] = family end
+  end
+  ctx.assert.equal(#bare, 0,
+    "these families can only ever build the fallback style: "
+    .. table.concat(bare, ", "))
 end)

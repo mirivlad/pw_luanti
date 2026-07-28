@@ -26,7 +26,7 @@ perfectworld.schemes.register_style({
   id = "stilt",
   title = "Stilt",
   description = "Houses on posts over shallow water, light roofs, walkways instead of streets.",
-  biomes = {"wet", "jungle", "swamp", "temperate", "warm"},
+  biomes = {"wet", "coastal"},
   materials = {
     -- Thatch where the game has it. It reads as light and cheap, which is what
     -- a roof carried on posts over water has to be.

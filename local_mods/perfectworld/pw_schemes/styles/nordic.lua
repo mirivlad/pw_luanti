@@ -25,7 +25,7 @@ perfectworld.schemes.register_style({
   id = "nordic",
   title = "Nordic",
   description = "Steep turf roofs, long halls, heavy timber, small windows.",
-  biomes = {"cold", "taiga", "tundra", "snowy", "mountain"},
+  biomes = {"cold", "rocky"},
   materials = {
     -- Left unset when the game has no turf: the palette then supplies a roof
     -- and the buildings simply lose their most distinctive feature rather than
