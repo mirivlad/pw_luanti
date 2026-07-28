@@ -200,6 +200,56 @@ def cmd_run(args) -> int:
     return 0 if result["ok"] else 1
 
 
+def cmd_scenario(args) -> int:
+    """Run a scripted acceptance scenario. The brain is not consulted."""
+    from .scenario import SCENARIOS, course_scenario, load_course, village_scenario
+
+    config = _load(args)
+    checks, ok = run_doctor(config, config.display.mode == "visible")
+    # A scenario does not need the brain's spool: it writes its own intents.
+    blocking = [check for check in checks
+                if check.required and not check.ok and check.name != "brain transport"]
+    if blocking:
+        print("refusing to start: the environment is not ready", file=sys.stderr)
+        for check in blocking:
+            print(check.line(), file=sys.stderr)
+        return 2
+
+    if args.name == "course":
+        course_file = Path(args.landmarks or (config.world_path / "pw_bot_course.json"))
+        if not course_file.exists():
+            print(f"no course landmarks at {course_file}", file=sys.stderr)
+            print("build one:  scripts/pw-bot-course.sh build", file=sys.stderr)
+            return 2
+        steps = course_scenario(load_course(course_file))
+    elif args.name == "village":
+        if not args.landmarks:
+            print("--landmarks is required for the village scenario", file=sys.stderr)
+            return 2
+        document = json.loads(Path(args.landmarks).read_text(encoding="utf-8"))
+        steps = village_scenario(document.get("waypoints") or document)
+    else:
+        print(f"unknown scenario {args.name!r}; known: {', '.join(SCENARIOS)}", file=sys.stderr)
+        return 2
+
+    run = BotRun(config, run_id=args.run_id or new_run_id(f"scenario-{args.name}"))
+    print(f"run id: {run.run_id}")
+    print(f"artifacts: {run.artifacts.directory}")
+    result = run.run(scenario_steps=steps)
+
+    print()
+    print(f"{'step':<24} {'expected':<12} {'actual':<16} verdict")
+    for entry in result.get("intents", []):
+        verdict = "ok" if entry.get("scenario_passed") else "UNEXPECTED"
+        print(f"{entry.get('goal', ''):<24} "
+              f"{'ok' if entry.get('ok') else 'stop':<12} "
+              f"{entry.get('status', ''):<16} {verdict}")
+    print()
+    print(f"verdict: {'ok' if result['ok'] else 'FAILED'} — {result['reason']}")
+    print(f"summary: {run.artifacts.directory / 'summary.md'}")
+    return 0 if result["ok"] else 1
+
+
 def _run_directory(config: Config, run_id: str) -> Path:
     directory = config.artifacts_path / run_id
     if not directory.exists():
@@ -301,6 +351,19 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-seconds", type=float, default=0.0,
                      help="stop after this long (0 means no limit)")
     run.set_defaults(func=cmd_run)
+
+    scenario = subparsers.add_parser(
+        "scenario", parents=[common],
+        help="run a scripted acceptance scenario (a harness; the brain is not consulted)")
+    scenario.add_argument("name", choices=["course", "village"])
+    scenario.add_argument("--landmarks", default=None,
+                          help="landmarks JSON (default: the world's pw_bot_course.json)")
+    scenario_mode = scenario.add_mutually_exclusive_group()
+    scenario_mode.add_argument("--visible", action="store_true")
+    scenario_mode.add_argument("--headless", action="store_true")
+    scenario.add_argument("--keep-open", action="store_true")
+    scenario.add_argument("--run-id", default=None)
+    scenario.set_defaults(func=cmd_scenario)
 
     for name, handler in (("pause", lambda a: cmd_control(a, "pause")),
                           ("resume", lambda a: cmd_control(a, "resume")),

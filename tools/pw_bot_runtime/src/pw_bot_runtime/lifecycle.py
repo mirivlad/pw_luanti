@@ -229,8 +229,9 @@ class BotRun:
             self.event(f"yaw calibration: {calibration['radians_per_pixel']:.6f} rad/px "
                        f"({calibration['source']})")
             self._record_control("calibrate_yaw", **calibration)
-        self.interaction = InteractionController(self.input, self.bridge, self.movement,
-                                                 logger=self.log)
+        self.interaction = InteractionController(
+            self.input, self.bridge, self.movement, logger=self.log,
+            window_centre=(self.client.window_centre if self.client else None))
         self.executor = IntentExecutor(self.input, self.bridge, self.movement,
                                        self.interaction, self.config, logger=self.log,
                                        should_continue=self.control.should_continue)
@@ -327,6 +328,73 @@ class BotRun:
                 self.reason = f"executed the requested {executed} intent(s)"
                 return
 
+    def run_scenario(self, steps) -> bool:
+        """Execute a scripted acceptance scenario instead of the brain's intents.
+
+        Used only by the acceptance runs. The brain is not consulted, and the
+        intents come from ``scenario.py`` — but they go through the same
+        executor, so what is being measured is still what a real client managed
+        to do with a real body.
+        """
+        all_ok = True
+        for step in steps:
+            self.control.poll()
+            if self.control.stopped:
+                self.status, self.ok = "operator_stopped", False
+                self.reason = self.control.stop_reason
+                return False
+
+            self.event(f"scenario step '{step.name}': {step.note}")
+            outcome = self.executor.execute(step.intent)
+            passed, detail = step.judge(outcome.status, outcome.ok)
+
+            self.artifacts.append("execution-results", {
+                "scenario_step": step.name, "status": outcome.status,
+                "ok": outcome.ok, "reason": outcome.reason,
+                "final_position": outcome.final_position,
+                "distance_remaining": outcome.distance_remaining,
+                "expected_ok": step.expect_ok,
+                "expected_status": list(step.expect_status),
+                "passed": passed, "details": outcome.details,
+                "intent_id": step.intent.intent_id,
+            })
+            self.intent_log.append({
+                "intent_id": step.intent.intent_id, "goal": step.name,
+                "status": outcome.status, "ok": outcome.ok,
+                "reason": outcome.reason,
+                "distance_remaining": outcome.distance_remaining,
+                "scenario_passed": passed,
+            })
+            self.event(f"  -> {outcome.status}: {outcome.reason} "
+                       f"[{'as expected' if passed else 'UNEXPECTED: ' + detail}]")
+
+            if not passed:
+                self._screenshot(f"unexpected-{step.name}")
+                if step.required:
+                    all_ok = False
+            elif not outcome.ok and self.config.artifacts.screenshots_on_failure:
+                # An expected failure is a result worth a picture too.
+                self._screenshot(f"expected-stop-{step.name}")
+
+            if outcome.status in ("client_disconnected", "bridge_unavailable"):
+                self.status, self.ok = outcome.status, False
+                self.reason = outcome.reason
+                return False
+
+        self.status = "reached" if all_ok else "unknown"
+        self.ok = all_ok
+        self.reason = ("every scenario step behaved as expected" if all_ok
+                       else "a scenario step did not behave as expected")
+        return all_ok
+
+    def prepare(self) -> None:
+        """Bring everything up without starting the intent loop."""
+        self._start_display()
+        self._start_client()
+        self._start_input()
+        self._connect_bridge()
+        self._build_controllers()
+
     # --- teardown -------------------------------------------------------------------
 
     def _release_keys(self, cause: str) -> None:
@@ -377,7 +445,8 @@ class BotRun:
 
     # --- entry point ------------------------------------------------------------------
 
-    def run(self) -> dict:
+    def run(self, scenario_steps=None) -> dict:
+        """Run the bot. With *scenario_steps*, run those instead of the brain's."""
         self.started = time.monotonic()
         previous_handlers = {}
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -394,10 +463,15 @@ class BotRun:
             self._start_client()
             self._start_input()
             self._connect_bridge()
-            self._connect_brain()
+            if scenario_steps is None:
+                self._connect_brain()
             self._build_controllers()
-            self.event("closed-loop execution begins")
-            self._loop()
+            if scenario_steps is None:
+                self.event("closed-loop execution begins")
+                self._loop()
+            else:
+                self.event(f"scenario: {len(scenario_steps)} scripted step(s)")
+                self.run_scenario(scenario_steps)
         except (DependencyMissing, DisplayError, ClientError, WindowNotFound,
                 BridgeUnavailable, BridgeRefused, OperatorStopped, RuntimeError_) as exc:
             failure = exc

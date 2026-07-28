@@ -84,6 +84,11 @@ class ClientConfig:
     keep_open_after_run: bool = False
     keep_open_on_failure: bool = True
     extra_args: list = field(default_factory=list)
+    #: Client config the runtime launches with. Empty means the client's own,
+    #: which leaves the bot's key bindings at the mercy of whatever the operator
+    #: last set — including place and dig on mouse buttons, which do not work on
+    #: a bare Xvfb once the pointer has wandered.
+    config_file: str = "tools/pw_bot_runtime/client.conf"
 
     def validate(self) -> None:
         _check("client.startup_timeout_seconds", self.startup_timeout_seconds, int, 5, 600)

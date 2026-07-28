@@ -54,6 +54,9 @@ class InputBackend(abc.ABC):
     def _button(self, button: int, press: bool) -> None: ...
 
     @abc.abstractmethod
+    def _pointer_warp(self, x: int, y: int) -> None: ...
+
+    @abc.abstractmethod
     def type_text(self, text: str) -> None: ...
 
     def close(self) -> None:  # pragma: no cover - trivial in both backends
@@ -103,7 +106,49 @@ class InputBackend(abc.ABC):
         self._pointer_move_relative(dx, dy)
         self.events_sent += 1
 
+    def warp_pointer(self, x: int, y: int) -> None:
+        """Put the pointer at an absolute screen position.
+
+        Needed before every click. Luanti reads *relative* motion to turn the
+        head, so hundreds of pixels of look-around leave the X pointer far from
+        where the view is aimed — often outside the client window entirely. A
+        button event goes to whatever is under the pointer, so without this the
+        clicks land on the root window and nothing happens, silently. Under a
+        normal desktop the client's own pointer grab hides this; on a bare Xvfb
+        with no window manager there is nothing to hide it.
+        """
+        self._pointer_warp(int(x), int(y))
+        self.events_sent += 1
+
+    def select_hotbar_slot(self, slot: int) -> None:
+        """Select a hotbar slot by its number key.
+
+        Used to put an empty slot in hand before interacting. What the bot is
+        holding changes what "use" means: with a throwable in hand the item's own
+        placement handler runs and the node under the crosshair is never asked,
+        so a bot with snowballs throws snowballs at doors instead of opening
+        them.
+        """
+        if not 1 <= slot <= 9:
+            raise InputBackendError(f"hotbar slot {slot} does not exist")
+        self.tap(f"slot{slot}", 0.06)
+
+    def use(self) -> None:
+        """Use / place: what a right click does, sent as a key.
+
+        The client config binds `keymap_place` to a key precisely so this does
+        not have to be a mouse button. A button goes to whatever is under the X
+        pointer, and the pointer is not where the crosshair is looking.
+        """
+        self.tap("place", 0.08)
+
     def right_click(self) -> None:
+        """The mouse-button form. Kept for completeness and not used to interact.
+
+        On an isolated display with no window manager this is unreliable for the
+        reason described in :meth:`use`, which is exactly why the runtime binds a
+        key instead.
+        """
         self._button(3, True)
         time.sleep(0.04)
         self._button(3, False)
@@ -142,6 +187,8 @@ class XdotoolBackend(InputBackend):
         "forward": "w", "backward": "s", "left": "a", "right": "d",
         "jump": "space", "sneak": "shift", "chat": "t",
         "escape": "Escape", "enter": "Return",
+        "place": "r", "dig": "f",
+        **{f"slot{n}": str(n) for n in range(1, 10)},
     }
 
     def __init__(self, display: str, window_id: str | None = None) -> None:
@@ -175,6 +222,9 @@ class XdotoolBackend(InputBackend):
     def _button(self, button: int, press: bool) -> None:
         self._run("mousedown" if press else "mouseup", str(button))
 
+    def _pointer_warp(self, x: int, y: int) -> None:
+        self._run("mousemove", "--sync", str(x), str(y))
+
     def type_text(self, text: str) -> None:
         self._run("type", "--delay", "40", text)
 
@@ -197,6 +247,8 @@ class XTestBackend(InputBackend):
         "forward": "w", "backward": "s", "left": "a", "right": "d",
         "jump": "space", "sneak": "Shift_L", "chat": "t",
         "escape": "Escape", "enter": "Return",
+        "place": "r", "dig": "f",
+        **{f"slot{n}": str(n) for n in range(1, 10)},
     }
 
     def __init__(self, display: str, window_id: str | None = None) -> None:
@@ -246,6 +298,11 @@ class XTestBackend(InputBackend):
     def _button(self, button: int, press: bool) -> None:
         event = self._X.ButtonPress if press else self._X.ButtonRelease
         self._xtest.fake_input(self._display, event, button)
+        self._display.sync()
+
+    def _pointer_warp(self, x: int, y: int) -> None:
+        # detail=False means the coordinates are absolute rather than a delta.
+        self._xtest.fake_input(self._display, self._X.MotionNotify, detail=False, x=x, y=y)
         self._display.sync()
 
     def type_text(self, text: str) -> None:

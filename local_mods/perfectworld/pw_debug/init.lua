@@ -1897,4 +1897,11 @@ minetest.register_chatcommand("pw_village_export", {
   end,
 })
 
+-- The PW Bot obstacle course lives here rather than in pw_player_bot because
+-- it writes nodes, and the bot mods are forbidden from doing that.
+local ok, err = pcall(dofile, minetest.get_modpath("pw_debug") .. "/bot_course.lua")
+if not ok then
+  minetest.log("error", "[pw_debug] could not load bot_course.lua: " .. tostring(err))
+end
+
 minetest.log("action", "[pw_debug] loaded")

@@ -33,6 +33,13 @@ from .input_backend import InputBackend
 
 TAU = 2 * math.pi
 
+#: How long a body may fail to gain ground before it tries jumping. Short: a
+#: one-node kerb is the commonest obstacle there is, and it is cleared by a hop.
+JUMP_AFTER_SECONDS = 0.7
+
+#: Minimum gap between hops, so the bot does not pogo on the spot.
+JUMP_INTERVAL_SECONDS = 0.6
+
 
 def normalize_angle(radians: float) -> float:
     """Fold an angle into [0, 2pi).
@@ -93,6 +100,8 @@ class MovementController:
         self.should_continue = should_continue or (lambda: True)
         self.yaw_corrections = 0
         self.control_ticks = 0
+        self.jumps = 0
+        self.pitch_sign_flips = 0
         self.calibration: dict = {
             "radians_per_pixel": float(movement_config.yaw_radians_per_pixel),
             "source": "configured",
@@ -146,7 +155,88 @@ class MovementController:
                     "source": "measured",
                     "samples": [round(value, 6) for value in samples],
                 }
+
+        self.calibration.update(self.calibrate_pitch())
         return self.calibration
+
+    def calibrate_pitch(self) -> dict:
+        """Work out which way the pitch axis runs, by pushing it and looking.
+
+        Luanti's pitch sign is not something to assume. Guessing it wrong does
+        not produce a small error, it produces a bot that aims at the floor when
+        it means to aim at a door and then corrects further into the floor. So
+        the runtime nudges the pointer down by a known amount, asks the bridge
+        what happened to the pitch, and keeps the sign it measured.
+        """
+        result = {"pitch_radians_per_pixel": self.calibration["radians_per_pixel"],
+                  "pitch_sign": -1.0, "pitch_source": "assumed"}
+        try:
+            before = self._state()
+            self.input.move_pointer(0, 120)
+            time.sleep(0.35)
+            after = self._state()
+            # Put the head back where it was.
+            self.input.move_pointer(0, -120)
+            time.sleep(0.25)
+        except (BridgeUnavailable, BridgeRefused):
+            return result
+
+        delta = after.pitch - before.pitch
+        if abs(delta) < 1e-4:
+            return result
+        magnitude = abs(delta) / 120.0
+        if 1e-5 < magnitude < 0.2:
+            result = {
+                "pitch_radians_per_pixel": magnitude,
+                # Pointer +y produced this change in pitch. Positive means the
+                # engine counts downward-looking as a rising pitch.
+                "pitch_sign": 1.0 if delta > 0 else -1.0,
+                "pitch_source": "measured",
+                "pitch_delta": round(delta, 5),
+            }
+        return result
+
+    def pitch_pixels_for(self, error: float) -> int:
+        """Pointer pixels that turn the view through *error* radians of pitch."""
+        per_pixel = self.calibration.get("pitch_radians_per_pixel",
+                                         self.calibration["radians_per_pixel"])
+        sign = self.calibration.get("pitch_sign", -1.0)
+        return int(round(error / per_pixel * sign * self.config.yaw_gain))
+
+    def look_at_pitch(self, wanted: float, attempts: int = 5,
+                      tolerance_degrees: float = 3.0) -> float:
+        """Aim the head vertically, correcting the sign from what happens.
+
+        A one-shot calibration of the pitch axis is fragile: measure it while
+        the view is against its clamp and the probe reads zero, the assumed sign
+        stands, and every later correction drives the head further from the
+        target until it is staring at the sky. Watching whether the error
+        actually shrank and flipping the sign when it did not costs one extra
+        step and cannot be wrong for long.
+        """
+        tolerance = math.radians(tolerance_degrees)
+        previous_error = None
+        for _ in range(attempts):
+            try:
+                state = self._state()
+            except (BridgeUnavailable, BridgeRefused):
+                return previous_error or 0.0
+            error = wanted - state.pitch
+            if abs(error) <= tolerance:
+                return error
+
+            if previous_error is not None and abs(error) > abs(previous_error) - 1e-3:
+                # That push made things no better. The axis runs the other way.
+                self.calibration["pitch_sign"] = -self.calibration.get("pitch_sign", -1.0)
+                self.calibration["pitch_source"] = "corrected_in_flight"
+                self.pitch_sign_flips += 1
+
+            pixels = self.pitch_pixels_for(error)
+            self.input.move_pointer(0, max(-400, min(400, pixels)))
+            self.yaw_corrections += 1
+            time.sleep(0.28)
+            previous_error = error
+        return previous_error or 0.0
 
     def turn_to_yaw(self, target_yaw: float, timeout: float = 6.0) -> MoveOutcome:
         """Turn the head to a bearing using pointer input only.
@@ -232,7 +322,8 @@ class MovementController:
         start_y = state.y
         best_distance = state.ground_distance_to({"x": target_x, "z": target_z})
         last_progress_at = time.monotonic()
-        recent_positions: list[tuple[float, float]] = []
+        nudges = 0
+        last_jump_at = 0.0
 
         def finish(status: str, ok: bool, reason: str, current: SelfState, extra=None) -> MoveOutcome:
             self._stop_moving()
@@ -281,7 +372,19 @@ class MovementController:
                 best_distance = distance
                 last_progress_at = time.monotonic()
             elif time.monotonic() - last_progress_at > self.config.stuck_timeout_seconds:
-                details = {"closest_approach": round(best_distance, 3)}
+                # Grinding on a door frame a few tenths from the target is not
+                # being blocked, it is being a body in a narrow gap. One
+                # sideways nudge is the local correction a person makes without
+                # thinking, and the specification allows exactly this much:
+                # working around a micro-deviation, never re-planning a route.
+                if distance < self.config.position_tolerance * 3 and nudges < 2:
+                    nudges += 1
+                    self._nudge_sideways(nudges)
+                    last_progress_at = time.monotonic()
+                    continue
+
+                details = {"closest_approach": round(best_distance, 3),
+                           "sideways_nudges": nudges}
                 node_ahead = self._describe_obstacle()
                 if node_ahead:
                     details.update(node_ahead)
@@ -309,17 +412,30 @@ class MovementController:
                     self.input.key_down("forward")
 
             # A body that is on the ground, aimed correctly, holding forward and
-            # not moving is up against something it can maybe step over.
-            recent_positions.append((state.x, state.z))
-            if len(recent_positions) > 6:
-                recent_positions.pop(0)
-                spread = max(math.hypot(a[0] - b[0], a[1] - b[1])
-                             for a in recent_positions for b in recent_positions)
-                if spread < 0.15 and state.on_ground and abs(error) < math.radians(20):
-                    self.input.tap("jump", 0.08)
-                    recent_positions.clear()
+            # not gaining ground is up against something it can probably step
+            # over. Jumping is tried well before the stuck timeout: a kerb is
+            # the most common thing in the way, and waiting three seconds to
+            # find that out makes climbing a single step look like luck.
+            now = time.monotonic()
+            if (now - last_progress_at > JUMP_AFTER_SECONDS
+                    and now - last_jump_at > JUMP_INTERVAL_SECONDS
+                    and state.on_ground
+                    and abs(error) < math.radians(35)):
+                self.input.tap("jump", 0.09)
+                last_jump_at = now
+                self.jumps += 1
 
             time.sleep(self._tick())
+
+    def _nudge_sideways(self, attempt: int) -> None:
+        """Step aside briefly, then resume. Alternates side on each attempt."""
+        self._stop_moving()
+        key = "left" if attempt % 2 else "right"
+        self.input.key_down(key)
+        time.sleep(0.22)
+        self.input.key_up(key)
+        self.input.key_down("forward")
+        time.sleep(0.18)
 
     def _describe_obstacle(self) -> dict:
         """Ask the bridge what is in front of the body, if it will say.
@@ -392,6 +508,10 @@ class MovementController:
         return {
             "control_ticks": self.control_ticks,
             "yaw_corrections": self.yaw_corrections,
+            "jumps": self.jumps,
             "yaw_radians_per_pixel": round(self.calibration["radians_per_pixel"], 6),
             "yaw_calibration_source": self.calibration["source"],
+            "pitch_sign": self.calibration.get("pitch_sign"),
+            "pitch_calibration_source": self.calibration.get("pitch_source"),
+            "pitch_sign_flips": self.pitch_sign_flips,
         }

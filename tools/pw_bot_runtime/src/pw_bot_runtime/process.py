@@ -53,8 +53,12 @@ class LuantiClient:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_handle = self.log_path.open("wb")
 
-        argv = [
-            binary, "--go",
+        argv = [binary, "--go"]
+        if self.config.client.config_file:
+            client_config = self.config._resolve(self.config.client.config_file)
+            if client_config.exists():
+                argv += ["--config", str(client_config)]
+        argv += [
             "--address", self.config.server.address,
             "--port", str(self.config.server.port),
             "--name", self.config.server.player_name,
@@ -153,6 +157,24 @@ class LuantiClient:
                      ["windowfocus", self.window_id],
                      ["windowraise", self.window_id]):
             subprocess.run(["xdotool", *args], env=env, capture_output=True, text=True)
+
+    def window_centre(self) -> tuple[int, int] | None:
+        """Screen coordinates of the middle of the client window."""
+        if not self.window_id:
+            return None
+        result = subprocess.run(
+            ["xdotool", "getwindowgeometry", "--shell", self.window_id],
+            env={"DISPLAY": self.display, "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True)
+        values = {}
+        for line in result.stdout.splitlines():
+            key, _, value = line.partition("=")
+            if value.strip().lstrip("-").isdigit():
+                values[key.strip()] = int(value)
+        if not {"X", "Y", "WIDTH", "HEIGHT"} <= values.keys():
+            return None
+        return (values["X"] + values["WIDTH"] // 2,
+                values["Y"] + values["HEIGHT"] // 2)
 
     def window_name(self) -> str:
         if not self.window_id:
