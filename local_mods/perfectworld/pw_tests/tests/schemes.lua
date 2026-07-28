@@ -28,11 +28,11 @@ T.register_test("perfectworld", "scheme_catalogue_is_not_thin", function(ctx)
   -- regression that quietly drops a style back to a handful of schemes should
   -- be a failure rather than something noticed in a screenshot months later.
   local ids = perfectworld.schemes.list()
-  ctx.assert.is_true(#ids >= 30,
-    "the catalogue should carry at least 30 schemes, has " .. #ids)
+  ctx.assert.is_true(#ids >= 50,
+    "the catalogue should carry at least 50 schemes, has " .. #ids)
 
   local styles = perfectworld.schemes.list_styles()
-  ctx.assert.is_true(#styles >= 3, "at least three styles, has " .. #styles)
+  ctx.assert.is_true(#styles >= 5, "at least five styles, has " .. #styles)
 
   for _, style in ipairs(styles) do
     local dwellings = perfectworld.schemes.for_role(style, "dwelling")

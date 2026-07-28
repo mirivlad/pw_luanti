@@ -244,7 +244,7 @@ dofile(modpath .. "/roofs.lua")
 dofile(modpath .. "/interior.lua")
 dofile(modpath .. "/builder.lua")
 
-for _, file in ipairs({"vernacular", "nordic", "japanese"}) do
+for _, file in ipairs({"vernacular", "nordic", "japanese", "mediterranean", "stilt"}) do
   local ok, err = pcall(dofile, modpath .. "/styles/" .. file .. ".lua")
   if not ok then
     minetest.log("error", "[pw_schemes] style " .. file .. ": " .. tostring(err))
