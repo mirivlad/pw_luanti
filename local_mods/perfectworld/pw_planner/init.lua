@@ -728,6 +728,34 @@ function perfectworld.planner.create_village_profile(candidate, environment)
   profile.material_palette = palette
   profile.palette_id = family
 
+  -- The architectural style of this settlement, and the buildings it may use.
+  --
+  -- One style per village, hashed from the village's own id and constrained by
+  -- biome family. A village that mixed styles would read as a sample book
+  -- rather than a place, so this decides once and every lot obeys it.
+  --
+  -- Only the roles that genuinely correspond are taken from the catalogue.
+  -- `central` is the well at the middle of a village and `fishery` is a
+  -- building carrying a worksite contract; neither is something the scheme
+  -- vocabulary expresses, so both keep the structure the specialization named.
+  if perfectworld.schemes and profile.village_id then
+    local style = perfectworld.schemes.style_for(profile.village_id, family)
+    profile.style = style
+    if style then
+      for role, _ in pairs(profile.role_variants) do
+        local variants = perfectworld.schemes.variants_for(style, role)
+        if variants then profile.role_variants[role] = variants end
+      end
+      -- Roles the specialization never named a variant for still need one.
+      for _, role in ipairs(profile.structure_roles or {}) do
+        if not profile.role_variants[role] then
+          local variants = perfectworld.schemes.variants_for(style, role)
+          if variants then profile.role_variants[role] = variants end
+        end
+      end
+    end
+  end
+
   profile.variation_parameters = {
     orientation_noise = choice.range(seed_key, "variation:orientation_noise", 0, 0.3),
     spacing_jitter = choice.range(seed_key, "variation:spacing_jitter", 0, 0.4),

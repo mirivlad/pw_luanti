@@ -251,6 +251,9 @@ for _, file in ipairs({"vernacular", "nordic", "japanese", "mediterranean", "sti
   end
 end
 
+dofile(modpath .. "/bridge.lua")
+perfectworld.schemes.register_as_structures()
+
 minetest.log("action", string.format(
   "[pw_schemes] loaded: %d schemes across %d styles",
   #perfectworld.schemes.list(), #perfectworld.schemes.list_styles()))

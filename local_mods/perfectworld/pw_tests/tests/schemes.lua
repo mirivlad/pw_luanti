@@ -232,3 +232,115 @@ T.register_test("perfectworld", "raised_schemes_stand_on_posts_over_open_air", f
   ctx.assert.equal(under, "air",
     "under a raised floor there must be open air, found " .. under)
 end)
+
+-- === Integration with the planner ===========================================
+
+local function planner_candidate(id, rx, rz, x, z)
+  return {
+    id = id, x = x, z = z, rx = rx, rz = rz,
+    type = "village",
+    structure_name = perfectworld.planner.COMPOSITE_MARKER,
+    structure_id = id .. "_struct_0",
+    rotation = 0,
+    status = "candidate",
+    region_id = perfectworld.get_region_id(rx, rz),
+  }
+end
+
+local function planner_environment(family)
+  return {
+    biome_family = family,
+    biome_name = family,
+    roughness = 2,
+    water_distance = 200,
+    specialization = "farming",
+    specialization_score = 1,
+    ecology = {},
+  }
+end
+
+T.register_test("perfectworld", "every_scheme_is_placeable_as_a_structure", function(ctx)
+  -- A scheme the planner cannot see is a scheme that does not exist. This is
+  -- the bridge: each one registered as an ordinary structure definition, so the
+  -- terrain analysis, rotation, plinth, rollback and reachability machinery
+  -- applies to it unchanged.
+  local missing = {}
+  for _, id in ipairs(perfectworld.schemes.list()) do
+    local def = perfectworld.structures.get(id)
+    if not def then
+      missing[#missing + 1] = id
+    else
+      if #(def.rotations or {}) ~= 4 then
+        missing[#missing + 1] = id .. " (rotations)"
+      end
+      if not (def.terrain and def.terrain.building_footprint) then
+        missing[#missing + 1] = id .. " (no building footprint)"
+      end
+      if not (def.placement and def.placement.generator) then
+        missing[#missing + 1] = id .. " (no generator)"
+      end
+    end
+  end
+  ctx.assert.equal(#missing, 0,
+    "schemes not registered as structures: "
+    .. table.concat(missing, ", ", 1, math.min(#missing, 4)))
+end)
+
+T.register_test("perfectworld", "a_village_is_composed_from_one_style", function(ctx)
+  -- The integration test that matters. Everything else could pass with the
+  -- wiring dead: the catalogue would exist, the builder would work, and
+  -- villages would still be made of the ten old structures. This checks that a
+  -- planned village actually names schemes, and names them from a single style.
+  local mixed, styled = {}, 0
+  for index = 1, 30 do
+    local candidate = planner_candidate(
+      "settlement_v1_p" .. index .. "_p" .. index .. "_1",
+      index, index, index * 640, index * 512)
+    local profile = perfectworld.planner.create_village_profile(
+      candidate, planner_environment("temperate"))
+
+    if profile.style then
+      styled = styled + 1
+      for role, variants in pairs(profile.role_variants or {}) do
+        for _, name in ipairs(variants) do
+          local scheme = perfectworld.schemes.get(name)
+          if scheme and scheme.style ~= profile.style then
+            mixed[#mixed + 1] = string.format("%s offers %s (%s) for %s in a %s village",
+              candidate.id, name, scheme.style, role, profile.style)
+          end
+        end
+      end
+    end
+  end
+  ctx.assert.is_true(styled >= 25,
+    "most villages should have been given a style, got " .. styled .. " of 30")
+  ctx.assert.equal(#mixed, 0,
+    "a village must not be offered another style's buildings: "
+    .. table.concat(mixed, "; ", 1, math.min(#mixed, 3)))
+end)
+
+T.register_test("perfectworld", "villages_draw_dwellings_from_the_catalogue", function(ctx)
+  -- Dwellings are the bulk of a village and were the whole of the complaint:
+  -- four house shapes meant every village was the same village. If the bridge
+  -- were wired but the role mapping were wrong, the profile would still carry
+  -- the four legacy houses and nobody would notice.
+  local from_catalogue, legacy = 0, 0
+  for index = 1, 20 do
+    local candidate = planner_candidate(
+      "settlement_v1_n" .. index .. "_p" .. index .. "_1",
+      -index, index, -index * 640, index * 512)
+    local profile = perfectworld.planner.create_village_profile(
+      candidate, planner_environment("temperate"))
+    for _, name in ipairs((profile.role_variants or {}).dwelling or {}) do
+      if perfectworld.schemes.get(name) then
+        from_catalogue = from_catalogue + 1
+      else
+        legacy = legacy + 1
+      end
+    end
+  end
+  ctx.assert.is_true(from_catalogue > 0,
+    "villages must draw dwellings from the scheme catalogue")
+  ctx.assert.equal(legacy, 0,
+    "a styled village should not be offered the pre-catalogue houses, got " .. legacy)
+end)
