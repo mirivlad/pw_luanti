@@ -265,6 +265,16 @@ minetest.register_chatcommand("pw_street_check", {
     local settlement = perfectworld.settlements.get(id)
     if not settlement then return false, "Settlement not found: " .. id end
 
+    -- Load the ground first. An unloaded column reads as nothing, which is
+    -- indistinguishable from a hole in the road, and a check that cannot tell
+    -- those apart is worse than no check.
+    local bounds = settlement.bounds
+    if bounds and bounds.min_x and minetest.load_area then
+      pcall(minetest.load_area,
+        {x = bounds.min_x - 8, y = -64, z = bounds.min_z - 8},
+        {x = bounds.max_x + 8, y = 200, z = bounds.max_z + 8})
+    end
+
     -- Height, not material. A village street is surfaced from its own biome
     -- palette, and several of those materials — dirt above all — occur
     -- naturally everywhere, so asking "is the road material here" answers yes
@@ -290,14 +300,23 @@ minetest.register_chatcommand("pw_street_check", {
           -- the street; the second found the topmost walkable one, which under
           -- an overhang is the mountainside seventy nodes above the road. The
           -- scan therefore starts a little above where the last cell was.
+          -- A narrow window around the last cell, not a whole column. With a
+          -- forty-node reach one cell that found a cave floor dragged the hint
+          -- down and every cell after it searched the caves too, which read as
+          -- a village built underground. A street cannot drop six nodes between
+          -- one cell and the next; if nothing is in the window, the honest
+          -- answer is that this cell could not be read.
           local top = nil
-          for y = (hint or 200) + 8, (hint and hint - 40 or -20), -1 do
+          for y = (hint or 200) + 8, (hint and hint - 6 or -20), -1 do
             local node = minetest.get_node({x = cell.x, y = y, z = cell.z}).name
             if node ~= "air" and node ~= "ignore" then
               local def = minetest.registered_nodes[node]
+              local class = perfectworld.compat.classify_node(node)
               local above = minetest.get_node({x = cell.x, y = y + 1, z = cell.z}).name
               local above2 = minetest.get_node({x = cell.x, y = y + 2, z = cell.z}).name
-              if def and def.walkable
+              -- Leaves are walkable and have sky above them. A canopy is not a
+              -- carriageway, and the check reported a step of eight onto one.
+              if def and def.walkable and not class.vegetation
                 and (above == "air" or above == "ignore")
                 and (above2 == "air" or above2 == "ignore") then
                 top = y

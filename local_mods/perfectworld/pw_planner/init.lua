@@ -2274,7 +2274,8 @@ perfectworld.planner._link_centreline = link_centreline
 
 --- Build a walkable way from `from` to `to`, stepping at most one block per
 -- cell and cutting head-room, so a villager on foot can actually use it.
-local function carve_walkway(from, to, material_name, blocked)
+local function carve_walkway(from, to, material_name, blocked, opts)
+  opts = opts or {}
   local dx, dz = to.x - from.x, to.z - from.z
   local steps = math.max(math.abs(dx), math.abs(dz), 1)
   local target_y = from.y or paving_level(from.x, from.z)
@@ -2288,16 +2289,33 @@ local function carve_walkway(from, to, material_name, blocked)
     }
   end
 
+  -- Where the way has to arrive. Descending only as the ground happens to fall
+  -- meant a driveway from a door five nodes above the street ran level until it
+  -- reached the street and then dumped the whole difference on the last cell —
+  -- which is a cell of the finished carriageway. Aiming at the destination from
+  -- the start spreads the descent over the cells there are.
+  local destination_y = opts.keep_destination and paving_level(to.x, to.z) or nil
+
   local previous_y = target_y
   for s = 0, steps do
     local cell = cells[s]
     local natural = paving_level(cell.x, cell.z, hint)
     local y = natural or previous_y
+    if destination_y and y then
+      local remaining = steps - s
+      if y > destination_y + remaining then y = destination_y + remaining end
+      if y < destination_y - remaining then y = destination_y - remaining end
+    end
     if previous_y then
       if y > previous_y + 1 then y = previous_y + 1 end
       if y < previous_y - 1 then y = previous_y - 1 end
     end
-    if y and blocked and blocked(cell.x, cell.z) then
+    -- The street owns its own surface. Writing the last cell re-levelled the
+    -- carriageway to whatever height the driveway's chain happened to reach.
+    if y and opts.keep_destination and s == steps then
+      previous_y = y
+      hint = y
+    elseif y and blocked and blocked(cell.x, cell.z) then
       -- Never cut through a building to reach another one.
       previous_y = y
       hint = y
@@ -2353,7 +2371,7 @@ perfectworld.planner._carve_walkway = carve_walkway
 -- to the street level".
 local function build_door_approach(door, floor_y, road_point, material_name, profile, blocked)
   if not floor_y then
-    carve_walkway(door, road_point, material_name)
+    carve_walkway(door, road_point, material_name, nil, {keep_destination = true})
     return
   end
 
@@ -2371,7 +2389,8 @@ local function build_door_approach(door, floor_y, road_point, material_name, pro
     end
   end
 
-  carve_walkway({x = door.x, y = floor_y, z = door.z}, road_point, material_name, blocked)
+  carve_walkway({x = door.x, y = floor_y, z = door.z}, road_point, material_name, blocked,
+    {keep_destination = true})
 end
 
 local function worksite_candidate_anchors(lot, seed_key)
@@ -2705,7 +2724,7 @@ local function materialize_village_plan(plan, profile, candidate)
         for _, destination in ipairs({lot.road_point, street_anchor}) do
           if path then break end
           carve_walkway({x = lot.door.x, y = lot.door.y, z = lot.door.z},
-            destination, road_material, blocked_by_building)
+            destination, road_material, blocked_by_building, {keep_destination = true})
           origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y) or origin
           target = standing_spot(lot.door.x, lot.door.z, lot.door.y) or target
           kerb = standing_spot(lot.road_point.x, lot.road_point.z, lot.door.y) or kerb

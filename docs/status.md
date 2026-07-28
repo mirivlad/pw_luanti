@@ -299,17 +299,42 @@ worksite cameras.
 | No complete fishing village was found inside valid world coordinates in this seed's acceptance sample | Viable shore geometry must fit two houses, a fishery and a dock without using water or a cliff | Fishery and dock components pass physical tests, but full real-world fishing composition still needs a deterministic acceptance fixture |
 | `/pw_village_batch` accepts radii beyond the engine's usable coordinate range | The development command enumerates arbitrary region coordinates and does not clamp to `mapgen_limit` | It can write non-visualizable diagnostic records; normal mapgen does not generate those regions |
 | A settlement link can leave one water cell unpaved at a lake edge | The bridge decides from the column it probes; water that flows back over a freshly laid deck is not re-probed | One cell in sixty-two on the link measured; the road either side is continuous |
+| `/pw_street_check` reads nothing for settlements whose blocks are not loaded | Teleporting to a settlement does not guarantee the server keeps its mapblocks, and `load_area` only loads what is already generated | Streets in those settlements report every cell unreadable, which is honest but leaves them unmeasured |
 
 Fixed: roof stairs pointed downhill, so every course rose at its outer edge and
 dropped at its inner one and the roof read as a row of combs from the gable end.
 `roof_stairs_rise_towards_the_ridge` now measures orientation; nothing did
 before.
 
+Village streets now use the same one-sided height profile the settlement links
+do, and a driveway no longer rewrites the street cell it arrives at. Measured
+with `/pw_street_check`:
+
+| built by | street | cells | biggest step |
+|---|---|---:|---:|
+| the old per-segment paver | main | 57 | 18 |
+| the old per-segment paver | contour | 53 | 6 |
+| the shared profile | main | 84 | 0 |
+| the shared profile | main | 73 | 0 |
+| the shared profile | cross | 55 | 1 |
+| the shared profile, before the driveway fix | main (with lots) | 69 | 5 |
+| the shared profile, after the driveway fix | contour (with lots) | 63 | 1 |
+
+The last row is one village measured cleanly; the other villages in that batch
+could not be read at all, so the driveway fix has one physical data point
+behind it rather than a sample.
+
+`/pw_street_check` took four revisions before it measured the carriageway, and
+each wrong version accused the road of a defect it did not have — the topmost
+node in the column is the tree beside the street, the topmost walkable one is
+the mountain above it, and a probe that follows the last cell too far down
+finds a cave and reports a village built underground. The lesson is not about
+roads: a measurement that has never been wrong has probably never been checked.
+
 Fix directions: add a valid-coordinate deterministic fishing acceptance seed,
 order lots by approach quality before accepting them, clamp debug batch radius,
-and give village streets the same one-sided height profile the settlement links
-now use — the patchy-carriageway defect above is exactly what that profile was
-written to remove.
+and make the plan-level approach check require a driveway long enough for the
+height it has to lose rather than a flat limit of six.
 
 ## PW Bot: measured on the obstacle course
 
