@@ -329,6 +329,37 @@ function population.populate_structure(record, opts)
   }, opts)
 end
 
+--- What the villagers standing in a place have made of themselves.
+--
+-- Professions are Mineclonia's business, not ours: a villager claims a job
+-- block it can find and becomes a farmer or a fisherman by doing so. This asks
+-- what they chose, which is the only way to know whether the workstations our
+-- buildings contain are reachable and recognised.
+function population.professions(bounds, margin)
+  if type(bounds) ~= "table" or not bounds.min_x then return {} end
+  margin = margin or population.BOUNDS_MARGIN
+  local centre_x = (bounds.min_x + bounds.max_x) / 2
+  local centre_z = (bounds.min_z + bounds.max_z) / 2
+  local half_x = (bounds.max_x - bounds.min_x) / 2 + margin
+  local half_z = (bounds.max_z - bounds.min_z) / 2 + margin
+  local radius = math.sqrt(half_x * half_x + half_z * half_z) + 128
+
+  local counts = {}
+  for _, object in ipairs(minetest.get_objects_inside_radius(
+    {x = centre_x, y = 32, z = centre_z}, radius)) do
+    local entity = object:get_luaentity()
+    if entity and entity.name == population.VILLAGER_ENTITY then
+      local pos = object:get_pos()
+      if pos and pos.x >= bounds.min_x - margin and pos.x <= bounds.max_x + margin
+        and pos.z >= bounds.min_z - margin and pos.z <= bounds.max_z + margin then
+        local trade = entity._profession or "unemployed"
+        counts[trade] = (counts[trade] or 0) + 1
+      end
+    end
+  end
+  return counts
+end
+
 --- What the record and the world each say about a settlement's people.
 function population.status(settlement_id)
   local settlement = perfectworld.settlements
@@ -348,6 +379,7 @@ function population.status(settlement_id)
     -- Asked of the world, so a record claiming people who are no longer there
     -- shows up as a disagreement rather than being believed.
     loaded_villagers = population.count_villagers(bounds),
+    professions = population.professions(bounds),
   }
 end
 

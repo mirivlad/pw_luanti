@@ -1193,10 +1193,16 @@ minetest.register_chatcommand("pw_population", {
     if param and param ~= "" then
       local status = perfectworld.population.status(param)
       if not status then return false, "Settlement not found: " .. param end
+      local trades = {}
+      for trade, count in pairs(status.professions or {}) do
+        trades[#trades + 1] = trade .. "=" .. count
+      end
+      table.sort(trades)
       return true, string.format(
-        "%s status=%s settled=%s beds=%d spawned=%d loaded_now=%d",
+        "%s status=%s settled=%s beds=%d spawned=%d loaded_now=%d trades: %s",
         status.settlement_id, tostring(status.status), tostring(status.settled),
-        status.recorded_beds, status.recorded_spawned, status.loaded_villagers)
+        status.recorded_beds, status.recorded_spawned, status.loaded_villagers,
+        #trades > 0 and table.concat(trades, " ") or "(none loaded)")
     end
 
     -- The world-wide answer only counts records: asking every settlement how
