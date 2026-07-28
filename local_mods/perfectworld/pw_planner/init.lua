@@ -408,7 +408,10 @@ local function make_world_terrain()
         local class = perfectworld.compat.classify_node(node.name)
         if class.vegetation then
           vegetation_count = vegetation_count + 1
-          if class.tree then tree_count = tree_count + 1 end
+          -- A 6-node survey lattice often crosses a crown without hitting its
+          -- one-block trunk. Both trunk and canopy are physical evidence that
+          -- the site has a local wood resource.
+          if class.tree or class.leaves then tree_count = tree_count + 1 end
         else
           local result = {
             y = y,
@@ -2929,7 +2932,8 @@ function perfectworld.planner.validate_settlement(settlement_id)
       end
     end
   end
-  if #worksite_records > 0 or settlement.required_worksite then
+  if #worksite_records > 0
+    or (settlement.required_worksite and settlement.status ~= "failed") then
     if #worksite_records == 0 then
       missing_worksite = tostring(settlement.required_worksite)
     end

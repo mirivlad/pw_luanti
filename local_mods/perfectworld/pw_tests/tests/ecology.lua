@@ -342,7 +342,7 @@ T.register_test("perfectworld", "ecology_world_sampler_finds_ground_below_tree_c
   minetest.set_node({x = pos.x, y = pos.y, z = pos.z},
     {name = "mcl_core:dirt_with_grass"})
   minetest.set_node({x = pos.x, y = pos.y + 1, z = pos.z},
-    {name = "mcl_trees:tree_oak"})
+    {name = "mcl_trees:leaves_oak"})
   minetest.set_node({x = pos.x, y = pos.y + 2, z = pos.z},
     {name = "mcl_trees:leaves_oak"})
   for y = pos.y + 3, pos.y + 4 do
@@ -351,8 +351,9 @@ T.register_test("perfectworld", "ecology_world_sampler_finds_ground_below_tree_c
 
   terrain.reset()
   local column = terrain.sample_column(pos.x, pos.z)
-  ctx.assert.equal(column.y, pos.y, "ground must be below trunk and leaves")
-  ctx.assert.is_true(column.tree, "the skipped tree must remain resource evidence")
+  ctx.assert.equal(column.y, pos.y, "ground must be below the canopy")
+  ctx.assert.is_true(column.tree,
+    "a sampled canopy column must remain forest resource evidence")
   ctx.assert.is_true(column.soil, "the resolved ground must retain its soil class")
 
   for index = #snapshot, 1, -1 do

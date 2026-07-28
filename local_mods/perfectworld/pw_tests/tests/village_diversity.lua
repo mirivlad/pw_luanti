@@ -429,6 +429,56 @@ T.register_test("perfectworld", "validator_checks_required_worksite_in_the_real_
   perfectworld.planner._test_unmark_placed(c.id)
 end)
 
+T.register_test("perfectworld", "validator_accepts_honest_failed_ecological_settlement", function(ctx)
+  local c = make_candidate("test_failed_ecological_validation", 64, 64, 64000, 64000)
+  perfectworld.planner._test_clear_settlement(c.id)
+  perfectworld.planner._test_unmark_placed(c.id)
+  perfectworld.planner.save_settlement_plan(c.id, {
+    plan = {
+      village_id = c.id,
+      lots = {},
+      roads = {},
+      bounds = {
+        min_x = c.x - 4, max_x = c.x + 4,
+        min_z = c.z - 4, max_z = c.z + 4,
+      },
+    },
+    profile = {},
+    settlement = {
+      settlement_id = c.id,
+      status = "failed",
+      reason = "no_viable_layout",
+      lot_count = 0,
+      planned_lot_count = 0,
+      missing_required_roles = {"mine_workshop"},
+      required_worksite = "minehead",
+      structure_ids = {},
+      road_ids = {},
+      worksite_ids = {},
+      worksites = {},
+      exact_plan_fingerprint = 1,
+      structural_fingerprint = 1,
+      road_graph_fingerprint = 1,
+      center_pos = {x = c.x, y = 20, z = c.z},
+      bounds = {
+        min_x = c.x - 4, max_x = c.x + 4,
+        min_z = c.z - 4, max_z = c.z + 4,
+      },
+    },
+  })
+  perfectworld.planner.mark_placed(c.id)
+
+  local report = perfectworld.planner.validate_settlement(c.id)
+  ctx.assert.is_true(report.ok,
+    "an honest failed record must not claim an unbuilt worksite is missing: "
+      .. table.concat(report.issues or {}, ","))
+  ctx.assert.is_nil(report.checks.worksites_present_in_world,
+    "failed-before-materialization records have no physical worksite contract")
+
+  perfectworld.planner._test_clear_settlement(c.id)
+  perfectworld.planner._test_unmark_placed(c.id)
+end)
+
 -- === Real-plan diversity over the sampled map ===
 
 T.register_test("perfectworld", "village_diversity_over_100_plans", function(ctx)
