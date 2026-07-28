@@ -329,6 +329,37 @@ function population.populate_structure(record, opts)
   }, opts)
 end
 
+--- The workstations standing in a place, by node name.
+--
+-- A villager with no job either had nowhere to work or has not got round to it
+-- yet, and those are different problems. This answers the first: it asks the
+-- world what is actually there to claim.
+function population.workstations(bounds, margin)
+  if type(bounds) ~= "table" or not bounds.min_x then return {}, 0 end
+  margin = margin or population.BOUNDS_MARGIN
+  local names = {}
+  for role, _ in pairs(perfectworld.compat.list_materials and
+    perfectworld.compat.list_materials() or {}) do
+    if role:sub(1, 4) == "job_" then
+      local node = perfectworld.compat.get_material(role, {required = false})
+      if node and node ~= "air" then names[#names + 1] = node end
+    end
+  end
+  if #names == 0 then return {}, 0 end
+
+  local positions = minetest.find_nodes_in_area(
+    {x = math.floor(bounds.min_x - margin), y = -64, z = math.floor(bounds.min_z - margin)},
+    {x = math.ceil(bounds.max_x + margin), y = 200, z = math.ceil(bounds.max_z + margin)},
+    names)
+  local counts, total = {}, 0
+  for _, pos in ipairs(positions or {}) do
+    local name = minetest.get_node(pos).name
+    counts[name] = (counts[name] or 0) + 1
+    total = total + 1
+  end
+  return counts, total
+end
+
 --- What the villagers standing in a place have made of themselves.
 --
 -- Professions are Mineclonia's business, not ours: a villager claims a job
@@ -380,6 +411,8 @@ function population.status(settlement_id)
     -- shows up as a disagreement rather than being believed.
     loaded_villagers = population.count_villagers(bounds),
     professions = population.professions(bounds),
+    workstations = select(2, population.workstations(bounds)),
+    workstation_kinds = population.workstations(bounds),
   }
 end
 

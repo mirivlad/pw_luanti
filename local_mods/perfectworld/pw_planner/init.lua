@@ -2498,6 +2498,17 @@ local function materialize_village_plan(plan, profile, candidate)
       table.insert(errors, "structure_not_found:" .. tostring(lot.structure_name))
     else
       local structure_id = candidate.id .. "_struct_" .. (#placed_structures + 1)
+      -- What the household in this building does for a living. Taken from the
+      -- settlement's specialization, which is itself decided from physical
+      -- evidence, so the trades follow from the land. The building only needs
+      -- to know in order to put the right workstation in the room; the villager
+      -- who eventually claims it decides the rest for itself.
+      local trade
+      if lot.role == "dwelling" and perfectworld.settlements.trades_for then
+        local offered = perfectworld.settlements.trades_for(profile.specialization)
+        trade = choice.pick(profile.seed_key, "lot:" .. lot.index .. ":trade", offered)
+      end
+
       local ctx = {
         structure_id = structure_id,
         pos = {x = lot.center.x, y = 0, z = lot.center.z},
@@ -2506,6 +2517,7 @@ local function materialize_village_plan(plan, profile, candidate)
         settlement_id = candidate.id,
         palette = palette,
         terrain_overrides = plan.terrain_overrides,
+        trade = trade,
       }
       local ok, result = perfectworld.structures.place(lot.structure_name, ctx)
       if ok then
@@ -2691,6 +2703,48 @@ local function materialize_village_plan(plan, profile, candidate)
     end
   end
 
+  -- The bell.
+  --
+  -- A bell is what makes a cluster of houses read as a village to the game
+  -- rather than as loose mobs standing near each other: villagers gather at it,
+  -- raise the alarm from it, and the iron golems that defend the place are
+  -- counted around it. It goes beside the street, one node clear of the
+  -- carriageway, so it is somewhere people pass rather than somewhere they
+  -- have to be sent.
+  local bell_placed = nil
+  do
+    local bell = perfectworld.compat.get_material("bell", {required = false})
+    if bell and bell ~= "air" and minetest.registered_nodes[bell] then
+      local plinth = perfectworld.structures.palette_material(
+        profile.material_palette, "foundation", "foundation")
+      -- Candidate spots around the street anchor, nearest first. The anchor
+      -- itself is carriageway and must stay clear.
+      local offsets = {
+        {x = 2, z = 0}, {x = -2, z = 0}, {x = 0, z = 2}, {x = 0, z = -2},
+        {x = 2, z = 2}, {x = -2, z = -2}, {x = 3, z = 0}, {x = 0, z = 3},
+      }
+      for _, offset in ipairs(offsets) do
+        local x = street_anchor.x + offset.x
+        local z = street_anchor.z + offset.z
+        local y = paving_level(x, z)
+        if y and math.abs(y - street_anchor.y) <= 2 then
+          local head = minetest.get_node({x = x, y = y + 1, z = z}).name
+          local head2 = minetest.get_node({x = x, y = y + 2, z = z}).name
+          if (head == "air" or head == "ignore")
+            and (head2 == "air" or head2 == "ignore") then
+            minetest.set_node({x = x, y = y + 1, z = z}, {name = plinth})
+            minetest.set_node({x = x, y = y + 2, z = z}, {name = bell})
+            bell_placed = {x = x, y = y + 2, z = z}
+            break
+          end
+        end
+      end
+    end
+    if not bell_placed then
+      warnings[#warnings + 1] = "no_bell_site"
+    end
+  end
+
   -- Guarantee that every door can be walked to.
   --
   -- The planned driveway is a straight line and terrain does not always
@@ -2799,6 +2853,7 @@ local function materialize_village_plan(plan, profile, candidate)
     selected_site = deep_copy(profile.selected_site),
     ecology = deep_copy(profile.ecology),
     center_pos = settlement_center,
+    bell_pos = bell_placed,
     street_anchor = street_anchor,
     bounds = bounds,
     environment_profile = profile.environment,

@@ -53,6 +53,31 @@ local materials = {
   chain = "mcl_lanterns:chain",
   campfire = "mcl_campfires:campfire_lit",
   cauldron = "mcl_cauldrons:cauldron",
+
+  -- === Workstations ===
+  --
+  -- These are not decoration. Mineclonia gives a villager a profession by
+  -- letting it claim one of these nodes, so a house without one holds somebody
+  -- with nothing to do. The names are exactly the ones the game's own
+  -- profession table names: an anvil is not a workstation and a furnace is not
+  -- one either, however much they look like work.
+  job_farmer        = "mcl_composters:composter",
+  job_fisherman     = "mcl_barrels:barrel_closed",
+  job_shepherd      = "mcl_loom:loom",
+  job_librarian     = "mcl_lectern:lectern",
+  job_mason         = "mcl_stonecutter:stonecutter",
+  job_weaponsmith   = "mcl_grindstone:grindstone",
+  job_toolsmith     = "mcl_smithing_table:table",
+  job_armorer       = "mcl_blast_furnace:blast_furnace",
+  job_butcher       = "mcl_smoker:smoker",
+  job_fletcher      = "mcl_fletching_table:fletching_table",
+  job_cartographer  = "mcl_cartography_table:cartography_table",
+  job_leatherworker = "mcl_cauldrons:cauldron",
+
+  -- The meeting point. A bell is what makes a cluster of houses read as a
+  -- village to the game: villagers gather at it, raise the alarm from it, and
+  -- the iron golems that defend the place are counted around it.
+  bell = "mcl_bells:bell",
 }
 
 local fallbacks = {
@@ -88,6 +113,16 @@ local function resolve_node_name(name)
   if name == "air" or name == "ignore" then return name end
   if minetest.registered_nodes[name] then return name end
   return nil
+end
+
+--- Every abstract material role this game knows, as `role -> node name`.
+--
+-- Callers that need a family of roles — every workstation, say — should not
+-- have to keep their own copy of the list and drift from this one.
+function perfectworld.compat.list_materials()
+  local out = {}
+  for role, node in pairs(materials) do out[role] = node end
+  return out
 end
 
 function perfectworld.compat.resolve(name)

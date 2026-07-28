@@ -197,6 +197,43 @@ after a full server restart. A batch of eight fresh villages populated itself as
 it was built, two to five people each. A hamlet materialized on its own at
 (27105, 27320) reported one bed and one villager moved in.
 
+## Work
+
+A village of six was one farmer and five people standing still. Mineclonia hands
+out professions by letting a villager claim a workstation node it can find, and
+our buildings contained almost none: of the fixtures the schemes placed, only
+barrel, loom and cauldron were workstations the game recognises, and none of
+them appeared in a dwelling. Anvil, furnace, crafting table and bookshelf are
+decoration as far as a villager is concerned — the professions that sound like
+them want a blast furnace, a smoker, a fletching table and a lectern.
+
+Every dwelling now carries one workstation, and which one comes from the
+settlement's specialization, which is itself decided from physical evidence. So
+the trades follow from the land: a fishing village fills with fishermen and
+fletchers, a mining one with masons and smiths. The scheme does not know or
+care — one dwelling design furnishes differently in each.
+
+Measured in a six-bed farming village, before and after:
+
+    before   trades: farmer=1 unemployed=5
+    after    trades: farmer=2 librarian=2 nitwit=2
+             workstations 6: composter=3 lectern=2 smoker=1
+
+Nobody is unemployed. The two nitwits are vanilla Mineclonia: a fraction of
+villagers are born without the capacity for a profession. Reading it once was
+not enough — straight after spawning the same village said `nitwit=2
+unemployed=4`, because claiming a workstation takes time.
+
+A **bell** goes up beside the street. It is what makes a cluster of houses read
+as a village to the game rather than as loose mobs standing near each other:
+villagers gather at it, raise the alarm from it, and the iron golems that defend
+the place are counted around it.
+
+Two tests defend this. One requires every trade a settlement offers to resolve
+to a node this game actually registers. The other requires every workstation we
+place to appear in `mobs_mc.jobsites` — the list the game itself uses — which is
+the check that would have caught the anvil.
+
 ## Village Generation System (grammar v3)
 
 Resource-aware, multi-archetype physical settlement pipeline. See

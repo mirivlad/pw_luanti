@@ -1198,11 +1198,18 @@ minetest.register_chatcommand("pw_population", {
         trades[#trades + 1] = trade .. "=" .. count
       end
       table.sort(trades)
+      local shops = {}
+      for node, count in pairs(status.workstation_kinds or {}) do
+        shops[#shops + 1] = node:gsub("^[^:]*:", "") .. "=" .. count
+      end
+      table.sort(shops)
       return true, string.format(
-        "%s status=%s settled=%s beds=%d spawned=%d loaded_now=%d trades: %s",
+        "%s status=%s settled=%s beds=%d spawned=%d loaded_now=%d | trades: %s | workstations %d: %s",
         status.settlement_id, tostring(status.status), tostring(status.settled),
         status.recorded_beds, status.recorded_spawned, status.loaded_villagers,
-        #trades > 0 and table.concat(trades, " ") or "(none loaded)")
+        #trades > 0 and table.concat(trades, " ") or "(none loaded)",
+        status.workstations or 0,
+        #shops > 0 and table.concat(shops, " ") or "(none)")
     end
 
     -- The world-wide answer only counts records: asking every settlement how
@@ -1349,6 +1356,7 @@ minetest.register_chatcommand("pw_village_info", {
       "region_id=" .. tostring(s.region_id),
       "status=" .. tostring(s.status),
       "center=" .. minetest.pos_to_string(s.center_pos or {}),
+      "bell=" .. (s.bell_pos and minetest.pos_to_string(s.bell_pos) or "none"),
       "bounds=" .. string.format("(%s,%s)..(%s,%s)",
         tostring(s.bounds and s.bounds.min_x), tostring(s.bounds and s.bounds.min_z),
         tostring(s.bounds and s.bounds.max_x), tostring(s.bounds and s.bounds.max_z)),

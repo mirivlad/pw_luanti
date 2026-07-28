@@ -301,3 +301,72 @@ T.register_test("perfectworld", "population_is_asked_of_the_world_not_only_of_th
       "and what the record claims, so the two can be compared")
   end
 end)
+
+-- === Work ===
+
+T.register_test("perfectworld", "every_trade_a_settlement_offers_has_a_real_workstation", function(ctx)
+  if not perfectworld.settlements.trades_for then
+    ctx.assert.not_nil(perfectworld.settlements.trades_for,
+      "settlements must say what people there do for a living")
+    return
+  end
+
+  -- A trade whose workstation does not resolve to a registered node is a
+  -- villager with nothing to do, and nothing else would say so: the house is
+  -- built, the bed is there, and the only symptom is somebody standing still.
+  local checked, broken = 0, {}
+  for _, specialization in ipairs(perfectworld.settlements.list_specializations()) do
+    local offered = perfectworld.settlements.trades_for(specialization)
+    ctx.assert.is_true(#offered > 0,
+      specialization .. " must offer somebody a living")
+    for _, trade in ipairs(offered) do
+      checked = checked + 1
+      local role = perfectworld.settlements.workstation_for(trade)
+      local node = perfectworld.compat.get_material(role, {required = false})
+      if not node or node == "air" or not minetest.registered_nodes[node] then
+        broken[#broken + 1] = specialization .. "/" .. trade .. "->" .. tostring(node)
+      end
+    end
+  end
+  ctx.assert.is_true(checked > 0, "no trade was checked, so nothing was proved")
+  ctx.assert.equal(#broken, 0,
+    "these trades have no workstation in this game: " .. table.concat(broken, " "))
+end)
+
+T.register_test("perfectworld", "a_workstation_is_one_the_game_hands_out_jobs_for", function(ctx)
+  -- The trap this catches: an anvil looks like a smith's workstation and is
+  -- not one, a furnace looks like a butcher's and is not one either. The game
+  -- publishes the list it actually uses; ours must be a subset of it.
+  if not mobs_mc or not mobs_mc.jobsites then
+    ctx.assert.is_true(true, "this game publishes no jobsite list to check against")
+    return
+  end
+
+  local recognised = {}
+  for _, group in ipairs(mobs_mc.jobsites) do
+    recognised[group] = true
+  end
+
+  local checked, unrecognised = 0, {}
+  for role, node in pairs(perfectworld.compat.list_materials()) do
+    if role:sub(1, 4) == "job_" then
+      checked = checked + 1
+      local ok = recognised[node]
+      if not ok then
+        -- The game may name a group rather than a node.
+        for group in pairs(recognised) do
+          if group:sub(1, 6) == "group:"
+            and minetest.get_item_group(node, group:sub(7)) > 0 then
+            ok = true
+            break
+          end
+        end
+      end
+      if not ok then unrecognised[#unrecognised + 1] = role .. "=" .. node end
+    end
+  end
+
+  ctx.assert.is_true(checked > 0, "no workstation was checked, so nothing was proved")
+  ctx.assert.equal(#unrecognised, 0,
+    "these are furniture, not workstations: " .. table.concat(unrecognised, " "))
+end)

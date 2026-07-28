@@ -45,6 +45,20 @@ local FIXTURES = {
   cauldron = function() return {node = first_registered("mcl_cauldrons:cauldron", "mcl_core:cobble")} end,
   hay = function() return {node = first_registered("mcl_farming:hay_block", "mcl_trees:wood_oak")} end,
   workbench = function() return {node = first_registered("mcl_crafting_table:crafting_table", "mcl_trees:wood_oak")} end,
+
+  -- The one fixture that is not decoration. `workstation` resolves to whatever
+  -- trade this particular house was given, so the same scheme furnishes a
+  -- fisherman's cottage in one village and a mason's in another. Without it a
+  -- dwelling holds a bed, a chest and somebody with nothing to do: measured in
+  -- a six-bed village, one farmer and five unemployed, unchanged after two
+  -- minutes.
+  workstation = function(_, _, trade)
+    if not trade then return {} end
+    local node = perfectworld.compat.get_material(
+      perfectworld.settlements.workstation_for(trade), {required = false})
+    if not node or node == "air" then return {} end
+    return {node = node}
+  end,
 }
 
 --- Wall-side positions a fixture may take, in a fixed order.
@@ -77,7 +91,7 @@ function schemes.furnish(scheme, ctx)
   for _, role in ipairs(scheme.interior) do
     local resolve = FIXTURES[role]
     if resolve then
-      local fixture = resolve(mat, ctx.style)
+      local fixture = resolve(mat, ctx.style, ctx.trade)
       local spot = take()
       if not spot then break end
 

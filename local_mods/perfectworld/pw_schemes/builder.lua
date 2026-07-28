@@ -202,6 +202,10 @@ function schemes.build(scheme, context)
       origin = origin, rotation = rotation, palette = palette, style = style,
       materials = mat, half_w = half_w, half_d = half_d,
       floor_y = floor_y, height = height, door_x = door_x,
+      -- Which trade this house is for. Decided by the settlement, not the
+      -- scheme, so one dwelling design serves a fishing village and a mining
+      -- one and furnishes differently in each.
+      trade = context.trade,
     })
   end
 

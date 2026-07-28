@@ -60,7 +60,7 @@ register(scheme("stilt_hut", {
   footprint = {w = 5, d = 5},
   wall_height = 3,
   door = {offset = 0},
-  interior = {"bed", "chest", "lamp"},
+  interior = {"bed", "chest", "lamp", "workstation"},
 }))
 
 register(scheme("stilt_house", {
@@ -69,7 +69,7 @@ register(scheme("stilt_house", {
   footprint = {w = 5, d = 7},
   wall_height = 3,
   door = {offset = 0},
-  interior = {"bed", "chest", "table", "lamp"},
+  interior = {"bed", "chest", "table", "lamp", "workstation"},
 }))
 
 register(scheme("stilt_long_house", {
@@ -78,7 +78,7 @@ register(scheme("stilt_long_house", {
   footprint = {w = 7, d = 11},
   wall_height = 4,
   door = {offset = 0},
-  interior = {"bed", "bed", "chest", "table", "bench", "lamp"},
+  interior = {"bed", "bed", "chest", "table", "bench", "lamp", "workstation"},
 }))
 
 register(scheme("stilt_high_house", {
@@ -89,7 +89,7 @@ register(scheme("stilt_high_house", {
   raised_floor = 3,
   windows = {rows = 2, spacing = 2},
   door = {offset = 0},
-  interior = {"bed", "chest", "shelf", "table", "lamp"},
+  interior = {"bed", "chest", "shelf", "table", "lamp", "workstation"},
 }))
 
 -- --- Working buildings -------------------------------------------------------

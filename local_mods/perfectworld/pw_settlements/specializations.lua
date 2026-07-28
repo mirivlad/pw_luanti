@@ -59,6 +59,38 @@ local definitions = {
   },
 }
 
+--- What people in a settlement of each kind do for a living.
+--
+-- A settlement's specialization is already decided from physical evidence —
+-- water, soil, trees, stone — so the trades follow from the land rather than
+-- being assigned. A fishing village fills with fishermen and fletchers because
+-- that is what a place on a shore with wood behind it supports.
+--
+-- Each name is a Mineclonia profession, and each maps to the workstation node
+-- that profession claims. Listing them here rather than in the building
+-- catalogue keeps the question "what does this settlement do" in one place.
+local trades = {
+  fishing  = {"fisherman", "fisherman", "fletcher", "cartographer", "leatherworker"},
+  farming  = {"farmer", "farmer", "shepherd", "butcher", "librarian"},
+  forestry = {"fletcher", "shepherd", "librarian", "leatherworker", "farmer"},
+  mining   = {"mason", "toolsmith", "weaponsmith", "armorer", "mason"},
+}
+
+--- The trades a settlement of this kind offers, in a fixed order.
+--
+-- Repeats are deliberate: a fishing village should be mostly fishermen, and
+-- weighting by repetition keeps the choice a plain indexed pick rather than a
+-- second scoring system.
+function settlements.trades_for(specialization)
+  local list = trades[specialization] or trades.farming
+  return deep_copy(list)
+end
+
+--- The material role of the workstation a trade claims.
+function settlements.workstation_for(trade)
+  return "job_" .. tostring(trade)
+end
+
 local function definition_copy(id)
   local definition = definitions[id]
   if not definition then return nil end

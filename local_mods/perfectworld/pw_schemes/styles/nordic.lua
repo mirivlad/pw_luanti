@@ -57,7 +57,7 @@ register(scheme("nord_longhouse", {
   footprint = {w = 7, d = 13},
   wall_height = 4,
   door = {offset = 0},
-  interior = {"hearth", "bed", "bed", "bench", "bench", "chest", "table", "lamp"},
+  interior = {"hearth", "bed", "bed", "bench", "bench", "chest", "table", "lamp", "workstation"},
 }))
 
 register(scheme("nord_longhouse_small", {
@@ -66,7 +66,7 @@ register(scheme("nord_longhouse_small", {
   footprint = {w = 5, d = 9},
   wall_height = 3,
   door = {offset = 0},
-  interior = {"hearth", "bed", "chest", "bench", "lamp"},
+  interior = {"hearth", "bed", "chest", "bench", "lamp", "workstation"},
 }))
 
 register(scheme("nord_turf_cottage", {
@@ -76,7 +76,7 @@ register(scheme("nord_turf_cottage", {
   wall_height = 3,
   door = {offset = 0},
   windows = {rows = 1, spacing = 4},
-  interior = {"hearth", "bed", "chest", "lamp"},
+  interior = {"hearth", "bed", "chest", "lamp", "workstation"},
 }))
 
 register(scheme("nord_pit_house", {
@@ -87,7 +87,7 @@ register(scheme("nord_pit_house", {
   door = {offset = 0},
   windows = {rows = 0},
   roof = {kind = "gable", pitch = 2, eaves = 2},
-  interior = {"hearth", "bed", "chest"},
+  interior = {"hearth", "bed", "chest", "workstation"},
 }))
 
 register(scheme("nord_stave_house", {
@@ -97,7 +97,7 @@ register(scheme("nord_stave_house", {
   wall_height = 5,
   door = {offset = 0},
   windows = {rows = 2, spacing = 3},
-  interior = {"bed", "chest", "shelf", "table", "lamp"},
+  interior = {"bed", "chest", "shelf", "table", "lamp", "workstation"},
 }))
 
 -- --- Working buildings -------------------------------------------------------

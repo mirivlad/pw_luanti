@@ -54,7 +54,7 @@ register(scheme("med_courtyard_house", {
   footprint = {w = 9, d = 9},
   wall_height = 4,
   door = {offset = 0},
-  interior = {"bed", "chest", "table", "cauldron", "lamp"},
+  interior = {"bed", "chest", "table", "cauldron", "lamp", "workstation"},
 }))
 
 register(scheme("med_cube_house", {
@@ -63,7 +63,7 @@ register(scheme("med_cube_house", {
   footprint = {w = 5, d = 5},
   wall_height = 4,
   door = {offset = 0},
-  interior = {"bed", "chest", "table", "lamp"},
+  interior = {"bed", "chest", "table", "lamp", "workstation"},
 }))
 
 register(scheme("med_terrace_house", {
@@ -73,7 +73,7 @@ register(scheme("med_terrace_house", {
   wall_height = 6,
   door = {offset = 0},
   windows = {rows = 2, spacing = 3},
-  interior = {"bed", "bed", "chest", "table", "shelf", "lamp"},
+  interior = {"bed", "bed", "chest", "table", "shelf", "lamp", "workstation"},
 }))
 
 register(scheme("med_tower_house", {
@@ -83,7 +83,7 @@ register(scheme("med_tower_house", {
   wall_height = 8,
   door = {offset = 0},
   windows = {rows = 2, spacing = 2},
-  interior = {"bed", "chest", "shelf", "lamp"},
+  interior = {"bed", "chest", "shelf", "lamp", "workstation"},
 }))
 
 register(scheme("med_row_house", {
@@ -93,7 +93,7 @@ register(scheme("med_row_house", {
   wall_height = 5,
   door = {offset = 0},
   windows = {rows = 2, spacing = 2},
-  interior = {"bed", "chest", "table", "lamp"},
+  interior = {"bed", "chest", "table", "lamp", "workstation"},
 }))
 
 -- --- Working buildings -------------------------------------------------------

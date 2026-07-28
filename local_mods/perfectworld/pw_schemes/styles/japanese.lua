@@ -64,7 +64,7 @@ register(scheme("jp_minka_small", {
   footprint = {w = 5, d = 7},
   wall_height = 3,
   door = {offset = 0},
-  interior = {"table", "chest", "bed", "lamp"},
+  interior = {"table", "chest", "bed", "lamp", "workstation"},
 }))
 
 register(scheme("jp_minka", {
@@ -73,7 +73,7 @@ register(scheme("jp_minka", {
   footprint = {w = 7, d = 9},
   wall_height = 4,
   door = {offset = 0},
-  interior = {"hearth", "table", "bed", "chest", "shelf", "lamp"},
+  interior = {"hearth", "table", "bed", "chest", "shelf", "lamp", "workstation"},
 }))
 
 register(scheme("jp_machiya", {
@@ -85,7 +85,7 @@ register(scheme("jp_machiya", {
   windows = {rows = 2, spacing = 2},
   veranda = false,
   raised_floor = 0,
-  interior = {"table", "shelf", "chest", "bed", "lamp"},
+  interior = {"table", "shelf", "chest", "bed", "lamp", "workstation"},
 }))
 
 register(scheme("jp_farmhouse", {
@@ -95,7 +95,7 @@ register(scheme("jp_farmhouse", {
   wall_height = 4,
   door = {offset = -2},
   roof = {kind = "hip", pitch = 1, eaves = 2},
-  interior = {"hearth", "table", "bed", "bed", "chest", "lamp"},
+  interior = {"hearth", "table", "bed", "bed", "chest", "lamp", "workstation"},
 }))
 
 register(scheme("jp_cottage_hip", {
@@ -105,7 +105,7 @@ register(scheme("jp_cottage_hip", {
   wall_height = 3,
   door = {offset = 0},
   roof = {kind = "hip", pitch = 1, eaves = 2},
-  interior = {"table", "bed", "chest", "lamp"},
+  interior = {"table", "bed", "chest", "lamp", "workstation"},
 }))
 
 -- --- Working buildings -------------------------------------------------------

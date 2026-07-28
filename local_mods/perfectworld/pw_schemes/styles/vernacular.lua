@@ -41,7 +41,7 @@ register(scheme("vern_cottage_small", {
   footprint = {w = 5, d = 5},
   wall_height = 3,
   door = {offset = 0},
-  interior = {"bed", "chest", "table", "lamp"},
+  interior = {"bed", "chest", "table", "lamp", "workstation"},
 }))
 
 register(scheme("vern_cottage_wide", {
@@ -50,7 +50,7 @@ register(scheme("vern_cottage_wide", {
   footprint = {w = 7, d = 5},
   wall_height = 3,
   door = {offset = -1},
-  interior = {"bed", "chest", "table", "bench", "lamp"},
+  interior = {"bed", "chest", "table", "bench", "lamp", "workstation"},
 }))
 
 register(scheme("vern_house_tall", {
@@ -60,7 +60,7 @@ register(scheme("vern_house_tall", {
   wall_height = 5,
   door = {offset = 0},
   windows = {rows = 2, spacing = 2},
-  interior = {"bed", "chest", "table", "shelf", "lamp"},
+  interior = {"bed", "chest", "table", "shelf", "lamp", "workstation"},
 }))
 
 register(scheme("vern_house_long", {
@@ -69,7 +69,7 @@ register(scheme("vern_house_long", {
   footprint = {w = 5, d = 9},
   wall_height = 4,
   door = {offset = 0},
-  interior = {"bed", "bed", "chest", "table", "bench", "lamp"},
+  interior = {"bed", "bed", "chest", "table", "bench", "lamp", "workstation"},
 }))
 
 register(scheme("vern_cottage_corner", {
@@ -79,7 +79,7 @@ register(scheme("vern_cottage_corner", {
   wall_height = 4,
   door = {offset = 2},
   roof = {kind = "hip", pitch = 1, eaves = 1},
-  interior = {"bed", "chest", "table", "shelf", "lamp"},
+  interior = {"bed", "chest", "table", "shelf", "lamp", "workstation"},
 }))
 
 -- --- Working buildings -------------------------------------------------------
