@@ -216,6 +216,47 @@ T.register_test("perfectworld", "an_unbuilt_settlement_gets_nobody", function(ct
     "and the reason must name the cause rather than the symptom")
 end)
 
+T.register_test("perfectworld", "a_lone_farmstead_gets_its_people_too", function(ctx)
+  if not population.populate_structure then
+    ctx.assert.not_nil(population.populate_structure,
+      "population must be able to settle a building that is not a settlement")
+    return
+  end
+
+  -- Four candidates in five are a single farmstead rather than a village, and a
+  -- farmstead has a bed in it. Routing population only through settlement
+  -- records left most of the inhabited buildings in the world empty — and the
+  -- lookup would have refused them anyway, because a lone farmstead has no
+  -- settlement record to be found by.
+  local structures = perfectworld.planner.list_structures()
+  local farmstead = nil
+  for _, record in ipairs(structures) do
+    if record and record.status == "materialized" and record.position
+      and record.structure_name == "pw_farmstead_v1" then
+      farmstead = record
+      break
+    end
+  end
+  if not farmstead then
+    ctx.assert.is_true(true, "no farmstead has been built in this world to check")
+    return
+  end
+
+  -- The claim under test is that the path exists and reaches the world, not
+  -- that this particular building is loaded right now.
+  local ok, result = population.populate_structure(farmstead, {force = true})
+  ctx.assert.not_nil(result, "the attempt must report something")
+  if result then
+    local reason = result.reason
+    local acceptable = ok or reason == "not_loaded" or reason == "no_beds"
+    ctx.assert.is_true(acceptable,
+      "a farmstead must be settled, or refused for a reason about the world "
+        .. "rather than about its paperwork; got " .. tostring(reason))
+    ctx.assert.is_true(reason ~= "unknown_settlement",
+      "a farmstead is not a settlement and must not be refused for not being one")
+  end
+end)
+
 T.register_test("perfectworld", "an_unloaded_settlement_is_not_recorded_as_empty", function(ctx)
   if not population.is_loaded or not population.populate then
     ctx.assert.not_nil(population.is_loaded,

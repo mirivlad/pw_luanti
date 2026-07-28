@@ -1202,19 +1202,25 @@ minetest.register_chatcommand("pw_population", {
     -- The world-wide answer only counts records: asking every settlement how
     -- many villagers are standing in it would load nothing and report zero for
     -- everywhere nobody happens to be.
-    local settled, beds, people, unsettled = 0, 0, 0, 0
-    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+    -- Counted from the population records, not from the settlement list: most
+    -- inhabited buildings in this world are a lone farmstead with no settlement
+    -- record at all, and walking the settlement list would miss every one.
+    local settled, beds, people = 0, 0, 0
+    for _, id in ipairs(perfectworld.population.list_ids()) do
       local record = perfectworld.population.get_record(id)
       if record and record.settled then
         settled = settled + 1
         beds = beds + (record.beds or 0)
         people = people + (record.spawned or 0)
-      else
-        unsettled = unsettled + 1
       end
     end
+    local unsettled = 0
+    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+      local record = perfectworld.population.get_record(id)
+      if not (record and record.settled) then unsettled = unsettled + 1 end
+    end
     return true, string.format(
-      "settlements settled=%d unsettled=%d | beds=%d villagers moved in=%d",
+      "inhabited places=%d | settlements never settled=%d | beds=%d villagers moved in=%d",
       settled, unsettled, beds, people)
   end,
 })

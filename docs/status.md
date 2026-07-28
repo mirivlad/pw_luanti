@@ -17,7 +17,7 @@ population.
 |--------|--------|-------|
 | `pw_core` | ✅ Complete | API, composite IDs, world format lock, exact 32-bit hashing, stable variation contract |
 | `pw_compat_mcl` | ✅ Complete | Material mappings, biome and ecological node classification, 7 families, environment profiles, palettes and abstract decor materials |
-| `pw_planner` | ✅ Implemented | Region planning, grammar v3, bounded ecological survey, 3 archetypes, exact local roads, transactional worksites, real-world validation and cached persistence reads |
+| `pw_planner` | ✅ Implemented | Region planning, grammar v3, bounded ecological survey, 3 archetypes, exact local roads with a shared walkable height profile, transactional worksites, real-world validation and sharded persistence |
 | `pw_structures` | ✅ Complete | 10 registered structures, including fishery, sawmill and mine workshop; palette-aware placement, bounded terrain prep and rollback |
 | `pw_roads` | ✅ Implemented | Shared exact-width raster, persistence facade, canonical road cells, and the Gabriel-graph network joining settlement to settlement |
 | `pw_settlements` | ✅ Implemented | Four specialization definitions, scoring and normalized legacy/current settlement records |
@@ -173,9 +173,16 @@ as that before it was worth anything.
 
 The unit of population is **a bed standing in the world** — not a planned
 dwelling, which would put people inside buildings that failed to materialize,
-and not a lot, which would put them in barns. People move in when the village is
+and not a lot, which would put them in barns. People move in when the place is
 built, while its buildings are still loaded; the record makes that idempotent so
 walking past twice does not double it.
+
+"Place", not "settlement": region planning makes a village one time in five, and
+the other four are a single farmstead with a bed in it. Population was first
+routed through settlement records only, which left four fifths of the inhabited
+buildings in the world standing empty — and would have refused them anyway,
+since a lone farmstead has no settlement record to be found by. Both paths now
+go through the same `settle(id, bounds)`.
 
 Two failure modes that would have been silent:
 
@@ -187,7 +194,8 @@ Two failure modes that would have been silent:
 
 Verified in the world: six beds, six villagers, still six loaded in the village
 after a full server restart. A batch of eight fresh villages populated itself as
-it was built, two to five people each.
+it was built, two to five people each. A hamlet materialized on its own at
+(27105, 27320) reported one bed and one villager moved in.
 
 ## Village Generation System (grammar v3)
 
@@ -425,7 +433,9 @@ chasing on its own.
   scope for now
 - Towns and cities: the settlement types exist in `pw_settlements` but region
   planning never produces them, and a street longer than 96 nodes needs a wider
-  `emerge_village_area` than the emerge queue comfortably allows
+  `emerge_village_area` than the emerge queue comfortably allows. What the world
+  has today is farms and hamlets (40% each, and both place the same single
+  farmstead — they differ only in priority) and villages (20%, 3 to 12 lots)
 - Tunnels, and bridges over water wider than forty-eight nodes
 - Global route pathfinding over the settlement link network
 - Save migration between planner versions

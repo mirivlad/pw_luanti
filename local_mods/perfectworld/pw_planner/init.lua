@@ -3452,6 +3452,14 @@ local function materialize_single_structure(candidate)
 			end
 			perfectworld.planner.record_structure(record)
 			perfectworld.planner.mark_placed(sid)
+
+			-- A farmstead has a bed in it, and four candidates in five are a
+			-- farmstead rather than a village. Populating only through the
+			-- village pipeline left most of the inhabited buildings in the world
+			-- standing empty.
+			if perfectworld.population and perfectworld.population.populate_structure then
+				perfectworld.population.populate_structure(record)
+			end
 			return true, record
 		end
 		last_error = result and result.reason or tostring(result)

@@ -208,28 +208,28 @@ function population.capacity(bed_count)
     population.MAX_PER_SETTLEMENT)
 end
 
---- Move people into a settlement.
+--- Move people into anything that has beds in it.
 --
--- Returns `ok, result`. Idempotent by record: a settlement that has already
--- been given its people is left alone unless `opts.force` says otherwise, so
--- walking past a village twice does not double its population.
-function population.populate(settlement_id, opts)
+-- Takes bounds rather than a settlement, because most of the places people live
+-- in this world are not settlements. Region planning makes a village one time
+-- in five; the other four are a single farmstead, and a farmstead has a bed in
+-- it. Routing everything through a settlement record left four fifths of the
+-- inhabited buildings empty, and the lookup would have refused them anyway:
+-- a lone farmstead has no settlement record to find.
+--
+-- Returns `ok, result`. Idempotent by record: a place that has already been
+-- given its people is left alone unless `opts.force` says otherwise, so walking
+-- past a village twice does not double its population.
+function population.settle(id, bounds, opts)
   opts = opts or {}
   if not minetest.registered_entities[population.VILLAGER_ENTITY] then
     return false, {reason = "no_villager_entity"}
   end
-
-  local settlement = perfectworld.settlements
-    and perfectworld.settlements.get(settlement_id)
-  if not settlement then return false, {reason = "unknown_settlement"} end
-  if settlement.status == "failed" then
-    return false, {reason = "settlement_never_built"}
-  end
-  local bounds = settlement.bounds
   if type(bounds) ~= "table" or not bounds.min_x then
     return false, {reason = "no_bounds"}
   end
 
+  local settlement_id = id
   local record = population.get_record(settlement_id)
   if record and record.settled and not opts.force then
     return false, {reason = "already_settled", record = record}
@@ -278,6 +278,10 @@ function population.populate(settlement_id, opts)
   local result = {
     settlement_id = settlement_id,
     settled = true,
+    bounds = {
+      min_x = bounds.min_x, max_x = bounds.max_x,
+      min_z = bounds.min_z, max_z = bounds.max_z,
+    },
     beds = #beds,
     capacity = wanted,
     already_there = standing,
@@ -292,16 +296,52 @@ function population.populate(settlement_id, opts)
   return true, result
 end
 
+--- Move people into a planned settlement.
+function population.populate(settlement_id, opts)
+  local settlement = perfectworld.settlements
+    and perfectworld.settlements.get(settlement_id)
+  if not settlement then return false, {reason = "unknown_settlement"} end
+  if settlement.status == "failed" then
+    return false, {reason = "settlement_never_built"}
+  end
+  return population.settle(settlement_id, settlement.bounds, opts)
+end
+
+--- Move people into a single building that was placed on its own.
+--
+-- Farms and hamlets are one farmstead, not a settlement: they have no plan, no
+-- lots and no streets, so there is no settlement record to look them up by. The
+-- footprint is derived from the structure definition rather than stored,
+-- because the single-structure record keeps a position and a rotation and not a
+-- box.
+function population.populate_structure(record, opts)
+  if type(record) ~= "table" or not record.position then
+    return false, {reason = "no_structure_record"}
+  end
+  local def = perfectworld.structures and perfectworld.structures.get(record.structure_name)
+  if not def then return false, {reason = "unregistered_structure"} end
+
+  local minp, maxp = perfectworld.structures.get_footprint(
+    def, record.position, record.rotation or 0)
+  return population.settle(record.settlement_id or record.structure_id, {
+    min_x = minp.x, max_x = maxp.x,
+    min_z = minp.z, max_z = maxp.z,
+  }, opts)
+end
+
 --- What the record and the world each say about a settlement's people.
 function population.status(settlement_id)
   local settlement = perfectworld.settlements
     and perfectworld.settlements.get(settlement_id)
-  if not settlement then return nil end
   local record = population.get_record(settlement_id)
-  local bounds = settlement.bounds
+  -- A lone farmstead has people and no settlement record. Refusing to report on
+  -- it because it is not a settlement would hide four fifths of the inhabited
+  -- buildings in the world.
+  if not settlement and not record then return nil end
+  local bounds = settlement and settlement.bounds or (record and record.bounds)
   return {
     settlement_id = settlement_id,
-    status = settlement.status,
+    status = settlement and settlement.status or "structure",
     settled = (record and record.settled) or false,
     recorded_beds = (record and record.beds) or 0,
     recorded_spawned = (record and record.spawned) or 0,
