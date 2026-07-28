@@ -554,6 +554,97 @@ T.register_test("perfectworld", "ecology_moves_a_dry_fishing_center_to_measured_
   end
 end)
 
+T.register_test("perfectworld", "ecology_prefers_a_buildable_shoreline_span_over_the_nearest_pocket", function(ctx)
+  local api = ecology_api(ctx)
+  if not api then return end
+  local candidate = {id = "ecology_usable_shore_span", x = 512, z = 512, rx = 0, rz = 0}
+  local target = api.enumerate_sites(candidate)[2]
+  local terrain = {
+    sample_column = function(x, z)
+      local dx = x - target.x
+      local dz = z - target.z
+      if math.abs(dx) > 24 or math.abs(dz) > 24 then
+        return {y = 60, liquid = false, buildable = false, soil = false,
+          tree = false, stone = false}
+      end
+      if dx == 18 or (dx == 0 and dz == 0) then
+        return {y = 30, liquid = true, buildable = false, soil = false,
+          tree = false, stone = false}
+      end
+      if math.abs(dx) <= 6 and math.abs(dz) <= 6
+        and not (dx == -6 and dz == 0) then
+        return {y = 31, liquid = false, buildable = false, soil = false,
+          tree = false, stone = false}
+      end
+      return {y = 31, liquid = false, buildable = true, soil = false,
+        tree = false, stone = false}
+    end,
+  }
+  local selected = api.select_site(candidate, terrain, function()
+    return {
+      biome_name = "test:coastal",
+      biome_family = "coastal",
+      heat = 50,
+      humidity = 50,
+    }
+  end)
+
+  ctx.assert.not_nil(selected, "the survey contains a viable fishing shore")
+  if selected then
+    ctx.assert.equal(selected.specialization, "fishing",
+      "the usable shoreline must retain the fishing specialization")
+    ctx.assert.equal(selected.site.x, target.x + 12,
+      "the long buildable bank must beat the nearer one-cell shore pocket")
+    ctx.assert.equal(selected.site.z, target.z,
+      "equal shoreline spans must resolve to the closest measured water cell")
+  end
+end)
+
+T.register_test("perfectworld", "ecology_ranks_every_viable_site_specialization_pair", function(ctx)
+  local api = ecology_api(ctx)
+  if not api then return end
+  local candidate = {id = "ecology_all_viable_pairs", x = 512, z = 512, rx = 0, rz = 0}
+  local target = api.enumerate_sites(candidate)[2]
+  local terrain = {
+    sample_column = function(x, z)
+      local dx = x - target.x
+      local dz = z - target.z
+      if math.abs(dx) <= 24 and math.abs(dz) <= 24 then
+        local liquid = dx == 6
+        return {
+          y = liquid and 30 or 31,
+          liquid = liquid,
+          buildable = not liquid,
+          soil = not liquid,
+          tree = false,
+          stone = false,
+        }
+      end
+      return {y = 60, liquid = false, buildable = false, soil = false,
+        tree = false, stone = false}
+    end,
+  }
+  local _, _, ranked = api.select_site(candidate, terrain, function()
+    return {
+      biome_name = "test:coastal_farmland",
+      biome_family = "temperate",
+      heat = 50,
+      humidity = 50,
+    }
+  end)
+  local target_specializations = {}
+  for _, pair in ipairs(ranked or {}) do
+    if pair.survey_site.id == target.id then
+      target_specializations[pair.specialization] = true
+    end
+  end
+
+  ctx.assert.is_true(target_specializations.farming == true,
+    "the mixed shore must retain its viable farming pair")
+  ctx.assert.is_true(target_specializations.fishing == true,
+    "the same site must retain fishing as a deterministic fallback pair")
+end)
+
 local function village_candidate(id)
   return {
     id = id,
@@ -616,6 +707,129 @@ T.register_test("perfectworld", "ecology_plan_uses_selected_physical_site", func
   ctx.assert.equal(profile.selected_site.x, expected.site.x,
     "profile must persist selected site")
   ctx.assert.not_nil(profile.ecology, "profile must persist ecological evidence")
+end)
+
+T.register_test("perfectworld", "ecology_plan_retries_the_next_ranked_site_after_layout_failure", function(ctx)
+  local candidate = village_candidate("ecology_plan_site_fallback")
+  local definition = perfectworld.settlements.get_specialization("farming")
+  local function selection(id, x, score)
+    return {
+      site = {id = id, x = x, z = 320},
+      survey_site = {id = id, x = x, z = 320},
+      evidence = {
+        sample_count = 81,
+        buildable_ratio = 1,
+        soil_ratio = 1,
+        water_ratio = 0,
+        tree_ratio = 0,
+        exposed_stone_ratio = 0,
+        roughness = 0,
+        average_slope = 0,
+        elevation = 32,
+        biome_name = "test:temperate",
+        biome_family = "temperate",
+        heat = 50,
+        humidity = 0.5,
+      },
+      environment = {
+        biome_id = "test:temperate",
+        biome_name = "test:temperate",
+        biome_family = "temperate",
+        heat = 50,
+        humidity = 50,
+      },
+      specialization = "farming",
+      specialization_score = score,
+      specialization_scores = {
+        farming = {score = score, viable = true, reasons = {}},
+      },
+      definition = definition,
+      tie = 0,
+    }
+  end
+  local ranked = {
+    selection("best_ecology", 320, 1),
+    selection("usable_layout", 400, 0.9),
+  }
+  local terrain = {
+    kind = "synthetic",
+    sample_column = function()
+      return {y = 32, liquid = false, buildable = true, soil = true}
+    end,
+    surface_y = function() return 32 end,
+  }
+  local original_select = perfectworld.planner.ecology.select_site
+  local original_build = perfectworld.planner.build_village_plan
+  local built_centers = {}
+  local plan, profile
+  local ok, err = pcall(function()
+    perfectworld.planner.ecology.select_site = function()
+      return ranked[1], nil, ranked
+    end
+    perfectworld.planner.build_village_plan = function(selected_candidate)
+      built_centers[#built_centers + 1] = selected_candidate.x
+      return {
+        viable = selected_candidate.x == 400,
+        rejections = selected_candidate.x == 400 and {} or {no_surface = 1},
+        roads = {},
+        lots = {},
+        center = {x = selected_candidate.x, z = selected_candidate.z},
+      }
+    end
+    plan, profile = perfectworld.planner.plan_village(candidate, nil, terrain)
+  end)
+  perfectworld.planner.ecology.select_site = original_select
+  perfectworld.planner.build_village_plan = original_build
+  if not ok then error(err) end
+
+  ctx.assert.is_true(plan and plan.viable,
+    "a failed top ecological pair must not hide a viable ranked site")
+  ctx.assert.equal(plan and plan.center.x, 400,
+    "the plan must use the next ranked site's physical center")
+  ctx.assert.equal(profile and profile.selected_site.x, 400,
+    "the persisted profile must describe the site that actually fit")
+  ctx.assert.equal(table.concat(built_centers, ","), "320,400",
+    "ranked sites must be tried once and in deterministic score order")
+end)
+
+T.register_test("perfectworld", "village_road_trim_starts_from_the_nearest_usable_center_point", function(ctx)
+  local candidate = village_candidate("road_trim_usable_center")
+  local environment = {
+    biome_id = "test:shore",
+    biome_name = "test:shore",
+    biome_family = "temperate",
+    heat = 50,
+    humidity = 50,
+    specialization = "farming",
+    ecology = evidence({
+      soil_ratio = 0.9,
+      buildable_ratio = 0.9,
+    }),
+  }
+  local profile = perfectworld.planner.create_village_profile(
+    candidate, environment)
+  profile.archetype = "linear"
+  profile.road_character = {
+    main_length = 10,
+    branches = 0,
+    curve = 0,
+    crossing = false,
+    direction_index = 1,
+  }
+  local terrain = {
+    surface_y = function() return 32 end,
+    is_liquid = function(x) return x <= candidate.x end,
+    is_livable = function(x) return x > candidate.x end,
+  }
+  local plan = perfectworld.planner.build_village_plan(
+    candidate, profile, environment, terrain)
+
+  ctx.assert.equal(#plan.roads, 1,
+    "an unusable first midpoint must not hide the dry half of the road")
+  for _, point in ipairs(plan.roads[1] and plan.roads[1].points or {}) do
+    ctx.assert.is_true(point.x > candidate.x,
+      "the retained road must start on the nearest usable side")
+  end
 end)
 
 T.register_test("perfectworld", "ecology_plan_rejects_a_region_without_viable_site", function(ctx)

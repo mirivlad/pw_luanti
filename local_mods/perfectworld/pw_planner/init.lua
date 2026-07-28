@@ -943,14 +943,6 @@ local function build_road_network(seed_key, center, profile, terrain)
   local MAX_STEP = 3
   local function trim(points)
     if #points < 2 then return points end
-    -- Start from the point nearest the settlement centre: that is the part of
-    -- the street the village is actually built around.
-    local anchor, best = 1, math.huge
-    for i, pt in ipairs(points) do
-      local dx, dz = pt.x - cx, pt.z - cz
-      local d = dx * dx + dz * dz
-      if d < best then best, anchor = d, i end
-    end
 
     local function usable(pt, previous_y)
       local y = terrain.surface_y(pt.x, pt.z)
@@ -960,8 +952,21 @@ local function build_road_network(seed_key, center, profile, terrain)
       return y
     end
 
-    local anchor_y = usable(points[anchor])
-    if not anchor_y then return {} end
+    -- Start from the nearest usable point to the settlement centre. Even
+    -- length streets have no exact midpoint; if the first of the two equally
+    -- near points is water, the dry half must remain available.
+    local anchor, anchor_y, best = nil, nil, math.huge
+    for i, pt in ipairs(points) do
+      local y = usable(pt)
+      if y then
+        local dx, dz = pt.x - cx, pt.z - cz
+        local d = dx * dx + dz * dz
+        if d < best then
+          best, anchor, anchor_y = d, i, y
+        end
+      end
+    end
+    if not anchor then return {} end
 
     local first, last = anchor, anchor
     local previous_y = anchor_y
@@ -1593,8 +1598,8 @@ function perfectworld.planner.plan_village(candidate, env_override, terrain)
     return environment
   end
 
-  local selection, selection_error = perfectworld.planner.ecology.select_site(
-    candidate, terrain, environment_at)
+  local selection, selection_error, ranked_selections =
+    perfectworld.planner.ecology.select_site(candidate, terrain, environment_at)
   if not selection then
     local environment = environment_at(
       {x = candidate.x, z = candidate.z},
@@ -1646,73 +1651,82 @@ function perfectworld.planner.plan_village(candidate, env_override, terrain)
     return plan, profile, environment
   end
 
-  local selected_candidate = perfectworld.core.deep_copy(candidate)
-  selected_candidate.x = selection.site.x
-  selected_candidate.z = selection.site.z
-  local environment = selection.environment
-  local ecology_record = perfectworld.core.deep_copy(selection.evidence)
-  ecology_record.specialization_scores =
-    perfectworld.core.deep_copy(selection.specialization_scores)
-  environment.elevation = selection.evidence.elevation
-  environment.roughness = selection.evidence.roughness
-  environment.average_slope = selection.evidence.average_slope
-  environment.water_proximity = selection.evidence.shore_distance or 999
-  environment.vegetation_density =
-    math.floor((selection.evidence.tree_ratio or 0) * 100 + 0.5)
-  environment.available_material_profile = environment.biome_family or "temperate"
-  environment.specialization = selection.specialization
-  environment.specialization_score = selection.specialization_score
-  environment.ecology = ecology_record
+  local function plan_selection(current)
+    local selected_candidate = perfectworld.core.deep_copy(candidate)
+    selected_candidate.x = current.site.x
+    selected_candidate.z = current.site.z
+    local environment = perfectworld.core.deep_copy(current.environment)
+    local ecology_record = perfectworld.core.deep_copy(current.evidence)
+    ecology_record.specialization_scores =
+      perfectworld.core.deep_copy(current.specialization_scores)
+    environment.elevation = current.evidence.elevation
+    environment.roughness = current.evidence.roughness
+    environment.average_slope = current.evidence.average_slope
+    environment.water_proximity = current.evidence.shore_distance or 999
+    environment.vegetation_density =
+      math.floor((current.evidence.tree_ratio or 0) * 100 + 0.5)
+    environment.available_material_profile = environment.biome_family or "temperate"
+    environment.specialization = current.specialization
+    environment.specialization_score = current.specialization_score
+    environment.ecology = ecology_record
 
-  local profile = perfectworld.planner.create_village_profile(
-    selected_candidate, environment)
-  profile.regional_anchor = {x = candidate.x, z = candidate.z}
-  profile.selected_site = {
-    x = selection.site.x,
-    y = terrain.surface_y(selection.site.x, selection.site.z) or 0,
-    z = selection.site.z,
-  }
-  profile.specialization = selection.specialization
-  profile.specialization_score = selection.specialization_score
-  profile.specialization_definition =
-    perfectworld.core.deep_copy(selection.definition)
-  profile.ecology = ecology_record
+    local profile = perfectworld.planner.create_village_profile(
+      selected_candidate, environment)
+    profile.regional_anchor = {x = candidate.x, z = candidate.z}
+    profile.selected_site = {
+      x = current.site.x,
+      y = terrain.surface_y(current.site.x, current.site.z) or 0,
+      z = current.site.z,
+    }
+    profile.specialization = current.specialization
+    profile.specialization_score = current.specialization_score
+    profile.specialization_definition =
+      perfectworld.core.deep_copy(current.definition)
+    profile.ecology = ecology_record
 
-  local plan = perfectworld.planner.build_village_plan(
-    selected_candidate, profile, environment, terrain)
-  plan.settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION
-  plan.regional_anchor = perfectworld.core.deep_copy(profile.regional_anchor)
-  plan.selected_site = perfectworld.core.deep_copy(profile.selected_site)
-  plan.specialization = profile.specialization
-  plan.specialization_score = profile.specialization_score
-  plan.ecology = perfectworld.core.deep_copy(profile.ecology)
-
-  -- Documented fallback: the archetype is chosen from the environment profile
-  -- before any lot is tested against the ground. When a flat archetype turns
-  -- out not to fit, retry once as hillside, which terraces into the slope and
-  -- routes its street along the contour. Same seed key, so this is still fully
-  -- deterministic.
-  if not plan.viable
-    and profile.archetype ~= "hillside"
-    and (plan.rejections.no_surface or 0) == 0 then
-    local fallback = perfectworld.core.deep_copy(profile)
-    fallback.archetype = "hillside"
-    fallback.archetype_fallback_from = profile.archetype
-    local retry = perfectworld.planner.build_village_plan(
-      selected_candidate, fallback, environment, terrain)
-    if retry.viable then
-      retry.archetype_fallback_from = profile.archetype
-      retry.settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION
-      retry.regional_anchor = perfectworld.core.deep_copy(profile.regional_anchor)
-      retry.selected_site = perfectworld.core.deep_copy(profile.selected_site)
-      retry.specialization = profile.specialization
-      retry.specialization_score = profile.specialization_score
-      retry.ecology = perfectworld.core.deep_copy(profile.ecology)
-      return retry, fallback, environment
+    local function annotate(plan)
+      plan.settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION
+      plan.regional_anchor = perfectworld.core.deep_copy(profile.regional_anchor)
+      plan.selected_site = perfectworld.core.deep_copy(profile.selected_site)
+      plan.specialization = profile.specialization
+      plan.specialization_score = profile.specialization_score
+      plan.ecology = perfectworld.core.deep_copy(profile.ecology)
+      return plan
     end
+
+    local plan = annotate(perfectworld.planner.build_village_plan(
+      selected_candidate, profile, environment, terrain))
+
+    -- The archetype is chosen before lots meet the exact terrain. Preserve the
+    -- documented hillside retry for each bounded ecological site.
+    if not plan.viable
+      and profile.archetype ~= "hillside"
+      and (plan.rejections.no_surface or 0) == 0 then
+      local fallback = perfectworld.core.deep_copy(profile)
+      fallback.archetype = "hillside"
+      fallback.archetype_fallback_from = profile.archetype
+      local retry = perfectworld.planner.build_village_plan(
+        selected_candidate, fallback, environment, terrain)
+      if retry.viable then
+        retry.archetype_fallback_from = profile.archetype
+        profile = fallback
+        plan = annotate(retry)
+      end
+    end
+
+    return plan, profile, environment
   end
 
-  return plan, profile, environment
+  local first_plan, first_profile, first_environment
+  for _, current in ipairs(ranked_selections or {selection}) do
+    local plan, profile, environment = plan_selection(current)
+    if not first_plan then
+      first_plan, first_profile, first_environment = plan, profile, environment
+    end
+    if plan.viable then return plan, profile, environment end
+  end
+
+  return first_plan, first_profile, first_environment
 end
 
 --- Emerge (generate if needed) the map area a village plan will inspect.

@@ -7,6 +7,7 @@ local deep_copy = perfectworld.core.deep_copy
 local SITE_RADIUS = 40
 local SURVEY_RADIUS = 24
 local SURVEY_STEP = 6
+local MAX_SHORE_RELIEF = 3
 local OFFSETS = {
   {x = 40, z = 0},
   {x = 28, z = 28},
@@ -66,6 +67,34 @@ local function distance(a, b)
   return math.sqrt(dx * dx + dz * dz)
 end
 
+local function sign(value)
+  if value == 0 then return 0 end
+  return value > 0 and 1 or -1
+end
+
+local function shoreline_span(column_by_key, land, water)
+  local water_dx = sign(water.x - land.x)
+  local water_dz = sign(water.z - land.z)
+  local tangent_x = -water_dz * SURVEY_STEP
+  local tangent_z = water_dx * SURVEY_STEP
+  local span = 1
+
+  for _, direction in ipairs({-1, 1}) do
+    for step = 1, math.floor(SURVEY_RADIUS * 2 / SURVEY_STEP) do
+      local x = land.x + tangent_x * step * direction
+      local z = land.z + tangent_z * step * direction
+      local column = column_by_key[x .. ":" .. z]
+      if not column or not column.buildable or column.liquid or not column.y
+        or math.abs(column.y - land.y) > MAX_SHORE_RELIEF then
+        break
+      end
+      span = span + 1
+    end
+  end
+
+  return span
+end
+
 function ecology.survey_site(site, terrain, environment)
   local columns = {}
   local column_by_key = {}
@@ -102,27 +131,41 @@ function ecology.survey_site(site, terrain, environment)
   local shore_anchor
   local shore_land_anchor
   local shore_distance
+  local shore_buildable_span
   local stone_anchor
   local stone_distance
   for _, column in ipairs(columns) do
     if column.liquid then
-      local closest_land
-      local closest_land_distance
       for _, land in ipairs(columns) do
-        if land.buildable then
+        if land.buildable and land.y then
           local apart = distance(column, land)
-          if apart <= SURVEY_STEP * math.sqrt(2) + 0.01
-            and (not closest_land_distance or apart < closest_land_distance) then
-            closest_land = land
-            closest_land_distance = apart
+          if apart <= SURVEY_STEP * math.sqrt(2) + 0.01 then
+            local from_center = distance(site, column)
+            local span = shoreline_span(column_by_key, land, column)
+            local reachable = from_center <= SURVEY_RADIUS + SURVEY_STEP
+            local current_reachable = shore_distance
+              and shore_distance <= SURVEY_RADIUS + SURVEY_STEP
+            local better = shore_buildable_span == nil
+              or (reachable and not current_reachable)
+              or (reachable == current_reachable and span > shore_buildable_span)
+              or (reachable == current_reachable and span == shore_buildable_span
+                and from_center < shore_distance)
+              or (reachable == current_reachable and span == shore_buildable_span
+                and from_center == shore_distance
+                and (column.x < shore_anchor.x
+                  or (column.x == shore_anchor.x and column.z < shore_anchor.z)
+                  or (column.x == shore_anchor.x and column.z == shore_anchor.z
+                    and (land.x < shore_land_anchor.x
+                      or (land.x == shore_land_anchor.x
+                        and land.z < shore_land_anchor.z)))))
+            if better then
+              shore_distance = from_center
+              shore_buildable_span = span
+              shore_anchor = {x = column.x, y = column.y, z = column.z}
+              shore_land_anchor = {x = land.x, y = land.y, z = land.z}
+            end
           end
         end
-      end
-      local from_center = distance(site, column)
-      if closest_land and (not shore_distance or from_center < shore_distance) then
-        shore_distance = from_center
-        shore_anchor = {x = column.x, y = column.y, z = column.z}
-        shore_land_anchor = {x = closest_land.x, y = closest_land.y, z = closest_land.z}
       end
     end
     if column.stone then
@@ -183,6 +226,7 @@ function ecology.survey_site(site, terrain, environment)
     average_slope = local_slope,
     elevation_range = minimum_y and maximum_y and maximum_y - minimum_y or 0,
     shore_distance = shore_distance,
+    shore_buildable_span = shore_buildable_span,
     shore_anchor = shore_anchor,
     shore_land_anchor = shore_land_anchor,
     shore_direction = direction,
@@ -244,7 +288,6 @@ function ecology.select_site(candidate, terrain, environment_provider)
           definition = item.definition,
           tie = choice.unit(key, "ecology:pair:" .. site.id .. ":" .. item.id),
         }
-        break
       end
     end
   end
@@ -258,8 +301,10 @@ function ecology.select_site(candidate, terrain, environment_provider)
     return a.specialization < b.specialization
   end)
 
-  if not pairs[1] then return nil, "no_suitable_ecological_site" end
-  return pairs[1]
+  if not pairs[1] then
+    return nil, "no_suitable_ecological_site", pairs
+  end
+  return pairs[1], nil, pairs
 end
 
 return ecology
