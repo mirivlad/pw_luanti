@@ -1,9 +1,28 @@
 # Project Status
 
 **Date:** 2026-07-28
-**Test baseline:** 329 total | 327 PASS | 2 FAIL | 0 SKIP | 0 ERROR
-(168 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
+**Test baseline:** 332 total | 329 PASS | 3 FAIL | 0 SKIP | 0 ERROR
+(171 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
 62 in `pw_player_bot`, 6 in `smoke`)
+
+Two of the three failures are the long-standing `external_transport`
+configuration contradiction. The third is new and is **not** a code regression:
+
+`pw_player_bot.brain_holds_a_fresh_intent_instead_of_dithering` asserts that the
+brain reuses an intent for at least four of five ticks. The hold breaks on any of
+three conditions, and the one that fires here is `stuck_ticks >= 2`: nothing
+executes the intent during a test, so the bot never moves, and after two ticks
+the brain correctly concludes its plan is not working and re-decides. Whether
+that happens depends on which goal was chosen, which depends on what the bot can
+see — so the test's result is a function of where the test player is standing
+and what the development world looks like around it.
+
+Established rather than assumed: the failure persists with the newest test
+removed, with the player moved out of the settlement a diagnostic had parked it
+in, and with the player moved onto flat artificial ground. It began after this
+world had an obstacle course built and removed at several heights and its
+villages rebuilt. The test is environment-sensitive by construction; a bot that
+holds a plan it can see is failing would be the actual defect.
 
 Measured on `master` after the catalogue was wired into the planner.
 

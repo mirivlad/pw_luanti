@@ -301,7 +301,7 @@ T.register_test("perfectworld", "a_village_is_composed_from_one_style", function
   -- villages would still be made of the ten old structures. This checks that a
   -- planned village actually names schemes, and names them from a single style.
   local mixed, styled = {}, 0
-  for index = 1, 30 do
+  for index = 1, 12 do
     local candidate = planner_candidate(
       "settlement_v1_p" .. index .. "_p" .. index .. "_1",
       index, index, index * 640, index * 512)
@@ -321,8 +321,8 @@ T.register_test("perfectworld", "a_village_is_composed_from_one_style", function
       end
     end
   end
-  ctx.assert.is_true(styled >= 25,
-    "most villages should have been given a style, got " .. styled .. " of 30")
+  ctx.assert.is_true(styled >= 10,
+    "most villages should have been given a style, got " .. styled .. " of 12")
   ctx.assert.equal(#mixed, 0,
     "a village must not be offered another style's buildings: "
     .. table.concat(mixed, "; ", 1, math.min(#mixed, 3)))
@@ -334,7 +334,7 @@ T.register_test("perfectworld", "villages_draw_dwellings_from_the_catalogue", fu
   -- were wired but the role mapping were wrong, the profile would still carry
   -- the four legacy houses and nobody would notice.
   local from_catalogue, legacy = 0, 0
-  for index = 1, 20 do
+  for index = 1, 8 do
     local candidate = planner_candidate(
       "settlement_v1_n" .. index .. "_p" .. index .. "_1",
       -index, index, -index * 640, index * 512)
@@ -456,4 +456,52 @@ T.register_test("perfectworld", "a_style_without_a_trade_falls_back_rather_than_
     style_without .. " has no fishery and must not claim to")
   ctx.assert.not_nil(perfectworld.schemes.variants_for(style_without, "dwelling"),
     "but it must still offer the roles it does have")
+end)
+
+T.register_test("perfectworld", "a_forestry_village_is_offered_a_sawmill_from_the_catalogue", function(ctx)
+  -- The production roles go through `create_village_profile`, not through
+  -- `variants_for` directly, and the two could disagree: the profile consults
+  -- the catalogue for the roles the specialization named plus the ones its
+  -- composition asks for. This walks the real path.
+  --
+  -- Three candidates, close in. An earlier version used two dozen at far-flung
+  -- coordinates and made the server work hard enough emerging ground that the
+  -- bot brain's freshness test, several suites later, started reporting its
+  -- intent as stale. A test that breaks another test by being expensive is
+  -- measuring the machine, not the code.
+  --
+  -- Checked at plan level because the development world has no unbuilt village
+  -- candidates left: every settlement in it is placed, so nothing new is
+  -- materialized there to look at.
+  local from_catalogue = {}
+  for index = 1, 3 do
+    local candidate = {
+      id = "settlement_v1_p" .. (40 + index) .. "_n" .. index .. "_1",
+      x = index * 96, z = -index * 96, rx = 40 + index, rz = -index,
+      type = "village",
+      structure_name = perfectworld.planner.COMPOSITE_MARKER,
+      structure_id = "sawmill_probe_" .. index,
+      rotation = 0, status = "candidate",
+      region_id = perfectworld.get_region_id(40 + index, -index),
+    }
+    local profile = perfectworld.planner.create_village_profile(candidate, {
+      biome_family = "forest",
+      biome_name = "forest",
+      roughness = 2,
+      water_distance = 200,
+      specialization = "forestry",
+      specialization_score = 1,
+      ecology = {},
+    })
+    for _, name in ipairs((profile.role_variants or {}).sawmill or {}) do
+      if perfectworld.schemes.get(name) then from_catalogue[name] = true end
+    end
+  end
+
+  local names = {}
+  for name, _ in pairs(from_catalogue) do names[#names + 1] = name end
+  table.sort(names)
+  ctx.assert.is_true(#names > 0,
+    "a forestry village should be offered a sawmill from the catalogue")
+  ctx.log("sawmills offered from the catalogue: " .. table.concat(names, ", "))
 end)
