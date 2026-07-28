@@ -125,7 +125,7 @@ register(scheme("jp_kura_storehouse", {
 
 register(scheme("jp_workshop", {
   title = "Workshop",
-  roles = {"workshop", "production"},
+  roles = {"workshop", "production", "sawmill"},
   footprint = {w = 7, d = 7},
   wall_height = 3,
   door = {offset = 0, wide = true},

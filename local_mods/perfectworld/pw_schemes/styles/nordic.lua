@@ -104,7 +104,7 @@ register(scheme("nord_stave_house", {
 
 register(scheme("nord_boathouse", {
   title = "Boathouse",
-  roles = {"workshop", "production", "storage"},
+  roles = {"workshop", "production", "storage", "fishery"},
   footprint = {w = 7, d = 11},
   wall_height = 4,
   door = {offset = 0, wide = true},
@@ -136,7 +136,7 @@ register(scheme("nord_storehouse", {
 
 register(scheme("nord_forge", {
   title = "Forge",
-  roles = {"workshop", "production"},
+  roles = {"workshop", "production", "mine_workshop"},
   footprint = {w = 7, d = 7},
   wall_height = 4,
   door = {offset = 0, wide = true},

@@ -160,15 +160,27 @@ end
 
 --- Which schemes of a style can fill a planner role.
 --
--- The planner's role names and the schemes' role names are not the same
--- vocabulary and should not be forced to be: `central` means the well at the
--- middle of a village, and `fishery` means a building that carries a worksite
--- contract. Only the roles that genuinely correspond are mapped, and anything
--- unmapped keeps the structure the specialization already named.
+-- The two vocabularies are not the same and should not be forced to be.
+-- `central` is the well at the middle of a village, and nothing in the
+-- catalogue is a well, so it stays where it is.
+--
+-- The production roles were held back at first on the assumption that
+-- `pw_fishery_v1` and its siblings carried a worksite contract. They do not:
+-- the worksite anchors to whichever *lot* holds the production role, using its
+-- centre and footprint, and never looks at what was built there. So a scheme
+-- can fill the role, provided it is honestly a building of that trade — which
+-- is why only fish houses and smokehouses claim `fishery`, and only buildings
+-- with a forge or a kiln at the heart of them claim `mine_workshop`.
+--
+-- A style that offers nothing for a role falls through to the structure the
+-- specialization named, so a gap is a plain building rather than a missing one.
 schemes.PLANNER_ROLES = {
   dwelling = "dwelling",
   storage = "storage",
   barn = "barn",
+  fishery = "fishery",
+  sawmill = "sawmill",
+  mine_workshop = "mine_workshop",
 }
 
 --- The variant list for a role in a given style, or nil to leave it alone.

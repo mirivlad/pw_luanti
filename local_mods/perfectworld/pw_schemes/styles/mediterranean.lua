@@ -109,7 +109,7 @@ register(scheme("med_press_house", {
 
 register(scheme("med_kiln", {
   title = "Kiln",
-  roles = {"workshop", "production"},
+  roles = {"workshop", "production", "mine_workshop"},
   footprint = {w = 5, d = 5},
   wall_height = 5,
   door = {offset = 0},

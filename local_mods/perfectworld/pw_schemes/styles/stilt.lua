@@ -96,7 +96,7 @@ register(scheme("stilt_high_house", {
 
 register(scheme("stilt_fish_house", {
   title = "Fish house",
-  roles = {"workshop", "production"},
+  roles = {"workshop", "production", "fishery"},
   footprint = {w = 7, d = 9},
   wall_height = 3,
   door = {offset = 0, wide = true},
@@ -105,7 +105,7 @@ register(scheme("stilt_fish_house", {
 
 register(scheme("stilt_smokehouse", {
   title = "Smokehouse",
-  roles = {"workshop", "production"},
+  roles = {"workshop", "production", "fishery"},
   footprint = {w = 5, d = 5},
   wall_height = 4,
   windows = {rows = 0},

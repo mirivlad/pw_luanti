@@ -107,7 +107,7 @@ register(scheme("vern_granary", {
 
 register(scheme("vern_workshop", {
   title = "Workshop",
-  roles = {"workshop", "production"},
+  roles = {"workshop", "production", "sawmill"},
   footprint = {w = 7, d = 7},
   wall_height = 4,
   door = {offset = 0, wide = true},
@@ -116,7 +116,7 @@ register(scheme("vern_workshop", {
 
 register(scheme("vern_smithy", {
   title = "Smithy",
-  roles = {"workshop", "production"},
+  roles = {"workshop", "production", "mine_workshop"},
   footprint = {w = 5, d = 7},
   wall_height = 4,
   door = {offset = 0, wide = true},

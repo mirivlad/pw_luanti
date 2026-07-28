@@ -400,3 +400,60 @@ T.register_test("perfectworld", "every_biome_family_builds_beyond_the_fallback",
     "these families can only ever build the fallback style: "
     .. table.concat(bare, ", "))
 end)
+
+T.register_test("perfectworld", "production_roles_are_filled_by_buildings_of_that_trade", function(ctx)
+  -- The worksite anchors to the lot holding the production role and never looks
+  -- at what was built there, so any scheme *can* fill the role. That makes it
+  -- worth checking that the ones which claim a trade are plausibly of it: a
+  -- fishery that turns out to be a bakehouse passes every geometric test and
+  -- still reads as nonsense.
+  local expectations = {
+    fishery = {"barrel", "hearth", "workbench"},
+    mine_workshop = {"anvil", "hearth"},
+    sawmill = {"workbench"},
+  }
+  local wrong = {}
+  for role, wanted in pairs(expectations) do
+    local claimed = 0
+    for _, style in ipairs(perfectworld.schemes.list_styles()) do
+      for _, id in ipairs(perfectworld.schemes.for_role(style, role)) do
+        claimed = claimed + 1
+        local scheme = perfectworld.schemes.get(id)
+        local has = {}
+        for _, fixture in ipairs(scheme.interior or {}) do has[fixture] = true end
+        local matched = false
+        for _, fixture in ipairs(wanted) do
+          if has[fixture] then matched = true break end
+        end
+        if not matched then
+          wrong[#wrong + 1] = id .. " claims " .. role .. " with no "
+            .. table.concat(wanted, "/")
+        end
+      end
+    end
+    ctx.assert.is_true(claimed > 0, "no scheme claims the " .. role .. " role")
+  end
+  ctx.assert.equal(#wrong, 0, table.concat(wrong, "; ", 1, math.min(#wrong, 3)))
+end)
+
+T.register_test("perfectworld", "a_style_without_a_trade_falls_back_rather_than_failing", function(ctx)
+  -- Not every style has a fish house, and it must not be forced to invent one.
+  -- The contract is that `variants_for` returns nil for a role the style cannot
+  -- fill, which leaves the specialization's own structure in place — a plain
+  -- building rather than a missing one.
+  local style_without = nil
+  for _, style in ipairs(perfectworld.schemes.list_styles()) do
+    if #perfectworld.schemes.for_role(style, "fishery") == 0 then
+      style_without = style
+      break
+    end
+  end
+  if not style_without then
+    ctx.skip("every style now offers a fishery; nothing to fall back from")
+    return
+  end
+  ctx.assert.equal(perfectworld.schemes.variants_for(style_without, "fishery"), nil,
+    style_without .. " has no fishery and must not claim to")
+  ctx.assert.not_nil(perfectworld.schemes.variants_for(style_without, "dwelling"),
+    "but it must still offer the roles it does have")
+end)
