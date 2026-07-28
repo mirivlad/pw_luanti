@@ -161,8 +161,14 @@ class InteractionController:
         # an index. What the crosshair is on is a second, independent look at
         # the same question, and it is exactly where the click will land.
         crosshair = self._target_under_crosshair()
-        node = (crosshair.get("target") or {}).get("node") or {}
-        crosshair_position = node.get("position") or {}
+        target_document = (crosshair.get("target") or {})
+        node = target_document.get("node") or {}
+        # Same trap as in the aim check: the hit position is a field of the
+        # target, not of the node nested in it. Reading it from the node dropped
+        # the crosshair's contribution every time, which left a trapdoor with
+        # nothing recognisable under the crosshair and a gate without the
+        # open/closed tag that says whether the click worked.
+        crosshair_position = target_document.get("position") or {}
         if crosshair_position:
             here = (round(float(crosshair_position.get("x", 0))),
                     round(float(crosshair_position.get("y", 0))),
@@ -286,7 +292,9 @@ class InteractionController:
                 {**details, "diagnosis": "already_open"})
 
         opened = "door_open" in after["tags"] or "gate_open" in after["tags"]
-        closed_before = "door_closed" in before["tags"] or "gate_closed" in before["tags"]
+        closed_before = ("door_closed" in before["tags"]
+                         or "gate_closed" in before["tags"]
+                         or "interactable" in before["tags"])
         if opened and closed_before:
             return InteractionOutcome(
                 "reached", True, "the door opened", {**details, "diagnosis": "door_opened"})
@@ -304,6 +312,19 @@ class InteractionController:
                 {**details, "diagnosis": "node_changed"})
 
         if not after["tags"] and not after["node_name"]:
+            # A thing that was standing closed across the line of sight, and
+            # afterwards is not there to be seen, has moved out of the way. That
+            # is what an opened fence gate looks like from here: the closed leaf
+            # blocked the ray, the open one does not, and the sweep behind it
+            # reports the wall instead. It is not an assumption from silence —
+            # had the click done nothing, the closed leaf would still be there
+            # blocking the same ray and would still be reported.
+            if closed_before:
+                return InteractionOutcome(
+                    "reached", True,
+                    f"it opened: {before['node_name'] or 'the target'} no longer "
+                    "stands in the line of sight",
+                    {**details, "diagnosis": "opened_and_no_longer_blocks"})
             return InteractionOutcome(
                 "unknown", False, "the target is no longer observable after the click",
                 {**details, "diagnosis": "target_disappeared"})
@@ -362,9 +383,15 @@ class InteractionController:
         except (BridgeUnavailable, BridgeRefused):
             eye_y = float(target["y"])
 
-        # A door occupies its named node and the one above it. Sort the
-        # candidate heights by how close each is to level with the eyes.
-        levels = sorted((target["y"] + offset for offset in (1, 0, 2)),
+        # A door occupies its named node and the one above it, so the level
+        # above is worth trying. The fractional offsets are for thin nodes: a
+        # closed trapdoor is a plate filling a fraction of its node, and a ray
+        # aimed at the node's centre passes straight through it into the wall
+        # behind — which is exactly what the crosshair reported. Sort by how
+        # close each candidate is to level with the eyes, because that is the
+        # order a person would try.
+        offsets = (0, 1, -0.4, 0.4, 2)
+        levels = sorted((target["y"] + offset for offset in offsets),
                         key=lambda y: abs(y - eye_y))
         pitch_error = 0.0
         crosshair: dict = {}

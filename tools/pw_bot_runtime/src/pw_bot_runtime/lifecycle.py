@@ -336,6 +336,7 @@ class BotRun:
         to do with a real body.
         """
         all_ok = True
+        surprised: list[str] = []
         for step in steps:
             self.control.poll()
             if self.control.stopped:
@@ -369,6 +370,7 @@ class BotRun:
 
             if not passed:
                 self._screenshot(f"unexpected-{step.name}")
+                surprised.append(step.name)
                 if step.required:
                     all_ok = False
             elif not outcome.ok and self.config.artifacts.screenshots_on_failure:
@@ -382,8 +384,17 @@ class BotRun:
 
         self.status = "reached" if all_ok else "unknown"
         self.ok = all_ok
-        self.reason = ("every scenario step behaved as expected" if all_ok
-                       else "a scenario step did not behave as expected")
+        if not all_ok:
+            self.reason = "a scenario step did not behave as expected"
+        elif surprised:
+            # An optional step is allowed not to fail the run. It is not allowed
+            # to disappear from the verdict: "everything behaved as expected"
+            # printed above a step marked UNEXPECTED is a report that cannot be
+            # trusted about anything else either.
+            self.reason = ("every required step behaved as expected; "
+                           f"optional steps did not: {', '.join(surprised)}")
+        else:
+            self.reason = "every scenario step behaved as expected"
         return all_ok
 
     def prepare(self) -> None:

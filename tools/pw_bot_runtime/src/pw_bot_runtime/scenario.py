@@ -119,6 +119,21 @@ def course_scenario(landmarks: dict) -> list[ScenarioStep]:
     add("enter_room", walk("scn-6", landmarks["room_centre"], "into the room"),
         True, ("reached",), "through the doorway the click opened")
 
+    # A door is one shape of "click it and the world answers". A runtime that
+    # can only open doors has not been shown to interact — it has been shown to
+    # open doors. These two are optional so that a game without a fence gate or
+    # a hand-openable trapdoor does not fail the course for lacking one.
+    for index, (name, landmark, note) in enumerate((
+        ("open_gate", "gate", "a fence gate beside the room's centre"),
+        ("open_trapdoor", "trapdoor", "a trapdoor on the other side"),
+    )):
+        if landmarks.get(landmark):
+            add(name,
+                make_intent(f"scn-6{index}", "scenario_interact",
+                            [{"action": "interact", "position": landmarks[landmark]}],
+                            f"right-click the {landmark}"),
+                True, ("reached",), note, required=False)
+
     add("leave_room", walk("scn-7", landmarks["room_exit"], "out of the room"),
         True, ("reached",), "and out the other side")
 

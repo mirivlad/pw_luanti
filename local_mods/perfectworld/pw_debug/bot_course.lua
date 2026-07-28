@@ -97,6 +97,48 @@ end
 
 course.find_door = find_door
 
+--- Find one node of a group, deterministically.
+--
+-- Used for the room's other interactables. Same reasoning as `find_door`: ask
+-- the registry rather than hard-code a name, and sort so two runs on the same
+-- game pick the same node. `reject` filters out the ones that will not answer a
+-- bare hand — a redstone-only trapdoor looks exactly like a wooden one and does
+-- nothing when clicked.
+local function find_in_group(group, reject)
+  local found = {}
+  for name, def in pairs(minetest.registered_nodes) do
+    if (minetest.get_item_group(name, group) or 0) > 0 then
+      if not (reject and reject(name, def)) then found[#found + 1] = name end
+    end
+  end
+  table.sort(found)
+  return found[1]
+end
+
+local function find_gate()
+  return find_in_group("fence_gate", function(_, def)
+    return def.only_redstone_can_open or not def.on_rightclick
+  end)
+end
+
+local function find_trapdoor()
+  -- Group value 2 means the *open* variant; the course wants a closed one.
+  --
+  -- Metal is rejected for the same reason `find_door` rejects it, and copper
+  -- catches people out: alphabetically first, visually a plain trapdoor, and it
+  -- carries the `door_iron` group, so a bare hand clicks it and nothing
+  -- happens. The course would then be testing that the bot fails.
+  return find_in_group("trapdoor", function(name, def)
+    return minetest.get_item_group(name, "trapdoor") ~= 1
+      or (minetest.get_item_group(name, "door_iron") or 0) > 0
+      or def.only_redstone_can_open
+      or not def.on_rightclick
+  end)
+end
+
+course.find_gate = find_gate
+course.find_trapdoor = find_trapdoor
+
 --- Node names, resolved once against whatever game is loaded.
 local function palette()
   local function first(...)
@@ -286,6 +328,9 @@ function course.landmarks(origin)
     door = {x = origin.x, y = origin.y + 4, z = origin.z + 18},
     door_approach = {x = origin.x, y = origin.y + 4, z = origin.z + 17},
     room_centre = {x = origin.x, y = origin.y + 4, z = origin.z + 20},
+    -- Interactables inside the room, a hand's reach either side of its centre.
+    gate = {x = origin.x + 2, y = origin.y + 4, z = origin.z + 20},
+    trapdoor = {x = origin.x - 2, y = origin.y + 4, z = origin.z + 20},
     room_exit = {x = origin.x, y = origin.y + 4, z = origin.z + 23},
     too_high = {x = origin.x, y = origin.y + 4, z = origin.z + 27},
     low_beam = {x = origin.x, y = origin.y + 4, z = origin.z + 31},
@@ -366,6 +411,25 @@ function course.build(player_name)
     minetest.log("action", "[pw_debug] course door placed: " .. door_bottom)
   else
     minetest.log("warning", "[pw_debug] no door node is registered; the course has a hole")
+  end
+
+  -- The room's other interactables. A door is one shape of "click it and the
+  -- world answers"; a gate and a trapdoor are two more, and a runtime that can
+  -- only open doors has not been shown to interact, only to open doors. They
+  -- stand two nodes to either side of the room's centre — within a hand's reach
+  -- from where the bot stands, and clear of the line it walks.
+  for name, spot in pairs({
+    gate = {x = origin.x + 2, y = origin.y + 4, z = origin.z + 20},
+    trapdoor = {x = origin.x - 2, y = origin.y + 4, z = origin.z + 20},
+  }) do
+    local node_name = name == "gate" and find_gate() or find_trapdoor()
+    if node_name then
+      minetest.set_node(spot, {name = node_name, param2 = 0})
+      minetest.log("action", "[pw_debug] course " .. name .. " placed: " .. node_name)
+    else
+      minetest.log("warning", "[pw_debug] no " .. name .. " is registered; "
+        .. "the course cannot test it")
+    end
   end
 
   storage:set_string(STORAGE_KEY, minetest.write_json({
@@ -481,6 +545,7 @@ minetest.register_chatcommand("pw_bot_course", {
       end
       rows[#rows + 1] = "restored: " .. minetest.get_node(bottom).name
       return true, table.concat(rows, " | ")
+
     end
 
     if action == "remove" then
