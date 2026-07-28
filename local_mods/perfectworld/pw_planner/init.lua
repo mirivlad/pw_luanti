@@ -271,7 +271,13 @@ end
 
 function perfectworld.planner.save_road(road)
 	local data = read_json(ROADS_KEY)
-	data[road.id] = deep_copy(road)
+	local record = deep_copy(road)
+	if record.cells == nil
+		and perfectworld.roads
+		and perfectworld.roads.rasterize_record then
+		record.cells = perfectworld.roads.rasterize_record(record)
+	end
+	data[record.id] = record
 	write_json(ROADS_KEY, data)
 end
 
@@ -292,6 +298,12 @@ function perfectworld.planner.list_roads()
 	end
 	return out
 end
+
+perfectworld.roads.set_provider({
+	save = perfectworld.planner.save_road,
+	get = perfectworld.planner.get_road,
+	list = perfectworld.planner.list_roads,
+})
 
 -- === Cache Management ===
 
@@ -952,20 +964,9 @@ end
 local function road_cell_set(roads)
   local cells = {}
   for _, road in ipairs(roads) do
-    local half_w = math.floor((road.width or 2) / 2)
-    for i = 1, #road.points - 1 do
-      local p1, p2 = road.points[i], road.points[i + 1]
-      local steps = math.max(math.abs(p2.x - p1.x), math.abs(p2.z - p1.z), 1)
-      for s = 0, steps do
-        local t = s / steps
-        local rx = math.floor(p1.x + (p2.x - p1.x) * t + 0.5)
-        local rz = math.floor(p1.z + (p2.z - p1.z) * t + 0.5)
-        for ox = -half_w, half_w do
-          for oz = -half_w, half_w do
-            cells[(rx + ox) .. ":" .. (rz + oz)] = true
-          end
-        end
-      end
+    for key, cell in pairs(
+      perfectworld.roads.cell_set(road.points or {}, road.width or 2)) do
+      cells[key] = cell
     end
   end
   return cells
@@ -1447,10 +1448,9 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
     bounds.max_z = math.max(bounds.max_z, z)
   end
   for _, road in ipairs(roads) do
-    local half_w = math.floor((road.width or 2) / 2)
-    for _, pt in ipairs(road.points) do
-      extend(pt.x - half_w, pt.z - half_w)
-      extend(pt.x + half_w, pt.z + half_w)
+    for _, cell in ipairs(
+      perfectworld.roads.rasterize(road.points or {}, road.width or 2)) do
+      extend(cell.x, cell.z)
     end
   end
   for _, lot in ipairs(lots) do
@@ -2022,8 +2022,7 @@ local function place_road_strip(p1, p2, width, material_name)
   local dx, dz = p2.x - p1.x, p2.z - p1.z
   local length = math.sqrt(dx * dx + dz * dz)
   if length < 0.001 then return 0 end
-  local perp_x, perp_z = -dz / length, dx / length
-  local half_w = math.floor(width / 2)
+  local offsets = perfectworld.roads.cross_section(dx, dz, width)
   local steps = math.max(math.abs(dx), math.abs(dz), 1)
   local placed = 0
 
@@ -2046,9 +2045,9 @@ local function place_road_strip(p1, p2, width, material_name)
   for s = 0, steps do
     local cell = centre[s]
     if cell.y then
-      for w = -half_w, half_w do
-        local px = math.floor(cell.x + perp_x * w + 0.5)
-        local pz = math.floor(cell.z + perp_z * w + 0.5)
+      for _, offset in ipairs(offsets) do
+        local px = cell.x + offset.x
+        local pz = cell.z + offset.z
         local y = cell.y
         local existing = minetest.get_node({x = px, y = y, z = pz}).name
         if not perfectworld.compat.is_liquid_node(existing) then
@@ -2389,6 +2388,8 @@ local function materialize_village_plan(plan, profile, candidate)
       width = road.width,
       kind = road.kind,
       nodes_placed = nodes,
+      cells = perfectworld.roads.rasterize(
+        road.points or {}, road.width or 2),
     }
     perfectworld.planner.save_road(road_record)
     table.insert(placed_roads, road_record)
@@ -2436,6 +2437,7 @@ local function materialize_village_plan(plan, profile, candidate)
         width = 1,
         kind = "driveway",
       }
+      driveway.cells = perfectworld.roads.rasterize_record(driveway)
       perfectworld.planner.save_road(driveway)
       table.insert(placed_roads, driveway)
 
@@ -2863,24 +2865,11 @@ function perfectworld.planner.validate_settlement(settlement_id)
   local road_cells = {}
   local reachable_cells = {}
   for _, road in ipairs(roads) do
-    local half_w = math.floor((road.width or 2) / 2)
-    local points = road.path or {}
     local is_driveway = road.kind == "driveway"
-    for i = 1, #points - 1 do
-      local p1, p2 = points[i], points[i + 1]
-      local steps = math.max(math.abs(p2.x - p1.x), math.abs(p2.z - p1.z), 1)
-      for s = 0, steps do
-        local t = s / steps
-        local rx = math.floor(p1.x + (p2.x - p1.x) * t + 0.5)
-        local rz = math.floor(p1.z + (p2.z - p1.z) * t + 0.5)
-        for ox = -half_w, half_w do
-          for oz = -half_w, half_w do
-            local key = (rx + ox) .. ":" .. (rz + oz)
-            reachable_cells[key] = true
-            if not is_driveway then road_cells[key] = true end
-          end
-        end
-      end
+    for _, cell in ipairs(perfectworld.roads.rasterize_record(road)) do
+      local key = cell.x .. ":" .. cell.z
+      reachable_cells[key] = true
+      if not is_driveway then road_cells[key] = true end
     end
   end
 

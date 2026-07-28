@@ -24,6 +24,10 @@ local function structures_api()
   return perfectworld and perfectworld.structures
 end
 
+local function roads_api()
+  return perfectworld and perfectworld.roads
+end
+
 -- === Geometry helpers ===
 
 local function sorted_box(min, max)
@@ -163,9 +167,14 @@ end
 -- === PerfectWorld records ===
 
 local function road_records()
-  local api = planner()
-  if not api or not api.list_roads then return {} end
-  local ok, roads = pcall(api.list_roads)
+  local api = roads_api()
+  local list = api and api.list_routes
+  if not list then
+    api = planner()
+    list = api and api.list_roads
+  end
+  if not list then return {} end
+  local ok, roads = pcall(list)
   if not ok or type(roads) ~= "table" then return {} end
   return roads
 end
@@ -205,22 +214,20 @@ end
 --- Cells a road covers, honouring its width.
 local function road_cells(road)
   local cells = {}
-  local half = math.floor((road.width or 2) / 2)
-  local points = road_path(road)
-  for i = 1, #points do
-    local from = points[i]
-    local to = points[i + 1] or from
-    local steps = math.max(math.abs(to.x - from.x), math.abs(to.z - from.z), 1)
-    for step = 0, steps do
-      local t = step / steps
-      local px = math.floor(from.x + (to.x - from.x) * t + 0.5)
-      local pz = math.floor(from.z + (to.z - from.z) * t + 0.5)
-      for dx = -half, half do
-        for dz = -half, half do
-          cells[(px + dx) .. ":" .. (pz + dz)] = {x = px + dx, z = pz + dz}
-        end
+  local api = roads_api()
+  if api and api.rasterize_record then
+    local ok, raster = pcall(api.rasterize_record, road)
+    if ok and type(raster) == "table" then
+      for _, cell in ipairs(raster) do
+        cells[cell.x .. ":" .. cell.z] = {x = cell.x, z = cell.z}
       end
+      return cells
     end
+  end
+  -- When pw_roads is not installed, retain a bounded centreline-only fallback.
+  -- Width expansion belongs to the shared geometry module, never to the bridge.
+  for _, point in ipairs(road_path(road)) do
+    cells[point.x .. ":" .. point.z] = point
   end
   return cells
 end
@@ -382,8 +389,8 @@ function oracle.records_in_box(min, max)
 
   for _, road in ipairs(road_records()) do
     local touches = false
-    for _, point in ipairs(road_path(road)) do
-      if in_box_xz(point.x, point.z, min, max) then touches = true break end
+    for _, cell in pairs(road_cells(road)) do
+      if in_box_xz(cell.x, cell.z, min, max) then touches = true break end
     end
     if touches then
       roads[#roads + 1] = {
@@ -567,8 +574,8 @@ function oracle.get_road(player, session, bot, params, budget)
     if params.settlement_id and road.from_settlement == params.settlement_id then hit = true end
     if params.min and params.max then
       local min, max = sorted_box(params.min, params.max)
-      for _, point in ipairs(road_path(road)) do
-        if in_box_xz(point.x, point.z, min, max) then hit = true break end
+      for _, cell in pairs(road_cells(road)) do
+        if in_box_xz(cell.x, cell.z, min, max) then hit = true break end
       end
     end
     if hit then

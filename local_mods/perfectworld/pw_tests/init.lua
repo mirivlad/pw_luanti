@@ -18,6 +18,7 @@ local test_files = {
   "village",
   "village_diversity",
   "ecology",
+  "roads",
 }
 
 for _, file in ipairs(test_files) do
