@@ -360,6 +360,75 @@ T.register_test("perfectworld", "validator_rejects_complete_with_partial_materia
   perfectworld.planner._test_unmark_placed(c.id)
 end)
 
+T.register_test("perfectworld", "validator_checks_required_worksite_in_the_real_world", function(ctx)
+  local c = make_candidate("test_worksite_validation", 63, 63, 63000, 63000)
+  perfectworld.planner._test_clear_settlement(c.id)
+  perfectworld.planner._test_unmark_placed(c.id)
+  local pos = {x = c.x, y = 20, z = c.z}
+  if minetest.load_area then pcall(minetest.load_area, pos, pos) end
+  minetest.set_node(pos, {name = "air"})
+  local expected_name = perfectworld.compat.get_material("wall")
+  minetest.set_node(pos, {name = expected_name})
+  expected_name = minetest.get_node(pos).name
+  minetest.set_node(pos, {name = "air"})
+
+  perfectworld.planner.save_settlement_plan(c.id, {
+    plan = {
+      village_id = c.id,
+      lots = {},
+      roads = {},
+      bounds = {
+        min_x = pos.x - 1, max_x = pos.x + 1,
+        min_z = pos.z - 1, max_z = pos.z + 1,
+      },
+    },
+    profile = {},
+    settlement = {
+      settlement_id = c.id,
+      status = "complete",
+      lot_count = 1,
+      planned_lot_count = 1,
+      missing_required_roles = {},
+      errors = {},
+      exact_plan_fingerprint = 1,
+      structural_fingerprint = 1,
+      road_graph_fingerprint = 1,
+      structure_ids = {},
+      road_ids = {},
+      center_pos = pos,
+      bounds = {
+        min_x = pos.x - 1, max_x = pos.x + 1,
+        min_z = pos.z - 1, max_z = pos.z + 1,
+      },
+      required_worksite = "field",
+      worksite_ids = {"test_worksite_validation_field"},
+      worksites = {{
+        id = "test_worksite_validation_field",
+        kind = "field",
+        required = true,
+        status = "materialized",
+        bounds = {min = pos, max = pos},
+        footprint_cells = {{x = pos.x, z = pos.z}},
+        expected_nodes = {{position = pos, node_name = expected_name}},
+        node_count = 1,
+      }},
+    },
+  })
+  perfectworld.planner.mark_placed(c.id)
+
+  local missing = perfectworld.planner.validate_settlement(c.id)
+  ctx.assert.contains(missing.checks.worksites_present_in_world or "",
+    "FAIL", "stored worksite record cannot prove a physical node exists")
+
+  minetest.set_node(pos, {name = expected_name})
+  local present = perfectworld.planner.validate_settlement(c.id)
+  ctx.assert.equal(present.checks.worksites_present_in_world, "ok",
+    "validator must accept the expected physical worksite node")
+
+  perfectworld.planner._test_clear_settlement(c.id)
+  perfectworld.planner._test_unmark_placed(c.id)
+end)
+
 -- === Real-plan diversity over the sampled map ===
 
 T.register_test("perfectworld", "village_diversity_over_100_plans", function(ctx)

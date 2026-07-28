@@ -568,6 +568,8 @@ local world_terrain = make_world_terrain()
 perfectworld.planner._world_terrain = world_terrain
 perfectworld.planner.ecology = dofile(
   minetest.get_modpath("pw_planner") .. "/ecology.lua")
+perfectworld.planner.worksites = dofile(
+  minetest.get_modpath("pw_planner") .. "/worksites.lua")
 
 -- === Seed key ===
 -- Depends only on world seed, region, candidate identity and planner version,
@@ -2176,137 +2178,88 @@ local function build_door_approach(door, floor_y, road_point, material_name, pro
   carve_walkway({x = door.x, y = floor_y, z = door.z}, road_point, material_name, blocked)
 end
 
---- Dress the ground around a lot: crop plots, a fenced garden, an animal pen,
--- a work spot. An empty yard is what makes a settlement read as scenery
--- rather than as a place somebody lives in.
-local function build_yard(lot, profile, seed_key)
-  local palette = profile.material_palette
-  local fence = perfectworld.structures.palette_material(palette, "fence", "fence")
-  local gate = palette and palette.fence_gate
-  if gate and not minetest.registered_nodes[gate] then gate = nil end
-  local soil = perfectworld.compat.get_material("garden_soil", {required = false})
-  local crop = (palette and palette.crop) or perfectworld.compat.get_material("crop", {required = false})
-  if crop ~= "air" and not minetest.registered_nodes[crop] then
-    crop = perfectworld.compat.get_material("crop", {required = false})
-  end
-  local path = perfectworld.structures.palette_material(palette, "path", "road")
-
-  local label = "yard:" .. tostring(lot.structure_id)
-  local kinds = {"garden", "crops", "pen", "workspot", "flowers"}
-  if lot.role == "farm" then
-    kinds = {"crops", "pen", "crops", "garden"}
-  elseif lot.role == "central" then
-    kinds = {"flowers", "workspot"}
-  end
-  local kind = choice.pick(seed_key, label .. ":kind", kinds)
-
-  -- Put the yard on the far side of the building from the street.
-  local dir_x = lot.center.x - lot.road_point.x
-  local dir_z = lot.center.z - lot.road_point.z
-  local length = math.max(math.sqrt(dir_x * dir_x + dir_z * dir_z), 0.001)
-  dir_x, dir_z = dir_x / length, dir_z / length
-  local fp_w = math.max(lot.footprint_max.x - lot.footprint_min.x,
-    lot.footprint_max.z - lot.footprint_min.z)
-  local origin = {
-    x = math.floor(lot.center.x + dir_x * (fp_w / 2 + 4) + 0.5),
-    z = math.floor(lot.center.z + dir_z * (fp_w / 2 + 4) + 0.5),
+local function worksite_candidate_anchors(lot, seed_key)
+  if not lot then return {} end
+  local gap = 7
+  local offsets = {
+    {x = lot.footprint_max.x - lot.center.x + gap, z = 0},
+    {x = lot.footprint_min.x - lot.center.x - gap, z = 0},
+    {x = 0, z = lot.footprint_max.z - lot.center.z + gap},
+    {x = 0, z = lot.footprint_min.z - lot.center.z - gap},
   }
-
-  local radius = choice.int(seed_key, label .. ":radius", 2, 3)
-  local placed = 0
-
-  local function ground_at(x, z)
-    return paving_level(x, z)
+  local rotation = choice.index(
+    seed_key, "worksite:candidate_rotation", #offsets) - 1
+  local anchors = {}
+  for index = 1, #offsets do
+    local offset = offsets[((index + rotation - 1) % #offsets) + 1]
+    local x, z = lot.center.x + offset.x, lot.center.z + offset.z
+    local y = paving_level(x, z, lot.position and lot.position.y)
+    if y then anchors[#anchors + 1] = {x = x, y = y, z = z} end
   end
+  return anchors
+end
 
-  local function put(x, z, y, node_name)
-    if node_name == "air" or not node_name then return end
-    if minetest.get_node({x = x, y = y, z = z}).name == "ignore" then return end
-    minetest.set_node({x = x, y = y, z = z}, {name = node_name})
-    placed = placed + 1
+local function production_lot(plan, profile)
+  local production_role
+  for role, required in pairs(profile.required_role_counts or {}) do
+    if role ~= "dwelling" and (tonumber(required) or 0) > 0 then
+      production_role = role
+      break
+    end
   end
+  if not production_role then return nil end
+  for _, lot in ipairs(plan.lots or {}) do
+    if lot.role == production_role and lot.status == "materialized" then
+      return lot
+    end
+  end
+  return nil
+end
 
-  for dx = -radius, radius do
-    for dz = -radius, radius do
-      local x, z = origin.x + dx, origin.z + dz
-      local y = ground_at(x, z)
-      if y then
-        local edge = math.abs(dx) == radius or math.abs(dz) == radius
-        -- Never build a yard on top of the building or the street.
-        local inside_lot = x >= lot.footprint_min.x - 1 and x <= lot.footprint_max.x + 1
-          and z >= lot.footprint_min.z - 1 and z <= lot.footprint_max.z + 1
-        if not inside_lot and not perfectworld.compat.is_liquid_node(
-            minetest.get_node({x = x, y = y, z = z}).name) then
-          for above = 1, 2 do
-            local pos = {x = x, y = y + above, z = z}
-            local name = minetest.get_node(pos).name
-            local def = minetest.registered_nodes[name]
-            if name ~= "air" and name ~= "ignore" and def and def.buildable_to then
-              minetest.set_node(pos, {name = "air"})
-            end
-          end
-
-          if kind == "crops" then
-            if edge then
-              if fence ~= "air" then put(x, z, y + 1, fence) end
-            else
-              put(x, z, y, soil)
-              put(x, z, y + 1, crop)
-            end
-          elseif kind == "garden" then
-            if edge then
-              if fence ~= "air" then put(x, z, y + 1, fence) end
-            elseif (dx + dz) % 2 == 0 then
-              put(x, z, y, soil)
-              put(x, z, y + 1, crop)
-            else
-              put(x, z, y, path)
-            end
-          elseif kind == "pen" then
-            if edge and fence ~= "air" then
-              put(x, z, y + 1, fence)
-            end
-          elseif kind == "flowers" then
-            if (dx + dz) % 2 == 0 then
-              put(x, z, y + 1, choice.pick(seed_key,
-                label .. ":flower:" .. dx .. ":" .. dz,
-                {"mcl_flowers:poppy", "mcl_flowers:dandelion",
-                 "mcl_flowers:oxeye_daisy", "mcl_flowers:cornflower"}))
-            end
-          end
-        end
-      end
+local function place_required_worksite(plan, profile, candidate, roads)
+  local kind = profile.required_worksite
+  if not kind then return false, {reason = "missing_required_worksite_kind"} end
+  local lot = production_lot(plan, profile)
+  local road_cells = {}
+  for _, road in ipairs(roads or {}) do
+    for _, cell in ipairs(perfectworld.roads.rasterize_record(road)) do
+      road_cells[cell.x .. ":" .. cell.z] = cell
+    end
+  end
+  local footprints = {}
+  for _, planned_lot in ipairs(plan.lots or {}) do
+    if planned_lot.status == "materialized" then
+      footprints[#footprints + 1] = {
+        min = deep_copy(planned_lot.footprint_min),
+        max = deep_copy(planned_lot.footprint_max),
+      }
     end
   end
 
-  -- A gate in the fence, facing the building, so the yard is enterable.
-  if (kind == "crops" or kind == "garden" or kind == "pen") and gate then
-    local gx = math.floor(origin.x - dir_x * radius + 0.5)
-    local gz = math.floor(origin.z - dir_z * radius + 0.5)
-    local gy = ground_at(gx, gz)
-    if gy then
-      minetest.set_node({x = gx, y = gy + 1, z = gz},
-        {name = gate, param2 = minetest.dir_to_facedir({x = dir_x, y = 0, z = dir_z})})
-    end
-  end
-
-  -- Something to work at, next to the building.
-  local props = {}
-  for _, node_name in ipairs({"mcl_crafting_table:crafting_table",
-    "mcl_barrels:barrel_closed", "mcl_composters:composter",
-    "mcl_farming:hay_block", "mcl_lanterns:lantern_floor"}) do
-    if minetest.registered_nodes[node_name] then table.insert(props, node_name) end
-  end
-  if #props > 0 then
-    local px = math.floor(lot.center.x + dir_z * (fp_w / 2 + 2) + 0.5)
-    local pz = math.floor(lot.center.z - dir_x * (fp_w / 2 + 2) + 0.5)
-    local py = ground_at(px, pz)
-    if py then
-      put(px, pz, py + 1, choice.pick(seed_key, label .. ":prop", props))
-    end
-  end
-
-  return kind, placed
+  local ecology = profile.ecology or {}
+  local context = {
+    worksite_id = candidate.id .. "_worksite_" .. kind .. "_1",
+    required = true,
+    anchor = lot and {
+      x = lot.center.x,
+      y = lot.position and lot.position.y or 0,
+      z = lot.center.z,
+    } or nil,
+    candidate_anchors = worksite_candidate_anchors(lot, profile.seed_key),
+    shore_anchor = deep_copy(ecology.shore_anchor),
+    shore_land_anchor = deep_copy(ecology.shore_land_anchor),
+    stone_anchor = deep_copy(ecology.stone_anchor),
+    approach_anchor = profile.selected_site and deep_copy(profile.selected_site)
+      or (lot and deep_copy(lot.center)),
+    road_cells = road_cells,
+    structure_footprints = footprints,
+    surface_y = function(x, z)
+      return paving_level(x, z, lot and lot.position and lot.position.y)
+    end,
+    palette = profile.material_palette,
+    seed_key = profile.seed_key,
+  }
+  return perfectworld.planner.worksites.place(kind, context)
 end
 
 local function materialize_village_plan(plan, profile, candidate)
@@ -2318,7 +2271,9 @@ local function materialize_village_plan(plan, profile, candidate)
   local road_material = perfectworld.structures.palette_material(palette, "path", "road")
   local placed_structures = {}
   local placed_roads = {}
+  local placed_worksites = {}
   local errors = {}
+  local warnings = {}
 
   -- Structures first: terrain preparation reshapes the surface, and doing it
   -- after the roads were laid would bury or erase them.
@@ -2440,10 +2395,17 @@ local function materialize_village_plan(plan, profile, candidate)
       driveway.cells = perfectworld.roads.rasterize_record(driveway)
       perfectworld.planner.save_road(driveway)
       table.insert(placed_roads, driveway)
-
-      local yard_kind = build_yard(lot, profile, profile.seed_key)
-      lot.yard = yard_kind
     end
+  end
+
+  local worksite_ok, worksite_result = place_required_worksite(
+    plan, profile, candidate, placed_roads)
+  if worksite_ok then
+    placed_worksites[#placed_worksites + 1] = worksite_result
+  else
+    errors[#errors + 1] = "worksite_failed:"
+      .. tostring(profile.required_worksite) .. ":"
+      .. tostring(worksite_result and worksite_result.reason)
   end
 
   -- The centre of a settlement is the middle of what was built, not the
@@ -2577,6 +2539,14 @@ local function materialize_village_plan(plan, profile, candidate)
       bounds.max_z = math.max(bounds.max_z, lot.footprint_max.z, lot.door and lot.door.z or lot.center.z)
     end
   end
+  for _, worksite in ipairs(placed_worksites) do
+    if worksite.bounds then
+      bounds.min_x = math.min(bounds.min_x, worksite.bounds.min.x)
+      bounds.max_x = math.max(bounds.max_x, worksite.bounds.max.x)
+      bounds.min_z = math.min(bounds.min_z, worksite.bounds.min.z)
+      bounds.max_z = math.max(bounds.max_z, worksite.bounds.max.z)
+    end
+  end
 
   local settlement_record = {
     settlement_id = candidate.id,
@@ -2615,10 +2585,14 @@ local function materialize_village_plan(plan, profile, candidate)
     structure_ids = {},
     structure_variants = {},
     road_ids = {},
+    worksite_ids = {},
+    worksite_kinds = {},
+    worksites = deep_copy(placed_worksites),
     road_segment_count = 0,
     lot_count = #placed_structures,
     planned_lot_count = #plan.lots,
     errors = errors,
+    warnings = warnings,
     created_at = minetest.get_gametime(),
   }
   for _, s in ipairs(placed_structures) do
@@ -2628,6 +2602,12 @@ local function materialize_village_plan(plan, profile, candidate)
   for _, r in ipairs(placed_roads) do
     table.insert(settlement_record.road_ids, r.id)
     settlement_record.road_segment_count = settlement_record.road_segment_count + (r.segment_count or 0)
+  end
+  for _, worksite in ipairs(placed_worksites) do
+    settlement_record.worksite_ids[#settlement_record.worksite_ids + 1] =
+      worksite.id
+    settlement_record.worksite_kinds[#settlement_record.worksite_kinds + 1] =
+      worksite.kind
   end
 
   perfectworld.planner.save_settlement_plan(candidate.id, {
@@ -2641,7 +2621,9 @@ local function materialize_village_plan(plan, profile, candidate)
     settlement = settlement_record,
     structures = placed_structures,
     roads = placed_roads,
+    worksites = placed_worksites,
     errors = errors,
+    warnings = warnings,
   }
 end
 
@@ -2708,8 +2690,13 @@ function perfectworld.planner.materialize_village_new(candidate)
       structure_ids = {},
       structure_variants = {},
       road_ids = {},
+      worksite_ids = {},
+      worksite_kinds = {},
+      worksites = {},
       lot_count = 0,
       planned_lot_count = #plan.lots,
+      errors = {},
+      warnings = {},
       created_at = minetest.get_gametime(),
     }
     perfectworld.planner.save_settlement_plan(candidate.id, {
@@ -2777,6 +2764,7 @@ function perfectworld.planner.validate_settlement(settlement_id)
   report.status = settlement.status
   report.archetype = settlement.archetype
   report.lot_count = settlement.lot_count
+  local worksite_records = settlement.worksites or {}
 
   -- 1. status / completeness contract
   if settlement.status == "complete" then
@@ -2788,6 +2776,19 @@ function perfectworld.planner.validate_settlement(settlement_id)
     check("complete_fully_materialized",
       (settlement.lot_count or 0) >= (settlement.planned_lot_count or 0),
       tostring(settlement.lot_count) .. "/" .. tostring(settlement.planned_lot_count))
+    if settlement.required_worksite then
+      local required_recorded = false
+      for _, worksite in ipairs(worksite_records) do
+        if worksite.kind == settlement.required_worksite
+          and worksite.required == true
+          and worksite.status == "materialized" then
+          required_recorded = true
+          break
+        end
+      end
+      check("complete_has_required_worksite", required_recorded,
+        tostring(settlement.required_worksite))
+    end
   elseif settlement.status == "failed" then
     check("failed_has_no_lots", (settlement.lot_count or 0) == 0)
   end
@@ -2884,6 +2885,51 @@ function perfectworld.planner.validate_settlement(settlement_id)
     if road_through then break end
   end
   check("roads_avoid_buildings", road_through == nil, road_through)
+
+  -- Work sites are physical settlement components. Persistence tells the
+  -- validator where to inspect, but never proves that the field, dock, yard
+  -- or minehead still exists in the world.
+  local missing_worksite, worksite_road_overlap, worksite_building_overlap
+  for _, worksite in ipairs(worksite_records) do
+    local physical_nodes = 0
+    for _, expected in ipairs(worksite.expected_nodes or {}) do
+      local pos = expected.position
+      if pos then
+        local node = minetest.get_node(pos)
+        if node.name ~= "air" and node.name ~= "ignore" then
+          physical_nodes = physical_nodes + 1
+        end
+      end
+    end
+    if worksite.status ~= "materialized" or physical_nodes == 0 then
+      missing_worksite = missing_worksite or tostring(worksite.id or worksite.kind)
+    end
+
+    for _, cell in ipairs(worksite.footprint_cells or {}) do
+      local key = cell.x .. ":" .. cell.z
+      if reachable_cells[key] then
+        worksite_road_overlap = worksite_road_overlap
+          or (tostring(worksite.id or worksite.kind) .. "@" .. key)
+      end
+      for _, box in ipairs(boxes) do
+        if cell.x >= box.min.x and cell.x <= box.max.x
+          and cell.z >= box.min.z and cell.z <= box.max.z then
+          worksite_building_overlap = worksite_building_overlap
+            or (tostring(worksite.id or worksite.kind) .. "|" .. box.id)
+          break
+        end
+      end
+    end
+  end
+  if #worksite_records > 0 or settlement.required_worksite then
+    if #worksite_records == 0 then
+      missing_worksite = tostring(settlement.required_worksite)
+    end
+    check("worksites_present_in_world", missing_worksite == nil, missing_worksite)
+    check("worksites_avoid_roads", worksite_road_overlap == nil, worksite_road_overlap)
+    check("worksites_avoid_buildings",
+      worksite_building_overlap == nil, worksite_building_overlap)
+  end
 
   -- 4. every building reaches a road, and its door is not walled in
   local unconnected, blocked_door = nil, nil
@@ -2992,6 +3038,14 @@ function perfectworld.planner.validate_settlement(settlement_id)
         outside = outside or ("road@" .. cell)
       end
     end
+    for _, worksite in ipairs(worksite_records) do
+      local worksite_bounds = worksite.bounds
+      if worksite_bounds and worksite_bounds.min and worksite_bounds.max
+        and not (inside(worksite_bounds.min.x, worksite_bounds.min.z)
+          and inside(worksite_bounds.max.x, worksite_bounds.max.z)) then
+        outside = outside or ("worksite@" .. tostring(worksite.id or worksite.kind))
+      end
+    end
     check("bounds_contain_all", outside == nil, outside)
   else
     check("bounds_present", false)
@@ -3067,6 +3121,7 @@ function perfectworld.planner.validate_settlement(settlement_id)
 
   report.structure_count = #structures
   report.road_count = #roads
+  report.worksite_count = #worksite_records
   report.plan_lot_count = #(plan.lots or {})
   report.ok = #report.issues == 0
   return report
