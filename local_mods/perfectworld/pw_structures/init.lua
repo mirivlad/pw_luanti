@@ -548,6 +548,12 @@ end
 
 --- Place a node whose facedir must point along a direction given in the
 -- structure's own local space (so it survives rotation).
+--
+-- The direction is where the node's **+Z face** ends up, because that is what
+-- `dir_to_facedir` means. For a Mineclonia stair, param2 0 puts the raised half
+-- at +Z, so the direction passed here is the way the *step rises*, not the way
+-- it falls. Getting that backwards is invisible in a unit test and obvious on a
+-- roof.
 local function place_facing(pos, rotation, local_pos, node_name, local_dir)
   if node_name == "air" then return end
   local world_dir = perfectworld.structures.rotate_point(local_dir, rotation)
@@ -588,9 +594,14 @@ local function build_pitched_roof(pos, rotation, opts)
       break
     end
 
+    -- The raised half of a stair goes *uphill*, towards the ridge, so that it
+    -- meets the underside of the course above and the slope reads as one plane.
+    -- Pointing it downhill instead leaves every course raised at its outer edge
+    -- and dropping again at its inner one, which from the gable end looks like
+    -- a row of combs rather than a roof.
     for z = -half_d - 1, half_d + 1 do
-      place_facing(pos, rotation, {x = left, y = y, z = z}, stair, {x = -1, y = 0, z = 0})
-      place_facing(pos, rotation, {x = right, y = y, z = z}, stair, {x = 1, y = 0, z = 0})
+      place_facing(pos, rotation, {x = left, y = y, z = z}, stair, {x = 1, y = 0, z = 0})
+      place_facing(pos, rotation, {x = right, y = y, z = z}, stair, {x = -1, y = 0, z = 0})
     end
 
     -- Close the two gable triangles so the attic is not open to the weather.

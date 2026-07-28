@@ -785,3 +785,60 @@ T.register_test("perfectworld", "new_structure_registry_validates_all", function
   ctx.assert.contains(table.concat(list, ","), "pw_farmstead_v1", "pw_farmstead_v1 must be registered")
   ctx.assert.is_true(#list >= 5, "must have at least 5 registered structures, got " .. #list)
 end)
+
+T.register_test("perfectworld", "roof_stairs_rise_towards_the_ridge", function(ctx)
+  -- The defect this catches: a stair whose raised half points downhill. Every
+  -- course is then lifted at its outer edge and drops again at its inner one,
+  -- so from the gable end the roof reads as a row of combs instead of one
+  -- plane. Nothing else in the suite looks at param2, and a roof built the
+  -- wrong way still passes every "is there a physical shell" check.
+  local center = {x = 620, y = 24, z = 620}
+  bulk_fill_flat_area(center, 14, center.y, center.y + 20)
+
+  local ok, result = perfectworld.structures.place("pw_house_small_v1", {
+    pos = {x = center.x, y = 0, z = center.z},
+    rotation = 0,
+    palette = perfectworld.compat.get_family_palette("temperate"),
+  })
+  if not ok then
+    ctx.skip("pw_house_small_v1 did not place here: "
+      .. tostring(result and result.reason or result))
+    return
+  end
+
+  -- The ridge of this roof runs along Z, so its stairs are exactly the ones
+  -- that rise along X. Interior furniture is also made of stairs and rises
+  -- along Z; counting it as roof would make the test fail on a correct roof.
+  -- The count assertion below is what stops that filter from hiding anything:
+  -- a roof whose stairs were turned onto the wrong axis would leave too few.
+  local roof_stairs, wrong = 0, {}
+  for x = center.x - 10, center.x + 10 do
+    for y = center.y + 1, center.y + 18 do
+      for z = center.z - 10, center.z + 10 do
+        local node = minetest.get_node({x = x, y = y, z = z})
+        if node.name:find("stair", 1, true) then
+          -- param2 0 puts a Mineclonia stair's raised half at +Z, so the
+          -- direction the node's +Z axis ends up pointing *is* the direction
+          -- the step rises. Derived from the engine rather than hardcoded, so
+          -- this stays true if the facedir table ever changes.
+          local rise = minetest.facedir_to_dir(node.param2)
+          local towards_ridge = center.x - x
+          if rise.x ~= 0 and towards_ridge ~= 0 then
+            roof_stairs = roof_stairs + 1
+            if rise.x * towards_ridge <= 0 then
+              wrong[#wrong + 1] = string.format("(%d,%d,%d) rises x=%+d, ridge is x=%+d",
+                x, y, z, rise.x, towards_ridge)
+            end
+          end
+        end
+      end
+    end
+  end
+
+  ctx.assert.is_true(roof_stairs >= 40,
+    "a pitched roof should be built from stairs rising along X, found only "
+    .. roof_stairs)
+  ctx.assert.equal(#wrong, 0,
+    roof_stairs .. " roof stairs, " .. #wrong .. " pointing downhill: "
+    .. table.concat(wrong, "; ", 1, math.min(#wrong, 4)))
+end)
