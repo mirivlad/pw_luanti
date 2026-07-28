@@ -152,7 +152,9 @@ function brain.tick(mind)
 
   memory.integrate(mind.memory, observation)
   local state = observation.self_state or {}
-  mind.history = needs.update_history(mind.history, state, mind.memory)
+  -- The observation's own moment, so that "it did not move" is judged over
+  -- elapsed time rather than over decisions taken.
+  mind.history = needs.update_history(mind.history, state, mind.memory, started)
   mind.beliefs = beliefs.rebuild(mind.memory)
 
   local drives, drive_reasons = needs.evaluate(state, mind.memory, mind.beliefs, mind.history)

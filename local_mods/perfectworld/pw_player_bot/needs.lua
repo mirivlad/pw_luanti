@@ -152,11 +152,43 @@ function needs.dominant(values)
   return best, best_value
 end
 
+--- How long the world must be given before "it did not move" means anything.
+--
+-- A walker covers about four nodes a second, so a node takes roughly a quarter
+-- of a second. Judging movement over any shorter gap measures the interval, not
+-- the bot: two decisions taken in the same instant are indistinguishable from
+-- two taken a second apart with the body wedged against a wall.
+--
+-- Half a second gives a node's travel comfortable margin. Below it no evidence
+-- is taken either way — not "moved" and not "stuck" — because there is none.
+needs.STUCK_SAMPLE_US = 500 * 1000
+
 --- Track the things a single observation cannot show: whether the bot moved,
 --- whether its health is falling, how often planning has failed lately.
-function needs.update_history(history, state, memo)
+--
+-- `now_us` is when this observation was taken. It matters because the stuck
+-- counter used to advance once per *decision*: think twice in quick succession
+-- and the bot declared itself stuck without the world having had a chance to
+-- move it. That is wrong in a test, where nothing executes the intent at all,
+-- and wrong in a running bot, where the brain thinks every 250 ms while a walk
+-- takes seconds — a bot walking perfectly well would abandon its route after
+-- two ticks for not having covered a whole node yet.
+--
+-- Callers that pass no time keep the old per-call behaviour, which is what the
+-- unit tests want: they step the world by hand and have no clock.
+function needs.update_history(history, state, memo, now_us)
   history = history or {stuck_ticks = 0, failed_routes = 0}
   local position = memo.last_position
+
+  if now_us and history.last_sample_us
+    and now_us - history.last_sample_us < needs.STUCK_SAMPLE_US then
+    -- Too soon to tell. Leave the counter and the reference position alone, so
+    -- the next comparison spans a real interval rather than restarting from
+    -- here and never spanning one.
+    history.last_hp = tonumber(state.hp) or history.last_hp
+    return history
+  end
+
   if history.last_position and position then
     local moved = math.abs(position.x - history.last_position.x)
       + math.abs(position.y - history.last_position.y)
@@ -168,6 +200,7 @@ function needs.update_history(history, state, memo)
     end
   end
   history.last_position = position and {x = position.x, y = position.y, z = position.z} or nil
+  history.last_sample_us = now_us
   history.last_hp = tonumber(state.hp) or history.last_hp
   return history
 end

@@ -322,3 +322,51 @@ test("intent_encoding_is_canonical", function(ctx)
   ctx.assert.is_true(first:find('"protocol":"pw_player_bot/v1"', 1, true) ~= nil,
     "and it names its protocol")
 end)
+
+test("stuck_evidence_needs_time_to_have_passed", function(ctx)
+  -- The counter used to advance once per *decision*. Two decisions taken in the
+  -- same instant then looked exactly like two taken a second apart with the body
+  -- wedged against a wall, and the brain would abandon a route it had only just
+  -- chosen. That is wrong in a test, where nothing executes the intent, and
+  -- wrong in a running bot: the brain thinks every 250 ms while a walk takes
+  -- seconds, so a bot walking perfectly well would call itself stuck for not
+  -- having covered a whole node yet.
+  local memo = support.flat_memory(4, 10)
+  local history = {stuck_ticks = 0, expected_movement = true,
+    last_position = {x = 0, y = 11, z = 0}, last_sample_us = 0}
+
+  -- Six decisions inside one sampling window: no time has passed, so there is
+  -- no evidence either way.
+  for tick = 1, 6 do
+    history = needs.update_history(history, state_of(memo), memo,
+      tick * math.floor(needs.STUCK_SAMPLE_US / 20))
+  end
+  ctx.assert.equal(history.stuck_ticks, 0,
+    "thinking quickly is not being stuck, got " .. history.stuck_ticks)
+
+  -- The same standing-still bot, judged over real intervals, is stuck.
+  local elapsed = 0
+  for _ = 1, 4 do
+    elapsed = elapsed + needs.STUCK_SAMPLE_US + 1
+    history = needs.update_history(history, state_of(memo), memo, elapsed)
+  end
+  ctx.assert.is_true(history.stuck_ticks >= 3,
+    "not moving across real intervals still is being stuck, got "
+    .. history.stuck_ticks)
+end)
+
+test("a_bot_that_moves_between_samples_is_never_called_stuck", function(ctx)
+  -- The other half of the contract: elapsed time alone must not condemn a bot
+  -- that is actually making progress.
+  local memo = support.flat_memory(4, 10)
+  local history = {stuck_ticks = 0, expected_movement = true,
+    last_position = {x = 0, y = 11, z = 0}, last_sample_us = 0}
+  local elapsed = 0
+  for step = 1, 5 do
+    memo.last_position = {x = step * 2, y = 11, z = 0}
+    elapsed = elapsed + needs.STUCK_SAMPLE_US + 1
+    history = needs.update_history(history, state_of(memo), memo, elapsed)
+  end
+  ctx.assert.equal(history.stuck_ticks, 0,
+    "a bot covering ground is not stuck, got " .. history.stuck_ticks)
+end)
