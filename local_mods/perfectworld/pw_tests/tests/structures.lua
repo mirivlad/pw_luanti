@@ -19,6 +19,35 @@ local function fill_flat_area(center, radius, surface_y, clear_to_y)
   end
 end
 
+local function bulk_fill_flat_area(center, radius, surface_y, clear_to_y)
+  if not minetest.bulk_set_node then
+    fill_flat_area(center, radius, surface_y, clear_to_y)
+    return
+  end
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = center.x - radius, y = surface_y - 8, z = center.z - radius},
+      {x = center.x + radius, y = clear_to_y, z = center.z + radius})
+  end
+  local ground_positions = {}
+  local air_positions = {}
+  for dx = -radius, radius do
+    for dz = -radius, radius do
+      ground_positions[#ground_positions + 1] = {
+        x = center.x + dx, y = surface_y, z = center.z + dz,
+      }
+      for y = surface_y + 1, clear_to_y do
+        air_positions[#air_positions + 1] = {
+          x = center.x + dx, y = y, z = center.z + dz,
+        }
+      end
+    end
+  end
+  minetest.bulk_set_node(
+    ground_positions, {name = perfectworld.compat.get_material("ground")})
+  minetest.bulk_set_node(air_positions, {name = "air"})
+end
+
 T.register_test("perfectworld", "composite_ids_cover_coordinates_and_types", function(ctx)
   ctx.assert.equal(perfectworld.get_region_id(0, 0), "region_v1_p0_p0", "zero region id")
   ctx.assert.equal(perfectworld.get_region_id(-2, 3), "region_v1_n2_p3", "negative/positive region id")
@@ -150,7 +179,7 @@ T.register_test("perfectworld", "ecological_production_buildings_place_in_every_
           y = 30,
           z = -1700 - rotation_index * 120,
         }
-        fill_flat_area(center, 7, center.y, center.y + 12)
+        bulk_fill_flat_area(center, 7, center.y, center.y + 12)
         local ok, result = perfectworld.structures.place(name, {
           pos = {x = center.x, y = 0, z = center.z},
           rotation = rotation,
