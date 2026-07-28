@@ -1,23 +1,24 @@
 # Project Status
 
 **Date:** 2026-07-28
-**Test baseline:** 258 total | 258 PASS | 0 FAIL | 0 SKIP | 0 ERROR
-(118 in the `perfectworld` suite, 86 in `pw_bot_bridge`, 54 in `pw_player_bot`)
+**Test baseline:** 304 total | 302 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+(143 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
+62 in `pw_player_bot`, 6 in `smoke`)
 
 ## Implemented Modules
 
 | Module | Status | Notes |
 |--------|--------|-------|
 | `pw_core` | ✅ Complete | API, composite IDs, world format lock, exact 32-bit hashing, stable variation contract |
-| `pw_compat_mcl` | ✅ Complete | Material mappings, biome id/name resolution, 7 biome families, environment profiles, palettes |
-| `pw_planner` | ✅ Complete | Region planning, village grammar (3 archetypes), terrain sampler, validation, diversity analysis, persistence |
-| `pw_structures` | ✅ Complete | 7 registered structures, pitched roofs, palette-aware placement, plinths, rollback |
-| `pw_roads` | ✅ Complete | Road persistence API, delegates to pw_planner storage |
-| `pw_settlements` | ✅ Complete | Type definitions, settlement record API |
+| `pw_compat_mcl` | ✅ Complete | Material mappings, biome and ecological node classification, 7 families, environment profiles, palettes and abstract decor materials |
+| `pw_planner` | ✅ Implemented | Region planning, grammar v3, bounded ecological survey, 3 archetypes, exact local roads, transactional worksites, real-world validation and cached persistence reads |
+| `pw_structures` | ✅ Complete | 10 registered structures, including fishery, sawmill and mine workshop; palette-aware placement, bounded terrain prep and rollback |
+| `pw_roads` | ✅ Implemented | Shared exact-width raster, persistence facade and canonical road cells |
+| `pw_settlements` | ✅ Implemented | Four specialization definitions, scoring and normalized legacy/current settlement records |
 | `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
-| `pw_bot_bridge` | ✅ Complete | Server-side perception for the future PW Bot: `player`/`oracle` modes, protocol `pw_bot_bridge/v1`, semantic registry, event queue, optional file transport, 86 tests |
-| `pw_player_bot` | ✅ Complete | The bot's decision layer: bounded memory, beliefs, A* over remembered ground, five needs, seven goals, utility scoring, intent protocol `pw_player_bot/v1`, 54 tests. Decides only — never acts |
-| `pw_tests` | ✅ Complete | 118 tests across core, planner, structures, variation, fingerprints, village, diversity |
+| `pw_bot_bridge` | ✅ Implemented | Server-side perception: `player`/`oracle` modes, stable `pw_bot_bridge/v1`, normalized oracle settlement records, semantic registry and bounded transport; player-mode contract unchanged |
+| `pw_player_bot` | ✅ Complete | Bounded memory, beliefs, navigation over remembered ground, needs, goals and `pw_player_bot/v1`. Decides only — never acts |
+| `pw_tests` | ✅ Complete | 143 PerfectWorld tests across core, planner, structures, ecology, worksites, roads, variation, fingerprints, village and diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
 | `pw_remote_control` | ✅ Complete | JSON remote control |
 
@@ -27,18 +28,27 @@
 |--------|--------|-------|
 | `pw_population` | 🟡 Skeleton | Table declared, no functionality |
 
-## Village Generation System (v2)
+## Village Generation System (grammar v3)
 
-Biome-aware, multi-archetype settlement pipeline. See
+Resource-aware, multi-archetype physical settlement pipeline. See
 `docs/perfectworld-architecture.md` for the full contracts.
 
-- **Environment profiles**: 7 biome families via `pw_compat_mcl.get_environment()`
+- **Bounded site selection**: exactly 9 sites and at most 81 surface columns
+  per site
+- **Four specializations**: fishing, farming, forestry and mining require
+  physical water/soil/tree/stone evidence rather than a random or biome-only
+  label
+- **Grammar contract**: at least 2 dwellings, the specialization's production
+  building and its required field/dock/forestry yard/minehead
 - **3 archetypes**: linear, compact, hillside, with a documented hillside fallback
-- **Grammar pipeline**: emerge → environment → profile → roads → lots → structures → materialize
+- **Grammar pipeline**: emerge → ecological survey → specialization → roads →
+  required lots → optional lots → structures → exact roads → transactional
+  worksite → reachability
 - **Material palettes**: applied to foundations, walls, roofs, floors and paths
 - **Stable variation**: independent labelled hash decisions, not a PRNG stream
 - **Three fingerprints**: exact plan, structural, road graph
-- **Physical validation**: 15 checks against the record *and* the real world
+- **Physical validation**: checks records, required roles/worksites, exact
+  collisions, doors and nodes in the real world
 - **Diversity analysis**: >= 100 deterministic inputs, full metric set
 
 ## Resolved in This Cycle
@@ -63,15 +73,33 @@ Biome-aware, multi-archetype settlement pipeline. See
 | Frozen ocean passed every buildability check | A village with a full crossroads was materialized on the sea |
 | Road polylines were never checked against terrain | Streets ran off clifftops, down rock faces and into water |
 | Screenshot helper matched the xvfb-run wrapper shell | Captured the desktop instead of the game |
+| Village role was effectively biome-flavoured variation | Nine bounded physical surveys now choose fishing/farming/forestry/mining from measured resources |
+| Tree crowns hid the actual ground and a 6-node lattice missed trunks | Canopy is tree evidence, while structure and paving analysis continue to true ground |
+| Fishing centres and streets could point into the water | The centre moves to measured shore land and the main street runs tangent to the shore |
+| Every consumer interpreted road width independently | One exact raster now drives planning, placement, validation, worksite collision and oracle diagnostics |
+| Production was only a label on a building | Every complete grammar-v3 village requires a physical transactional worksite |
+| A frozen shore passed ecological selection but failed dock placement | The dock consumes the same open/frozen-water surface contract as the survey |
+| Oracle settlement reads repeatedly parsed the entire storage map | Decoded storage maps are cached between writes; a 500-record oracle integration went from 8+ minutes to an immediate PASS |
 
 ## Known Test Issues
 
-None. 258 PASS, 0 FAIL, 0 SKIP, 0 ERROR.
+The two FAILs are an existing test-configuration contradiction, not planner
+regressions:
 
-The only ERROR lines in a clean server log come from
-`world_format_lock_detects_incompatible_changes`, which feeds `pw_core` a
-mismatched lock record on purpose, and from Mineclonia's own redstone event
-queue. Neither is a PerfectWorld fault.
+- `pw_bot_bridge.integration_transport_follows_its_setting`
+- `pw_bot_bridge.transport_is_off_by_default_and_needs_no_insecure_environment`
+
+Both expect `pw_bot_bridge.external_transport=false`, while the local
+development file `config/luanti.conf` explicitly sets it to `true`. Configuration
+was not changed during this cycle. All 143 `perfectworld` tests and all 62
+`pw_player_bot` tests pass.
+
+Expected log noise remains: the world-format test deliberately feeds `pw_core`
+an incompatible lock, terrain rollback fixtures provoke
+`CONTENT_IGNORE` diagnostics in unloaded test cells, Mineclonia can overflow
+its redstone event queue after the destructive fixture suite, and the client
+reports unsupported translation `.po` files. No `LuaError`, `AsyncErr`, fatal
+error or stack traceback was observed.
 
 ## Buildings
 
@@ -81,9 +109,10 @@ cobble plinth, timber corner posts, plank infill, glass-pane windows on every
 wall, a pitched roof of stairs with a slab ridge and one-block eaves, and a
 porch step at the door.
 
-Seven structures: four dwelling shapes, a barn, a farmstead and a well. Each
-biome family carries its own wood and stone — oak, birch, spruce, acacia, dark
-oak, jungle — so two villages in different biomes share no materials.
+Ten structures: four dwelling shapes, a barn, a farmstead, a well, a fishery, a
+sawmill and a mine workshop. Each biome family carries its own wood and stone —
+oak, birch, spruce, acacia, dark oak, jungle — so two villages in different
+biomes can use different materials.
 
 Every door is checked with the engine's pathfinder from the street, on foot,
 with a walker's limits. Unreachable lots are rejected at plan time; anything
@@ -92,25 +121,30 @@ keeps the settlement out of `complete`.
 
 ## Known Visual Defects
 
-Reviewed against 21 screenshots of 7 settlements plus a walk-through of every
-door in one village.
+Reviewed through a real visible Luanti client. Complete farming, forestry and
+mining records were validated against the world and inspected from overview and
+worksite cameras.
 
 | Defect | Cause | Effect |
 |--------|-------|--------|
 | Streets are patchy where the ground undulates | The carriageway is one node per column at a smoothed height; cells whose surface is water are skipped | The street reads as a street, but the edges are ragged |
 | 3 of 11 settlements have one door the pathfinder cannot reach | The approach check is per-lot; it cannot see a neighbour that will later be built across the only route | Those settlements stay `partial`, which is the honest status |
 | Most settlements come out `hillside` on this mapgen | The hillside fallback fires whenever a flat archetype finds no viable layout, which is common on `carpathian` | On flat ground hillside looks like linear |
+| No complete fishing village was found inside valid world coordinates in this seed's acceptance sample | Viable shore geometry must fit two houses, a fishery and a dock without using water or a cliff | Fishery and dock components pass physical tests, but full real-world fishing composition still needs a deterministic acceptance fixture |
+| `/pw_village_batch` accepts radii beyond the engine's usable coordinate range | The development command enumerates arbitrary region coordinates and does not clamp to `mapgen_limit` | It can write non-visualizable diagnostic records; normal mapgen does not generate those regions |
 
-Fix directions: order lots by approach quality before accepting them; widen the
-carriageway smoothing to bridge one-block gaps.
+Fix directions: add a valid-coordinate deterministic fishing acceptance seed,
+order lots by approach quality before accepting them, clamp debug batch radius,
+and widen carriageway smoothing to bridge one-block gaps.
 
 ## Missing Systems
 
-- PW Bot itself: client control, movement, navigation, memory, utility AI,
-  behaviour. Only its senses exist — see [docs/pw-bot/](pw-bot/README.md)
+- The acting PW Bot client layer remains outside this world-generation cycle;
+  `pw_bot_bridge` only perceives and `pw_player_bot` only decides — see
+  [docs/pw-bot/](pw-bot/README.md)
 - NPCs and villagers
-- Economy and trading
-- Roads between settlements (only local village roads and driveways)
+- Production simulation, inventories, economy and trading
+- Roads between settlements (local village streets and driveways exist)
 - Bridges and tunnels
 - Global route pathfinding
 - Building interiors beyond minimal
@@ -118,11 +152,15 @@ carriageway smoothing to bridge one-block gaps.
 
 ## Immediate Technical Tasks
 
-- Integrate `pw_settlements` type definitions into `pw_planner`
-  (replace the hardcoded candidate-type weights)
+- Add a deterministic, in-range complete fishing-village acceptance fixture
+- Clamp `/pw_village_batch` and other world-debug enumeration to the engine
+  `mapgen_limit`
+- Shard settlement/road persistence: decoded reads are now cached, but every
+  write still serializes the whole growing JSON map
+- Integrate the remaining legacy settlement type weights into the specialization
+  definitions
 - Add a save migration framework for world format changes
-- Widen the structure catalogue: five structures limits how different two
-  villages of the same archetype can look
+- Widen the structure catalogue and add more specialization-specific decor
 
 ## Supported Platforms
 

@@ -257,6 +257,14 @@ def make_display(mode: str, backend: str, width: int, height: int,
     if mode == "headless":
         return XvfbDisplay(width, height, search)
 
+    override = os.environ.get("PW_BOT_VISIBLE_BACKEND")
+    if override:
+        if override not in ("xephyr", "mirror", "host"):
+            raise DisplayError(
+                "PW_BOT_VISIBLE_BACKEND must be xephyr, mirror or host, "
+                f"got {override!r}")
+        backend = override
+
     if backend == "host":
         if not allow_host:
             raise DisplayError(

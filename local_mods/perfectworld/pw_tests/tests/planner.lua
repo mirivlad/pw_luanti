@@ -169,6 +169,42 @@ T.register_test("perfectworld", "planner_stable_after_cache_reset", function(ctx
   end
 end)
 
+T.register_test("perfectworld", "planner_decodes_each_storage_map_once_between_writes", function(ctx)
+  local planner = perfectworld.planner
+  local first_id = "pw_test_storage_cache_first"
+  local second_id = "pw_test_storage_cache_second"
+  planner._test_clear_settlement(first_id)
+  planner._test_clear_settlement(second_id)
+  planner.save_settlement_plan(first_id, {
+    settlement = {settlement_id = first_id, status = "failed"},
+  })
+  planner.save_settlement_plan(second_id, {
+    settlement = {settlement_id = second_id, status = "failed"},
+  })
+  planner._test_clear_cache()
+
+  local original_parse_json = minetest.parse_json
+  local parse_count = 0
+  minetest.parse_json = function(...)
+    parse_count = parse_count + 1
+    return original_parse_json(...)
+  end
+  local ok, err = pcall(function()
+    ctx.assert.not_nil(planner.get_settlement_plan(first_id),
+      "first record must be readable")
+    ctx.assert.not_nil(planner.get_settlement_plan(second_id),
+      "second record must be readable")
+    planner.list_settlements()
+  end)
+  minetest.parse_json = original_parse_json
+  planner._test_clear_settlement(first_id)
+  planner._test_clear_settlement(second_id)
+  if not ok then error(err) end
+
+  ctx.assert.equal(parse_count, 1,
+    "unchanged settlement storage must be decoded once, not once per record")
+end)
+
 T.register_test("perfectworld", "planner_road_anchors_match_candidates", function(ctx)
   local plan = perfectworld.planner.plan_region(0, 0)
   ctx.assert.equal(#(plan.road_anchors or {}), #(plan.settlement_candidates or {}), "road anchor count must match candidate count")
@@ -297,6 +333,14 @@ T.register_test("perfectworld", "materialize_chunk_places_farmstead_once", funct
   )
   if not record then return end
   ctx.assert.equal(record.structure_name, "pw_farmstead_v1", "farmstead structure name")
+  ctx.assert.is_true(#(record.entrances or {}) >= 1,
+    "materialized structure record must persist its actual entrance")
+  if record.entrances and record.entrances[1] then
+    local entrance = record.entrances[1].position
+    ctx.assert.not_nil(entrance, "persisted entrance must have a position")
+    ctx.assert.equal(entrance.y, record.position.y,
+      "persisted entrance must retain the materialized floor height")
+  end
 
   local placed_before = #perfectworld.planner.list_placed()
   perfectworld.planner.materialize_chunk(prep_minp, prep_maxp)

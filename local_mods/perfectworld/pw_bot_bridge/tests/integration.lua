@@ -404,6 +404,94 @@ test("integration_oracle_distinguishes_loaded_unloaded_and_ignore", function(ctx
   end)
 end)
 
+test("integration_oracle_uses_actual_normalized_settlement_geometry", function(ctx)
+  local player, name, reason = support.require_player(ctx)
+  if not player then return ctx.skip(reason) end
+  local fixture_ids = {
+    "pw_bot_bridge_normalized_legacy",
+    "pw_bot_bridge_normalized_v3",
+  }
+  local function clear_fixtures()
+    for _, id in ipairs(fixture_ids) do
+      perfectworld.planner._test_clear_settlement(id)
+      perfectworld.planner._test_unmark_placed(id)
+    end
+  end
+  clear_fixtures()
+
+  for index, id in ipairs(fixture_ids) do
+    local actual_x = 7100 + index * 100
+    local actual_z = 8100 + index * 100
+    perfectworld.planner.save_settlement_plan(id, {
+      plan = {
+        settlement_grammar_version = index == 2 and 3 or nil,
+        archetype = "linear",
+        size_class = "small",
+        center = {x = -actual_x, z = -actual_z},
+        bounds = {
+          min_x = -actual_x - 2, max_x = -actual_x + 2,
+          min_z = -actual_z - 2, max_z = -actual_z + 2,
+        },
+        lots = {},
+      },
+      profile = {},
+      settlement = {
+        settlement_id = id,
+        settlement_grammar_version = index == 2 and 3 or nil,
+        archetype = "linear",
+        size_class = "small",
+        center_pos = {x = actual_x, y = 24, z = actual_z},
+        bounds = {
+          min_x = actual_x - 12, max_x = actual_x + 15,
+          min_z = actual_z - 14, max_z = actual_z + 17,
+        },
+        structure_ids = {},
+        road_ids = {},
+        errors = {},
+        lot_count = 0,
+      },
+    })
+  end
+
+  local ok, err = pcall(function()
+    support.with_bot_state(name, function()
+      B.register_bot(name, {mode = "oracle", limits = {
+        max_requests_per_second = 100, max_request_burst = 200,
+      }}, B.SERVER_ACTOR)
+
+      for index, id in ipairs(fixture_ids) do
+        local envelope = support.observe(name, "get_settlement", {
+          settlement_id = id,
+        })
+        ctx.assert.is_true(envelope.ok, "get_settlement answered for " .. id)
+        ctx.assert.equal(envelope.data.settlement_count, 1,
+          "the seeded settlement is returned")
+        local record = envelope.data.settlements[1]
+        local actual_x = 7100 + index * 100
+        local actual_z = 8100 + index * 100
+        ctx.assert.equal(record.center.x, actual_x,
+          "oracle center must come from the materialized settlement")
+        ctx.assert.equal(record.center.z, actual_z,
+          "oracle center z must come from the materialized settlement")
+        ctx.assert.equal(record.bounds.min_x, actual_x - 12,
+          "oracle bounds must come from the materialized settlement")
+        ctx.assert.equal(record.bounds.max_z, actual_z + 17,
+          "oracle bounds max z must come from the materialized settlement")
+
+        local keys = {}
+        for key in pairs(record) do keys[#keys + 1] = key end
+        table.sort(keys)
+        ctx.assert.equal(table.concat(keys, ","),
+          "archetype,biome_family,bounds,center,errors,lot_count,palette_id,"
+            .. "road_ids,settlement_id,size_class,structure_ids",
+          "pw_bot_bridge/v1 settlement response schema must not change")
+      end
+    end)
+  end)
+  clear_fixtures()
+  if not ok then error(err) end
+end)
+
 test("integration_oracle_reads_perfectworld_records_when_there_are_any", function(ctx)
   local player, name, reason = support.require_player(ctx)
   if not player then return ctx.skip(reason) end

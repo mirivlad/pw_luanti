@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 # run-pw-bot-visible.sh — run PW Bot where a human can watch it.
 #
-# The client runs inside a nested X server (Xephyr) shown as a window on your
-# desktop. You see everything the bot does in real time, and the bot's keyboard
-# and pointer never leave that nested display: your own windows are not in
-# reach, and your mouse pointer does not move.
-#
-# If Xephyr is not installed, the runtime falls back to an Xvfb display mirrored
-# into a read-only ffplay window. That is stricter still — the mirror forwards
-# nothing — but the picture lags.
+# The client runs on an isolated Xvfb display mirrored into an ffplay window.
+# The mirror is deliberately read-only: moving the host cursor over it cannot
+# change the bot's camera, while the runtime's XTest input still reaches the
+# isolated client. Set PW_BOT_VISIBLE_BACKEND=xephyr explicitly only when an
+# interactive, lower-latency view is worth accepting host pointer input.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,6 +20,9 @@ Runs the bot in a window you can watch. Useful additions:
   --keep-open        leave the client running afterwards so you can look around
   --max-intents N    stop after N intents
   --max-seconds N    stop after N seconds
+
+The window is read-only by default. To restore the interactive Xephyr backend:
+  PW_BOT_VISIBLE_BACKEND=xephyr scripts/run-pw-bot-visible.sh ...
 
 While it runs, from another terminal:
   python3 -m pw_bot_runtime pause  --run-id <id>
@@ -53,5 +53,6 @@ if [ -z "${DISPLAY:-}" ]; then
 fi
 
 export PYTHONPATH="$ROOT/tools/pw_bot_runtime/src${PYTHONPATH:+:$PYTHONPATH}"
+export PW_BOT_VISIBLE_BACKEND="${PW_BOT_VISIBLE_BACKEND:-mirror}"
 cd "$ROOT"
 exec "$PYTHON" -m pw_bot_runtime run --visible --config "$CONFIG" "${ARGS[@]}"

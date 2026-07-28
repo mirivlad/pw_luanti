@@ -149,6 +149,29 @@ T.register_test("perfectworld", "exact_fingerprint_detects_variant_and_rotation"
     "different role must change the exact fingerprint")
 end)
 
+T.register_test("perfectworld", "plan_fingerprints_include_specialization_contract", function(ctx)
+  local farming = make_plan({
+    settlement_grammar_version = 3,
+    specialization = "farming",
+    required_role_counts = {dwelling = 2, farm = 1},
+  })
+  farming.road_graph_signature =
+    road_graph_signature(farming.roads, farming.center)
+  local forestry = make_plan({
+    settlement_grammar_version = 3,
+    specialization = "forestry",
+    required_role_counts = {dwelling = 2, sawmill = 1},
+  })
+  forestry.road_graph_signature = farming.road_graph_signature
+
+  ctx.assert.is_true(
+    exact_plan_signature(farming) ~= exact_plan_signature(forestry),
+    "changing only specialization must change the exact fingerprint")
+  ctx.assert.is_true(
+    structural_plan_signature(farming) ~= structural_plan_signature(forestry),
+    "changing only specialization must change the structural fingerprint")
+end)
+
 T.register_test("perfectworld", "exact_fingerprint_ignores_lot_table_order", function(ctx)
   local base = make_plan()
   base.road_graph_signature = road_graph_signature(base.roads, base.center)

@@ -19,6 +19,35 @@ local function fill_flat_area(center, radius, surface_y, clear_to_y)
   end
 end
 
+local function bulk_fill_flat_area(center, radius, surface_y, clear_to_y)
+  if not minetest.bulk_set_node then
+    fill_flat_area(center, radius, surface_y, clear_to_y)
+    return
+  end
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = center.x - radius, y = surface_y - 8, z = center.z - radius},
+      {x = center.x + radius, y = clear_to_y, z = center.z + radius})
+  end
+  local ground_positions = {}
+  local air_positions = {}
+  for dx = -radius, radius do
+    for dz = -radius, radius do
+      ground_positions[#ground_positions + 1] = {
+        x = center.x + dx, y = surface_y, z = center.z + dz,
+      }
+      for y = surface_y + 1, clear_to_y do
+        air_positions[#air_positions + 1] = {
+          x = center.x + dx, y = y, z = center.z + dz,
+        }
+      end
+    end
+  end
+  minetest.bulk_set_node(
+    ground_positions, {name = perfectworld.compat.get_material("ground")})
+  minetest.bulk_set_node(air_positions, {name = "air"})
+end
+
 T.register_test("perfectworld", "composite_ids_cover_coordinates_and_types", function(ctx)
   ctx.assert.equal(perfectworld.get_region_id(0, 0), "region_v1_p0_p0", "zero region id")
   ctx.assert.equal(perfectworld.get_region_id(-2, 3), "region_v1_n2_p3", "negative/positive region id")
@@ -101,6 +130,81 @@ T.register_test("perfectworld", "structure_registry_validates_schema_and_returns
   local ok, err = perfectworld.structures.validate({version = 1})
   ctx.assert.is_false(ok, "invalid definition must be rejected")
   ctx.assert.contains(err, "size", "invalid definition should explain missing size")
+end)
+
+T.register_test("perfectworld", "ecological_production_buildings_are_registered", function(ctx)
+  local expected = {
+    pw_fishery_v1 = "fishery",
+    pw_sawmill_v1 = "sawmill",
+    pw_mine_workshop_v1 = "mine_workshop",
+  }
+  for name, category in pairs(expected) do
+    local def = perfectworld.structures.get(name)
+    ctx.assert.not_nil(def, name .. " must be registered")
+    if def then
+      local categories = {}
+      for _, value in ipairs(def.categories or {}) do categories[value] = true end
+      ctx.assert.is_true(categories[category] == true,
+        name .. " must declare category " .. category)
+      ctx.assert.is_true(perfectworld.structures.validate(def),
+        name .. " must pass the structure schema")
+      local road_connectors = 0
+      for _, connector in ipairs(def.connectors or {}) do
+        if connector.type == "road" and connector.offset_pos then
+          road_connectors = road_connectors + 1
+        end
+      end
+      ctx.assert.equal(road_connectors, 1,
+        name .. " must expose one physical road entrance")
+    end
+  end
+end)
+
+T.register_test("perfectworld", "ecological_production_buildings_place_in_every_rotation", function(ctx)
+  local names = {
+    "pw_fishery_v1",
+    "pw_sawmill_v1",
+    "pw_mine_workshop_v1",
+  }
+  local rotations = {0, 90, 180, 270}
+  local palette = perfectworld.compat.get_family_palette("temperate")
+
+  for structure_index, name in ipairs(names) do
+    local def = perfectworld.structures.get(name)
+    ctx.assert.not_nil(def, name .. " must exist before placement")
+    if def then
+      for rotation_index, rotation in ipairs(rotations) do
+        local center = {
+          x = -1700 - structure_index * 120,
+          y = 30,
+          z = -1700 - rotation_index * 120,
+        }
+        bulk_fill_flat_area(center, 7, center.y, center.y + 12)
+        local ok, result = perfectworld.structures.place(name, {
+          pos = {x = center.x, y = 0, z = center.z},
+          rotation = rotation,
+          palette = palette,
+        })
+        ctx.assert.is_true(ok, name .. " rotation " .. rotation
+          .. " must place: " .. tostring(result and result.reason or result))
+        if ok then
+          local solid = 0
+          for x = center.x - 12, center.x + 12 do
+            for y = center.y + 1, center.y + 16 do
+              for z = center.z - 12, center.z + 12 do
+                local node = minetest.get_node({x = x, y = y, z = z})
+                if node.name ~= "air" and node.name ~= "ignore" then
+                  solid = solid + 1
+                end
+              end
+            end
+          end
+          ctx.assert.is_true(solid >= 40,
+            name .. " rotation " .. rotation .. " must build a physical shell")
+        end
+      end
+    end
+  end
 end)
 
 T.register_test("perfectworld", "farmstead_rotations_transform_points_and_connectors", function(ctx)
@@ -215,6 +319,58 @@ T.register_test("perfectworld", "terrain_analysis_uses_building_footprint_not_fu
   end
   local ok, result = perfectworld.structures.analyze_terrain(def, origin, 0)
   ctx.assert.is_true(ok, "building footprint should be flat enough: " .. tostring(result and result.reason or result))
+end)
+
+T.register_test("perfectworld", "terrain_analysis_uses_ground_below_forest_canopy", function(ctx)
+  local def = perfectworld.structures.get("pw_sawmill_v1")
+  local origin = {x = -1180, y = 36, z = -1180}
+  local snapshot = {}
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 8, y = origin.y - 3, z = origin.z - 8},
+      {x = origin.x + 8, y = origin.y + 10, z = origin.z + 8})
+  end
+  for dx = -8, 8 do
+    for dz = -8, 8 do
+      for y = origin.y - 3, origin.y + 10 do
+        local pos = {x = origin.x + dx, y = y, z = origin.z + dz}
+        snapshot[#snapshot + 1] = {pos = pos, node = minetest.get_node(pos)}
+      end
+      minetest.set_node(
+        {x = origin.x + dx, y = origin.y, z = origin.z + dz},
+        {name = perfectworld.compat.get_material("ground")})
+      for y = origin.y + 1, origin.y + 10 do
+        minetest.set_node(
+          {x = origin.x + dx, y = y, z = origin.z + dz},
+          {name = "air"})
+      end
+    end
+  end
+
+  local trunk = perfectworld.compat.get_material("tree")
+  minetest.set_node(
+    {x = origin.x - 1, y = origin.y + 1, z = origin.z},
+    {name = trunk})
+  minetest.set_node(
+    {x = origin.x - 1, y = origin.y + 2, z = origin.z},
+    {name = trunk})
+  minetest.set_node(
+    {x = origin.x + 1, y = origin.y + 6, z = origin.z},
+    {name = "mcl_trees:leaves_oak"})
+
+  local ok, analysis = perfectworld.structures.analyze_terrain(def, origin, 0)
+  ctx.assert.is_true(ok,
+    "tree trunks and canopy must not become artificial terrain relief: "
+      .. tostring(analysis and analysis.reason or analysis))
+  if ok then
+    ctx.assert.equal(analysis.surface_y, origin.y,
+      "terrain preparation must be anchored to physical ground")
+  end
+
+  for index = #snapshot, 1, -1 do
+    local entry = snapshot[index]
+    minetest.set_node(entry.pos, entry.node)
+  end
 end)
 
 T.register_test("perfectworld", "terrain_preparation_limits_modified_area", function(ctx)

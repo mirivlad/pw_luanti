@@ -336,10 +336,12 @@ Screenshot artifact for Structure Pipeline v1:
 artifacts/perfectworld/pw_farmstead_v1.png
 ```
 
-## Village Generation System (v2)
+## Village Generation System (grammar v3)
 
 The village generation system replaces the original single-template village
-with a biome-aware, multi-archetype grammar pipeline.
+with a resource-aware, multi-archetype grammar pipeline. It generates physical
+world detail only: specializations do not create NPCs, inventories, production,
+trade or an economy.
 
 ### Environment Profile
 
@@ -420,29 +422,92 @@ before any lot has been tested against the ground. If a flat archetype produces
 no viable layout, the planner retries once as `hillside` with the same seed key
 and records `archetype_fallback_from`. This is deterministic.
 
+### Bounded Ecological Site Selection
+
+The regional candidate id remains stable, but it is only an anchor. After the
+surrounding area has emerged, `pw_planner/ecology.lua` evaluates exactly nine
+candidate sites around it. Each survey reads at most 81 surface columns and
+distinguishes true ground from trunks, leaves and other vegetation.
+
+Evidence includes buildable-ground, soil, water, tree and exposed-stone ratios,
+local roughness, shore distance, humidity and concrete shore/stone anchors.
+`pw_settlements` scores every viable site against four pure specialization
+definitions:
+
+| Specialization | Required role | Required worksite | Physical meaning |
+|----------------|---------------|-------------------|------------------|
+| `fishing` | `fishery` | `dock` | A buildable shore with nearby open or frozen water |
+| `farming` | `farm` | `field` | Open soil with gentle local relief |
+| `forestry` | `sawmill` | `forestry_yard` | Nearby trees plus usable working ground |
+| `mining` | `mine_workshop` | `minehead` | Exposed stone or rocky relief |
+
+The highest score among viable pairs wins. Exact ties use an independently
+labelled hash over sorted site and specialization ids. A biome family may
+contribute to a score, but cannot make a specialization viable without physical
+resource evidence. If no pair is viable, the planner records
+`no_suitable_ecological_site` and changes no world nodes.
+
+If the winning fishing survey is centred in water, the settlement centre moves
+to the already measured adjacent land anchor. Its main street is snapped
+tangent to the measured shore direction, so houses run along the coast instead
+of projecting into it. These adjustments perform no additional scan.
+
 ### Grammar Pipeline
 
 1. Emerge the site (a village spans ~110 blocks; the mapchunk holding its
    centre is never enough terrain to plan on).
-2. Read the environment profile at the real surface.
-3. Build the profile: archetype, size class, target lots, road character, lot
-   spacing, role composition, palette.
-4. Build the road skeleton for the archetype.
-5. Generate lot anchors along every road, both sides.
-6. For each anchor, in role order: pick the structure variant, orient it so its
+2. Survey nine bounded sites and choose a viable site/specialization pair.
+3. Read the environment profile at the selected real surface.
+4. Build the profile: specialization, required roles and worksite, archetype,
+   size class, target lots, road character, lot spacing and palette.
+5. Build the road skeleton for the archetype.
+6. Generate lot anchors along every road, both sides.
+7. Attempt two dwellings and the specialization's production role before any
+   optional lots. For each anchor: pick a permitted structure variant, orient
+   it so its
    road connector faces the street, then push it away from the kerb until its
    footprint clears the carriageway and every neighbour.
-7. Validate the ground under the **building footprint** with the structure's own
+8. Validate the ground under the **building footprint** with the structure's own
    slope limit — the same limit `analyze_terrain` will apply at placement time.
-8. Compute bounds, role counts and the three fingerprints.
-9. Materialize structures first (terrain preparation reshapes the surface and
+9. Compute bounds, role counts and the three fingerprints.
+10. Materialize structures first (terrain preparation reshapes the surface and
    would otherwise bury the roads).
-10. Lay roads perpendicular to their direction of travel, then a driveway from
+11. Lay roads with the shared exact-width raster, then a driveway from
     every placed door to its road point.
-11. Save the settlement record and mark the candidate placed.
+12. Transactionally place the required field, dock, forestry yard or minehead,
+    rejecting exact road cells and building footprints.
+13. Check on-foot reachability, compute bounds from what was actually built,
+    save the settlement record and mark the candidate placed.
 
 Setback is a property of the building, not a constant: a nine-block barn stands
 further back from the kerb than a three-block well.
+
+### Worksites and Decor
+
+Worksites make the production role visible outside its building:
+
+- a `field` is a fenced 9x7 tilled plot with water, crops and a composter;
+- a `dock` extends a supported timber deck from verified land toward a measured
+  open or frozen water surface, with fishing storage and lighting;
+- a `forestry_yard` contains log stacks, a plank bed, beehives, a barrel,
+  campfire and a bounded drying frame;
+- a `minehead` is a shallow supported adit with a closed back, rails, furnace,
+  anvil and light.
+
+All nodes come through abstract compatibility or palette roles. Before
+mutation, the entire bounded volume is checked for protection and unloaded
+nodes and snapshotted with `name` and `param2`. Any false return or Lua error
+restores that snapshot in reverse order. Required worksite failure prevents a
+settlement from becoming `complete`.
+
+### Exact Road Geometry
+
+`pw_roads.rasterize_record` is the single road-cell definition used by planning,
+materialization, worksite collision, validation and oracle diagnostics. Width
+means exactly the requested number of cells perpendicular to travel: a
+two-block road is never widened to three. New records persist their canonical
+sorted cells; legacy `path`/`width` records are derived through the same
+rasterizer.
 
 ### Material Palettes
 
@@ -496,8 +561,8 @@ ground, bounded by `max_plinth_depth` (default 12).
 
 | Status | Meaning |
 |--------|---------|
-| `complete` | Every planned lot built, no placement errors, at least `MIN_DWELLINGS` (2) dwellings |
-| `partial` | Something was built, but a lot failed or a required role is missing |
+| `complete` | Every planned lot built, no placement errors, at least two dwellings, the required production role and required physical worksite, and reachable doors |
+| `partial` | Something was built, but a lot/worksite failed, a required role is missing or a door is unreachable |
 | `failed` | Nothing was built |
 
 A plan with no viable layout is persisted as `failed` and never materialized.
@@ -509,7 +574,10 @@ it returns `terrain_not_ready` and leaves the candidate unplaced.
 ```lua
 settlement = {
   settlement_id, candidate_id, region_id, generator_version, seed_key,
+  settlement_grammar_version = 3,
   status                = "complete" | "partial" | "failed",
+  regional_anchor, selected_site,
+  specialization, specialization_score, resource_features, ecology,
   center_pos, bounds    = { min_x, max_x, min_z, max_z },
   environment_profile, biome_name, biome_family,
   archetype, size_class, palette_id, material_palette,
@@ -518,11 +586,17 @@ settlement = {
   village_fingerprint   -- legacy alias for exact_plan_fingerprint
   structure_ids, structure_variants,
   road_ids, road_segment_count,
-  lot_count, planned_lot_count, errors, created_at,
+  worksite_ids, worksite_kinds, worksites,
+  lot_count, planned_lot_count, errors, warnings, created_at,
 }
 ```
 
-API: `pw_settlements.get(id)`, `.list_ids()`, `.list()`, `.get_by_candidate(id)`.
+API: `pw_settlements.normalize(data)`, `.get(id)`, `.list_ids()`, `.list()`,
+`.get_by_candidate(id)`. Normalized reads prefer the materialized
+`settlement.center_pos` and `settlement.bounds`, retain plan lots separately,
+and synthesize empty ecology/worksite arrays for legacy records. A record
+without a grammar version is reported as grammar v2; an already materialized
+legacy village is not moved or rebuilt.
 
 ### Fingerprints
 
@@ -560,16 +634,17 @@ world**. A record in mod_storage is not evidence that anything was built.
 
 | Check | What it proves |
 |-------|----------------|
-| `complete_has_lots`, `complete_has_required_roles`, `complete_has_no_errors`, `complete_fully_materialized` | the completeness contract holds |
+| `complete_has_lots`, `complete_has_required_roles`, `complete_has_required_worksite`, `complete_has_no_errors`, `complete_fully_materialized` | the completeness contract holds |
 | `failed_has_no_lots` | a failed settlement really built nothing |
 | `has_fingerprints` | all three fingerprints are recorded |
 | `structures_resolve`, `roads_resolve` | every referenced id exists |
 | `footprints_disjoint` | buildings do not intersect |
 | `terrain_prep_isolated` | preparing one lot cannot damage its neighbour |
 | `roads_avoid_buildings` | no carriageway crosses a building |
+| `worksites_present_in_world`, `worksites_avoid_roads`, `worksites_avoid_buildings` | required production decor physically exists and its footprint is sound |
 | `lots_connected_to_road` | every building reaches the network (driveways count) |
 | `doors_accessible` | the node outside each door is passable |
-| `bounds_contain_all` | bounds cover every structure and road cell |
+| `bounds_contain_all` | bounds cover every structure, road cell and worksite |
 | `structures_present_in_world` | the nodes are actually there |
 | `no_floating_buildings` | solid ground under every footprint corner |
 | `nodes_registered` | no unknown nodes were placed |
@@ -609,9 +684,9 @@ groups and rejection reasons.
 - `/pw_photo_at <x> <y> <z> <tx> <ty> <tz>` — exact reproducible camera
 ## Future Roads
 
-`pw_roads` currently defines the API boundary only. Future work should add:
+`pw_roads` owns the shared exact raster and persistence facade. Local settlement
+streets and recorded driveways exist. Future work should add:
 
-- local settlement paths;
 - roads between settlements;
 - regional roads;
 - trade routes.

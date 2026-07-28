@@ -11,8 +11,13 @@ When you explore new terrain, PerfectWorld places structures through mapgen:
 - **Houses** (`pw_house_small_v1`, `pw_house_small_v2`): compact residential buildings
 - **Barns** (`pw_barn_v1`): storage buildings
 - **Wells** (`pw_well_v1`): open wells with cobble pillars
-- **Villages**: a street network with houses, barns, wells and a farmstead,
-  each building facing the street and linked to it by a short path
+- **Fisheries** (`pw_fishery_v1`): shore workshops with fish-smoking and
+  boatwork details
+- **Sawmills** (`pw_sawmill_v1`): timber workshops for forest settlements
+- **Mine workshops** (`pw_mine_workshop_v1`): stone-and-metal workshops beside
+  exposed rock
+- **Villages**: a street network whose homes, production building and physical
+  work area reflect the resources at its selected site
 
 Villages come in three shapes:
 
@@ -21,6 +26,21 @@ Villages come in three shapes:
 | `linear` | Valleys, shores, narrow ground | One street with buildings down both sides |
 | `compact` | Open flat ground | A crossroads with side branches and a central well |
 | `hillside` | Slopes and rough ground | A street that follows the contour, buildings terraced into the hill |
+
+Their primary specialization comes from measured local terrain, not a random
+label:
+
+| Specialization | Required evidence | Required physical features |
+|----------------|-------------------|----------------------------|
+| `fishing` | A buildable shore close to open or frozen water | Fishery and a dock |
+| `farming` | Mostly soil, buildable ground and gentle relief | Farmstead and a fenced 9x7 field |
+| `forestry` | Sufficient nearby trunks/canopy and buildable ground | Sawmill and a lumber/apiary yard |
+| `mining` | Exposed stone or rocky relief with usable ground | Mine workshop and a shallow supported minehead |
+
+For each regional village candidate, grammar v3 surveys exactly nine bounded
+possible sites after the area has emerged. Each site samples no more than 81
+columns. The highest-scoring viable site/specialization pair wins; if none is
+viable, the planner records an honest failure and builds nothing.
 
 Buildings are made of local materials: sandstone in deserts, stone in the
 mountains, wood and cobble in temperate and forested land, gravel paths in the
@@ -99,23 +119,34 @@ To force-generate a single planned structure:
 ## Reading a Settlement
 
 `/pw_village_info` reports the settlement's biome and family, its material
-palette, archetype and size class, how many lots were planned versus built, the
-roles present, and three fingerprints:
+palette, archetype, size class and specialization, how many lots were planned
+versus built, the roles and worksite present, and three fingerprints:
 
 - **exact plan fingerprint** — changes if anything moves by even one block;
 - **structural fingerprint** — shared by plans that look alike;
 - **road graph fingerprint** — the street network alone, independent of where in
   the world it stands.
 
-A settlement is `complete` only when every planned lot was built with no errors
-and it has at least two dwellings. Otherwise it is `partial`, or `failed` if the
-ground turned out to be unbuildable.
+A grammar-v3 settlement is `complete` only when every planned lot was built
+without errors, at least two dwellings exist, its specialization-specific
+production building and required worksite were materialized, and every door is
+reachable from the street. Otherwise it is `partial`, or `failed` if nothing
+could be built.
+
+Worksites are bounded transactions: the planner checks protection and loaded
+nodes before changing anything, and restores node names and rotation data if a
+placement fails. Fields, docks, yards and mineheads are kept out of exact road
+cells and building footprints.
+
+Already materialized villages are not moved or rebuilt when grammar v3 is
+installed. Their legacy records remain readable and normalize as grammar
+version 2.
 
 ## What's Missing
 
 - NPCs and villagers
-- Economy and trading
-- Roads between settlements (only village-to-farm local roads exist)
+- Production simulation, inventories, economy and trading
+- Roads between settlements (only local village streets and driveways exist)
 - Bridges and tunnels
 - Global route network
 - Building interiors beyond minimal (light, table, container)

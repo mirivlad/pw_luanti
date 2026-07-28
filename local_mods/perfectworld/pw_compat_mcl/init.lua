@@ -37,6 +37,18 @@ local materials = {
   fence_block = "mcl_fences:fence",
   torch = "mcl_torches:torch",
   lantern = "mcl_lanterns:lantern",
+  barrel = "mcl_barrels:barrel_closed",
+  beehive = "mcl_beehives:beehive",
+  hay = "mcl_farming:hay_block",
+  composter = "mcl_composters:composter",
+  furnace = "mcl_furnaces:furnace",
+  smoker = "mcl_smoker:smoker",
+  anvil = "mcl_anvils:anvil",
+  grindstone = "mcl_grindstone:grindstone",
+  rail = "mcl_minecarts:rail",
+  chain = "mcl_lanterns:chain",
+  campfire = "mcl_campfires:campfire_lit",
+  cauldron = "mcl_cauldrons:cauldron",
 }
 
 local fallbacks = {
@@ -52,6 +64,18 @@ local fallbacks = {
   container = "mcl_chests:chest",
   garden_soil = "mcl_core:dirt",
   crop = "air",
+  barrel = "mcl_chests:chest",
+  beehive = "air",
+  hay = "air",
+  composter = "air",
+  furnace = "mcl_core:cobble",
+  smoker = "mcl_furnaces:furnace",
+  anvil = "air",
+  grindstone = "air",
+  rail = "air",
+  chain = "mcl_fences:fence",
+  campfire = "air",
+  cauldron = "air",
 }
 
 local function resolve_node_name(name)
@@ -144,6 +168,39 @@ function perfectworld.compat.is_livable_ground(node_name)
   -- dry palette is built for them.
   if node_name:find("hardened_clay") or node_name:find("terracotta") then return true end
   return false
+end
+
+--- Classify a registered node for ecological surveys.
+--
+-- The planner uses these flags instead of Mineclonia names. Tree crowns and
+-- trunks are resource evidence, not terrain: a ground sampler records them and
+-- continues downward until it reaches soil, stone or liquid.
+function perfectworld.compat.classify_node(node_name)
+  local def = minetest.registered_nodes[node_name]
+  local groups = (def and def.groups) or {}
+  local liquid = perfectworld.compat.is_liquid_node(node_name)
+  local leaves = (groups.leaves or 0) > 0
+  local tree = (groups.tree or groups.log or 0) > 0
+  local flora = (groups.flora or groups.plant or 0) > 0
+    or (def and def.buildable_to == true) or false
+  local soil = perfectworld.compat.is_livable_ground(node_name)
+  local stone = (groups.stone or groups.material_stone or 0) > 0
+    or ((groups.cracky or groups.pickaxey or 0) > 0
+      and not soil and not tree and not leaves)
+
+  return {
+    liquid = liquid,
+    vegetation = leaves or tree or flora,
+    tree = tree,
+    leaves = leaves,
+    soil = soil,
+    stone = stone,
+    buildable_ground = soil and not liquid,
+  }
+end
+
+function perfectworld.compat.is_natural_vegetation(node_name)
+  return perfectworld.compat.classify_node(node_name).vegetation
 end
 
 function perfectworld.compat.is_replaceable(node_name)
