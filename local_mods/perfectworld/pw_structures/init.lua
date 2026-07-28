@@ -209,10 +209,22 @@ function perfectworld.structures.get_building_footprint(def, origin, rotation)
 	return minp, maxp
 end
 
+local function is_terrain_cover(node_name)
+	if perfectworld.compat and perfectworld.compat.classify_node then
+		return perfectworld.compat.classify_node(node_name).vegetation
+	end
+	local def = minetest.registered_nodes[node_name]
+	local groups = (def and def.groups) or {}
+	return (groups.flora or groups.leaves or groups.plant
+		or groups.tree or groups.log or 0) > 0
+		or (def and def.buildable_to == true) or false
+end
+
 local function find_surface_y(x, z)
 	for y = 256, -64, -1 do
 		local node = minetest.get_node({x = x, y = y, z = z})
-		if node.name ~= "air" and node.name ~= "ignore" then
+		if node.name ~= "air" and node.name ~= "ignore"
+			and not is_terrain_cover(node.name) then
 			return y
 		end
 	end
@@ -364,8 +376,7 @@ function perfectworld.structures.prepare_terrain(def, origin, rotation, analysis
 					-- outside footprint blending zone: only clear replaceable
 					if is_replaceable(p) then
 						local node_name = minetest.get_node(p).name
-						local defn = minetest.registered_nodes[node_name]
-						if defn and (defn.groups and (defn.groups.flora or defn.groups.leaves or defn.groups.plant)) then
+						if is_terrain_cover(node_name) then
 							minetest.set_node(p, {name = air})
 						end
 						-- leave non-replaceable non-flora nodes untouched
@@ -373,8 +384,7 @@ function perfectworld.structures.prepare_terrain(def, origin, rotation, analysis
 				else
 					if not is_replaceable(p) then
 						local node_name = minetest.get_node(p).name
-						local defn = minetest.registered_nodes[node_name]
-						if defn and (defn.groups and (defn.groups.flora or defn.groups.leaves or defn.groups.plant)) then
+						if is_terrain_cover(node_name) then
 							minetest.set_node(p, {name = air})
 						else
 							return false, {reason = "blocked", pos = p, node = node_name}

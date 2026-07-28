@@ -321,6 +321,58 @@ T.register_test("perfectworld", "terrain_analysis_uses_building_footprint_not_fu
   ctx.assert.is_true(ok, "building footprint should be flat enough: " .. tostring(result and result.reason or result))
 end)
 
+T.register_test("perfectworld", "terrain_analysis_uses_ground_below_forest_canopy", function(ctx)
+  local def = perfectworld.structures.get("pw_sawmill_v1")
+  local origin = {x = -1180, y = 36, z = -1180}
+  local snapshot = {}
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 8, y = origin.y - 3, z = origin.z - 8},
+      {x = origin.x + 8, y = origin.y + 10, z = origin.z + 8})
+  end
+  for dx = -8, 8 do
+    for dz = -8, 8 do
+      for y = origin.y - 3, origin.y + 10 do
+        local pos = {x = origin.x + dx, y = y, z = origin.z + dz}
+        snapshot[#snapshot + 1] = {pos = pos, node = minetest.get_node(pos)}
+      end
+      minetest.set_node(
+        {x = origin.x + dx, y = origin.y, z = origin.z + dz},
+        {name = perfectworld.compat.get_material("ground")})
+      for y = origin.y + 1, origin.y + 10 do
+        minetest.set_node(
+          {x = origin.x + dx, y = y, z = origin.z + dz},
+          {name = "air"})
+      end
+    end
+  end
+
+  local trunk = perfectworld.compat.get_material("tree")
+  minetest.set_node(
+    {x = origin.x - 1, y = origin.y + 1, z = origin.z},
+    {name = trunk})
+  minetest.set_node(
+    {x = origin.x - 1, y = origin.y + 2, z = origin.z},
+    {name = trunk})
+  minetest.set_node(
+    {x = origin.x + 1, y = origin.y + 6, z = origin.z},
+    {name = "mcl_trees:leaves_oak"})
+
+  local ok, analysis = perfectworld.structures.analyze_terrain(def, origin, 0)
+  ctx.assert.is_true(ok,
+    "tree trunks and canopy must not become artificial terrain relief: "
+      .. tostring(analysis and analysis.reason or analysis))
+  if ok then
+    ctx.assert.equal(analysis.surface_y, origin.y,
+      "terrain preparation must be anchored to physical ground")
+  end
+
+  for index = #snapshot, 1, -1 do
+    local entry = snapshot[index]
+    minetest.set_node(entry.pos, entry.node)
+  end
+end)
+
 T.register_test("perfectworld", "terrain_preparation_limits_modified_area", function(ctx)
 	local def = perfectworld.structures.get("pw_farmstead_v1")
 	local origin = {x = -1150, y = 40, z = -1150}
