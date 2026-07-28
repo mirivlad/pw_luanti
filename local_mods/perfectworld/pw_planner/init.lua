@@ -1974,7 +1974,8 @@ local function paving_level(x, z, hint_y)
     -- tree above the column would otherwise be mistaken for the ground.
     for probe = hint_y + 2, hint_y - 6, -1 do
       local name = minetest.get_node({x = x, y = probe, z = z}).name
-      if name ~= "air" and name ~= "ignore" then
+      local class = perfectworld.compat.classify_node(name)
+      if name ~= "air" and name ~= "ignore" and not class.vegetation then
         y = probe
         break
       end
@@ -1986,8 +1987,9 @@ local function paving_level(x, z, hint_y)
     local name = minetest.get_node({x = x, y = y - depth, z = z}).name
     local def = minetest.registered_nodes[name]
     local groups = (def and def.groups) or {}
+    local class = perfectworld.compat.classify_node(name)
     local loose = groups.snow_cover or groups.flora or groups.plant
-      or groups.flower or groups.leaves or (def and def.buildable_to)
+      or groups.flower or class.vegetation or (def and def.buildable_to)
       or name:find("^mcl_core:snow") or name:find("^mcl_flowers:")
     if not loose then
       return y - depth

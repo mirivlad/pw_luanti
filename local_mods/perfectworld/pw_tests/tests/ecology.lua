@@ -362,6 +362,39 @@ T.register_test("perfectworld", "ecology_world_sampler_finds_ground_below_tree_c
   terrain.reset()
 end)
 
+T.register_test("perfectworld", "village_paving_level_ignores_nearby_tree_trunks", function(ctx)
+  local pos = {x = -2390, y = 28, z = -2390}
+  local snapshot = {}
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = pos.x, y = pos.y - 2, z = pos.z},
+      {x = pos.x, y = pos.y + 4, z = pos.z})
+  end
+  for y = pos.y - 2, pos.y + 4 do
+    local node_pos = {x = pos.x, y = y, z = pos.z}
+    snapshot[#snapshot + 1] = {pos = node_pos, node = minetest.get_node(node_pos)}
+    minetest.set_node(node_pos, {name = "air"})
+  end
+  minetest.set_node(pos, {name = perfectworld.compat.get_material("ground")})
+  minetest.set_node(
+    {x = pos.x, y = pos.y + 1, z = pos.z},
+    {name = perfectworld.compat.get_material("tree")})
+  minetest.set_node(
+    {x = pos.x, y = pos.y + 2, z = pos.z},
+    {name = perfectworld.compat.get_material("tree")})
+
+  perfectworld.planner._world_terrain.reset()
+  local level = perfectworld.planner._paving_level(pos.x, pos.z, pos.y)
+  ctx.assert.equal(level, pos.y,
+    "roads and worksite anchors must use physical ground below a trunk")
+
+  for index = #snapshot, 1, -1 do
+    local entry = snapshot[index]
+    minetest.set_node(entry.pos, entry.node)
+  end
+  perfectworld.planner._world_terrain.reset()
+end)
+
 T.register_test("perfectworld", "ecology_selects_a_viable_shore_site_instead_of_bad_anchor", function(ctx)
   local api = ecology_api(ctx)
   if not api then return end
