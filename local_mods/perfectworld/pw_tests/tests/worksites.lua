@@ -167,6 +167,29 @@ T.register_test("perfectworld", "dock_and_minehead_require_physical_resource_anc
     "minehead must explain missing stone evidence")
 end)
 
+T.register_test("perfectworld", "dock_accepts_a_measured_frozen_shore", function(ctx)
+  local worksites = api(ctx)
+  if not worksites or not worksites.place then return end
+  local center = {x = -2900, y = 20, z = -2900}
+  local worksite_id = "test_frozen_shore_dock"
+  if worksites._test_forget then worksites._test_forget(worksite_id) end
+  prepare_flat(center, 18, center.y)
+  local shore = {x = center.x + 6, y = center.y, z = center.z}
+  minetest.set_node(shore, {name = "mcl_core:ice"})
+
+  local ok, result = worksites.place("dock", {
+    worksite_id = worksite_id,
+    required = true,
+    shore_land_anchor = center,
+    shore_anchor = shore,
+    palette = perfectworld.compat.get_family_palette("cold"),
+    seed_key = worksite_id,
+  })
+
+  ctx.assert.is_true(ok, "a frozen water surface is valid shore evidence: "
+    .. tostring(result and result.reason))
+end)
+
 T.register_test("perfectworld", "ecological_worksites_place_physical_decor", function(ctx)
   local worksites = api(ctx)
   if not worksites or not worksites.place then return end

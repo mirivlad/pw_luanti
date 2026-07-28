@@ -355,7 +355,7 @@ local function dock_spec(context)
   local water = minetest.get_node({
     x = shore.x, y = shore.y, z = shore.z,
   })
-  if not perfectworld.compat.is_liquid_node(water.name) then
+  if not perfectworld.compat.is_unbuildable_surface(water.name) then
     return nil, {reason = "shore_anchor_not_liquid"}
   end
   local cells = line_cells(land, dir_x, dir_z, 0, 6, 1)
