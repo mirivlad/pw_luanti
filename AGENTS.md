@@ -111,9 +111,15 @@ echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
 
 ### Текущий baseline
 
-258 total | 258 PASS | 0 FAIL | 0 SKIP | 0 ERROR
+309 total | 307 PASS | 2 FAIL | 0 SKIP | 0 ERROR
 
-Baseline должен оставаться зелёным. Отчёт печатается через
+Два FAIL — противоречие конфигурации, а не регрессия: тесты
+`pw_bot_bridge.integration_transport_follows_its_setting` и
+`transport_is_off_by_default_and_needs_no_insecure_environment` ожидают
+`pw_bot_bridge.external_transport=false`, а `config/luanti.conf` включает
+его для `pw_bot_runtime`. Подробности — `docs/status.md`.
+
+Остальной baseline должен оставаться зелёным. Отчёт печатается через
 `python3 scripts/report-summary.py`.
 
 ---

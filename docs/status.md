@@ -1,9 +1,11 @@
 # Project Status
 
 **Date:** 2026-07-28
-**Test baseline:** 304 total | 302 PASS | 2 FAIL | 0 SKIP | 0 ERROR
-(143 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
+**Test baseline:** 309 total | 307 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+(148 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
 62 in `pw_player_bot`, 6 in `smoke`)
+
+Measured on `master` after the ecological-villages merge.
 
 ## Implemented Modules
 
