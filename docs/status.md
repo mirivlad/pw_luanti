@@ -1,11 +1,11 @@
 # Project Status
 
 **Date:** 2026-07-28
-**Test baseline:** 309 total | 307 PASS | 2 FAIL | 0 SKIP | 0 ERROR
-(148 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
+**Test baseline:** 324 total | 322 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+(163 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
 62 in `pw_player_bot`, 6 in `smoke`)
 
-Measured on `master` after the ecological-villages merge.
+Measured on `master` after the schemes catalogue landed.
 
 ## Implemented Modules
 
@@ -20,7 +20,8 @@ Measured on `master` after the ecological-villages merge.
 | `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
 | `pw_bot_bridge` | ✅ Implemented | Server-side perception: `player`/`oracle` modes, stable `pw_bot_bridge/v1`, normalized oracle settlement records, semantic registry and bounded transport; player-mode contract unchanged |
 | `pw_player_bot` | ✅ Complete | Bounded memory, beliefs, navigation over remembered ground, needs, goals and `pw_player_bot/v1`. Decides only — never acts |
-| `pw_tests` | ✅ Complete | 143 PerfectWorld tests across core, planner, structures, ecology, worksites, roads, variation, fingerprints, village and diversity |
+| `pw_schemes` | ✅ Implemented | 61 declarative building schemes across five architectural styles, five roof kinds, interiors by role, deterministic per-settlement style choice |
+| `pw_tests` | ✅ Complete | 163 PerfectWorld tests across core, store, schemes, planner, structures, ecology, worksites, roads, variation, fingerprints, village and diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
 | `pw_remote_control` | ✅ Complete | JSON remote control |
 
@@ -29,6 +30,38 @@ Measured on `master` after the ecological-villages merge.
 | Module | Status | Notes |
 |--------|--------|-------|
 | `pw_population` | 🟡 Skeleton | Table declared, no functionality |
+
+## Building Schemes (`pw_schemes`)
+
+Buildings are data now, not generators. 61 schemes across five styles, where
+there were 10 buildings and no styles at all.
+
+| Style | Belongs in | What carries it |
+|-------|-----------|-----------------|
+| `vernacular` | anywhere (fallback) | 45° gables, timber posts, stone plinth, local wood |
+| `nordic` | cold, taiga, tundra, snowy, mountain | pitch 2 turf roofs, longhouses, few small windows |
+| `japanese` | temperate, warm, jungle, wet | raised floors, verandas, eaves two nodes past the wall |
+| `mediterranean` | desert, savanna, warm, dry, mesa | flat terraced roofs with parapets, pale stone cubes |
+| `stilt` | wet, jungle, swamp, temperate, warm | everything on posts over open water, light roofs |
+
+A scheme names its footprint, wall height, roof kind, door side, interior
+fixtures by role, and the village roles it can fill. A style adds shared
+proportions and any material it pins outright. One builder reads both; no scheme
+carries code. Materials resolve style-first, then through the biome palette, so
+a vernacular village is made of its own forest while a Japanese roof stays tile
+wherever it stands.
+
+A settlement picks **one** style, hashed from its own id and constrained by
+biome family, and builds only from it. Mixing styles inside a village would read
+as a sample book rather than a place.
+
+Roof kinds: `gable`, `hip`, `pent`, `flat`, `wide_eaved_gable`. All of them place
+stairs rising towards the ridge — the shared builder means one wrong direction
+would be wrong in every style at once, so a test asserts it.
+
+Not yet wired into the planner's grammar: `pw_planner` still composes villages
+from the ten `pw_structures` definitions. Connecting the two is the next step,
+and it is what turns 61 schemes into 61 buildings a player can walk into.
 
 ## Village Generation System (grammar v3)
 
@@ -134,7 +167,7 @@ worksite cameras.
 | Most settlements come out `hillside` on this mapgen | The hillside fallback fires whenever a flat archetype finds no viable layout, which is common on `carpathian` | On flat ground hillside looks like linear |
 | No complete fishing village was found inside valid world coordinates in this seed's acceptance sample | Viable shore geometry must fit two houses, a fishery and a dock without using water or a cliff | Fishery and dock components pass physical tests, but full real-world fishing composition still needs a deterministic acceptance fixture |
 | `/pw_village_batch` accepts radii beyond the engine's usable coordinate range | The development command enumerates arbitrary region coordinates and does not clamp to `mapgen_limit` | It can write non-visualizable diagnostic records; normal mapgen does not generate those regions |
-| House interiors are close to empty | A dwelling places a bed and a chest and nothing else | A village reads as a shell from the inside |
+| House interiors are close to empty | A dwelling places a bed and a chest and nothing else | A village reads as a shell from the inside. `pw_schemes` furnishes by role and carries the fix; it is not wired into the planner yet |
 
 Fixed: roof stairs pointed downhill, so every course rose at its outer edge and
 dropped at its inner one and the roof read as a row of combs from the gable end.
