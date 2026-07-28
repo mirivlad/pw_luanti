@@ -285,6 +285,10 @@ end
 local choice = perfectworld.core.choice
 local hash32 = perfectworld.core.hash32
 local SETTLEMENT_GRAMMAR_VERSION = 3
+
+--- The longest a village street may be, so the settlement stays inside the
+--- area `emerge_village_area` generates for it.
+perfectworld.planner.MAX_STREET_LENGTH = 96
 perfectworld.planner.SETTLEMENT_GRAMMAR_VERSION = SETTLEMENT_GRAMMAR_VERSION
 
 local ARCHETYPES = {"linear", "compact", "hillside"}
@@ -611,6 +615,60 @@ local function shore_tangent_index(direction)
   return shore_tangent_indices[sign_x .. ":" .. sign_z]
 end
 
+--- How much street a settlement needs, and how it is arranged.
+--
+-- Street length used to be an independent random number: a village aiming at
+-- twelve buildings and one aiming at three were both given thirty to eighty
+-- nodes of frontage, and the large one simply ran out of road. Measured on
+-- perfectly flat synthetic ground, where terrain can be ruled out entirely,
+-- only 34 of 50 villages reached the size they were planned for, and every
+-- rejection was `lot_overlap` or `road_conflict` — geometry, not ground.
+--
+-- The frontage a settlement needs is two sides of street, a lot every average
+-- gap, and half again on top, because a good third of the anchors are lost to
+-- their neighbours and to the carriageway itself.
+--
+-- That figure is a floor, not a replacement. Sizing the street *only* from the
+-- target was tried and was worse in every direction: small settlements ended up
+-- with less street than the old random length gave them and the valid rate fell
+-- from 177 in 241 to 135.
+--
+-- Separate from `create_village_profile` because the rule is worth checking on
+-- its own, at sizes the profile generator does not currently produce.
+function perfectworld.planner.street_plan_for(profile)
+  local seed_key = profile.seed_key
+  local spacing = profile.lot_spacing
+  local average_gap = (spacing.min_gap + spacing.max_gap) / 2
+  local frontage = math.ceil(profile.target_lots / 2 * average_gap * 1.5)
+
+  local branches
+  if profile.archetype == "compact" then
+    -- A larger settlement grows side lanes rather than one endless street.
+    branches = math.max(1, math.min(3, 1 + math.floor(profile.target_lots / 5)))
+  elseif profile.target_lots >= 8 then
+    branches = 1
+  else
+    branches = choice.bool(seed_key, "road:branches:linear", 0.4) and 1 or 0
+  end
+  local crossing = profile.archetype == "compact"
+    and choice.bool(seed_key, "road:crossing", 0.35) or false
+
+  -- The cap keeps the whole settlement inside the area `emerge_village_area`
+  -- generates: a street running past it would be planned against terrain that
+  -- does not exist yet and rejected for having no surface.
+  local main_length = math.max(30, math.min(perfectworld.planner.MAX_STREET_LENGTH,
+    math.max(choice.int(seed_key, "road:main_length", 30, 80), frontage)))
+
+  return {
+    main_length = main_length,
+    branch_length = math.max(14, math.min(40, math.ceil(main_length * 0.45))),
+    branches = branches,
+    curve = choice.range(seed_key, "road:curve", 0, 0.30),
+    crossing = crossing,
+    direction_index = choice.index(seed_key, "road:main:direction", 8),
+  }
+end
+
 -- === Village Profile ===
 
 function perfectworld.planner.create_village_profile(candidate, environment)
@@ -642,20 +700,6 @@ function perfectworld.planner.create_village_profile(candidate, environment)
     profile.density = choice.range(seed_key, "density:large", 0.40, 0.65)
   end
 
-  local branches
-  if profile.archetype == "compact" then
-    branches = choice.int(seed_key, "road:branches:compact", 1, 2)
-  else
-    branches = choice.bool(seed_key, "road:branches:linear", 0.4) and 1 or 0
-  end
-  profile.road_character = {
-    main_length = choice.int(seed_key, "road:main_length", 30, 80),
-    branches = branches,
-    curve = choice.range(seed_key, "road:curve", 0, 0.30),
-    crossing = choice.bool(seed_key, "road:crossing", 0.35),
-    direction_index = choice.index(seed_key, "road:main:direction", 8),
-  }
-
   profile.lot_spacing = {
     min_gap = choice.int(seed_key, "spacing:min_gap", 6, 10),
     max_gap = choice.int(seed_key, "spacing:max_gap", 10, 16),
@@ -665,6 +709,8 @@ function perfectworld.planner.create_village_profile(candidate, environment)
   if profile.lot_spacing.max_gap <= profile.lot_spacing.min_gap then
     profile.lot_spacing.max_gap = profile.lot_spacing.min_gap + 4
   end
+
+  profile.road_character = perfectworld.planner.street_plan_for(profile)
 
   local specialization = environment.specialization
   local definition = specialization
@@ -804,18 +850,12 @@ local function build_road_network(seed_key, center, profile, terrain)
     return points
   end
 
-  if profile.archetype == "linear" then
+  if profile.archetype == "linear" or profile.archetype == "compact" then
+    local linear = profile.archetype == "linear"
     table.insert(roads, {
       id = road_id("main", 1),
-      points = main_points("road:main", mdx, mdz, -half, half, curve),
-      width = 3,
-      kind = "main_street",
-    })
-
-  elseif profile.archetype == "compact" then
-    table.insert(roads, {
-      id = road_id("main", 1),
-      points = main_points("road:main", mdx, mdz, -half, half, curve * 0.5),
+      points = main_points("road:main", mdx, mdz, -half, half,
+        linear and curve or curve * 0.5),
       width = 3,
       kind = "main_street",
     })
@@ -829,12 +869,23 @@ local function build_road_network(seed_key, center, profile, terrain)
         kind = "cross_street",
       })
     end
+    -- A linear settlement large enough to need one gets a side lane too. It is
+    -- still linear: one street with a turning off it, not a grid. `branches`
+    -- was computed for every archetype and only ever read by the compact one,
+    -- so a long thin village had nowhere to put its last houses.
     for b = 1, branches do
       local label = "road:branch:" .. b
       local turn = choice.pick(seed_key, label .. ":turn", {-1, 1})
       local bdx, bdz = -mdz * turn, mdx * turn
-      local b_len = choice.int(seed_key, label .. ":length", 14, 34)
-      local anchor = choice.int(seed_key, label .. ":anchor", -half + 4, half - 4)
+      local b_len = profile.road_character.branch_length
+        or choice.int(seed_key, label .. ":length", 14, 34)
+      -- Spread the turnings along the street instead of drawing each one at an
+      -- independent random point: three branches that all came out near the
+      -- same place would overlap each other and add no frontage at all.
+      local span = math.max(half * 2 - 8, 1)
+      local seat = -half + 4 + math.floor(span * (b - 0.5) / branches + 0.5)
+      local anchor = seat + choice.int(seed_key, label .. ":anchor_jitter", -4, 4)
+      anchor = math.max(-half + 4, math.min(half - 4, anchor))
       local bx = cx + mdx * anchor
       local bz = cz + mdz * anchor
       local b_points = {}

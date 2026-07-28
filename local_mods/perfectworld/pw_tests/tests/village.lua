@@ -360,3 +360,67 @@ T.register_test("perfectworld", "planner_save_and_load_road", function(ctx)
   ctx.assert.equal(loaded.length, 2, "road length")
   ctx.assert.equal(loaded.type, "local_road", "road type")
 end)
+
+-- === Street length ===
+
+T.register_test("perfectworld", "a_settlement_gets_enough_street_for_the_lots_it_plans", function(ctx)
+  -- Street length was drawn independently of how many buildings were meant to
+  -- stand on it, so a village aiming at twelve ran out of frontage and stopped
+  -- at four. The rule now: the main street is never shorter than the lots need,
+  -- until it hits the cap that keeps the settlement inside the emerged area.
+  local cap = perfectworld.planner.MAX_STREET_LENGTH
+  ctx.assert.not_nil(cap, "the planner must state how long a street may get")
+  if not cap then return end
+  local checked, short = 0, {}
+  for i = 1, 60 do
+    local candidate = make_candidate("street_length_" .. i, i, i, 900 + i * 131, -700 - i * 117)
+    local env = make_env(({"temperate", "cold", "dry", "rocky", "wet", "coastal", "forest"})[1 + i % 7],
+      i % 4, (i % 3 == 0) and 10 or 400)
+    local profile = perfectworld.planner.create_village_profile(candidate, env)
+    local spacing = profile.lot_spacing
+    local average_gap = (spacing.min_gap + spacing.max_gap) / 2
+    -- Two sides to a street, a lot every average gap, and half again because
+    -- anchors are lost to their neighbours and to the carriageway.
+    local needed = math.min(cap,
+      math.ceil(profile.target_lots / 2 * average_gap * 1.5))
+    checked = checked + 1
+    if profile.road_character.main_length < needed then
+      short[#short + 1] = string.format("%s wants %d lots, needs %d, got %d",
+        candidate.id, profile.target_lots, needed, profile.road_character.main_length)
+    end
+  end
+  ctx.assert.is_true(checked > 0, "no profile was built, so nothing was proved")
+  ctx.assert.equal(#short, 0,
+    "these settlements have less street than lots: " .. table.concat(short, "; "))
+end)
+
+T.register_test("perfectworld", "a_bigger_settlement_never_gets_a_shorter_street", function(ctx)
+  -- Two settlements alike in everything but appetite. The larger one may share
+  -- the frontage between a main street and its side lanes, but the total street
+  -- it is given must not go down as it asks for more.
+  local candidate = make_candidate("street_growth", 33, 33, 33333, -33333)
+  local env = make_env("temperate", 1, 400)
+  ctx.assert.not_nil(perfectworld.planner.street_plan_for,
+    "the planner must expose the rule that sizes a street")
+  if not perfectworld.planner.street_plan_for then return end
+
+  local base = perfectworld.planner.create_village_profile(candidate, env)
+  for _, archetype in ipairs({"linear", "compact"}) do
+    local previous, previous_target = nil, nil
+    local shrunk = {}
+    for target = 3, 20 do
+      local profile = perfectworld.core.deep_copy(base)
+      profile.archetype = archetype
+      profile.target_lots = target
+      local character = perfectworld.planner.street_plan_for(profile)
+      local total = character.main_length + character.branches * character.branch_length
+      if previous and total < previous then
+        shrunk[#shrunk + 1] = string.format("%s: %d lots got %d, %d lots got %d",
+          archetype, previous_target, previous, target, total)
+      end
+      previous, previous_target = total, target
+    end
+    ctx.assert.equal(#shrunk, 0,
+      "street shrank as the settlement grew: " .. table.concat(shrunk, "; "))
+  end
+end)

@@ -1063,6 +1063,51 @@ minetest.register_chatcommand("pw_village_list", {
   end,
 })
 
+minetest.register_chatcommand("pw_village_failures", {
+  params = "",
+  description = "Tally why settlements did not get built",
+  privs = {interact = true},
+  func = function()
+    -- One line, so the whole picture survives a trip through the log. A list
+    -- of sixty settlements read one at a time does not tell you that half the
+    -- world is failing for a single reason.
+    local status_count, reason_count, rejection_count = {}, {}, {}
+    local total, lots = 0, 0
+    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+      local s = perfectworld.settlements.get(id)
+      if s then
+        total = total + 1
+        lots = lots + (tonumber(s.lot_count) or 0)
+        local status = tostring(s.status or "?")
+        status_count[status] = (status_count[status] or 0) + 1
+        if status ~= "complete" then
+          local reason = tostring(s.reason or "unstated")
+          reason_count[reason] = (reason_count[reason] or 0) + 1
+          for cause, count in pairs(type(s.rejections) == "table" and s.rejections or {}) do
+            if (tonumber(count) or 0) > 0 then
+              rejection_count[cause] = (rejection_count[cause] or 0) + (tonumber(count) or 0)
+            end
+          end
+        end
+      end
+    end
+
+    local function tally(map)
+      local parts = {}
+      for key, count in pairs(map) do parts[#parts + 1] = key .. "=" .. count end
+      table.sort(parts)
+      return table.concat(parts, " ")
+    end
+
+    return true, table.concat({
+      "settlements=" .. total .. " lots=" .. lots,
+      "status: " .. tally(status_count),
+      "reason: " .. tally(reason_count),
+      "site rejections: " .. tally(rejection_count),
+    }, " | ")
+  end,
+})
+
 minetest.register_chatcommand("pw_village_info", {
   params = "<settlement_id>",
   description = "Show detailed info about a specific village settlement",
