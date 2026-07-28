@@ -4,6 +4,7 @@ perfectworld.planner = perfectworld.planner or {}
 local REGION_SIZE = perfectworld.REGION_SIZE
 local MARGIN = 80
 local MIN_DISTANCE = 200
+perfectworld.planner.REGION_MARGIN = MARGIN
 local cache = {}
 local storage = minetest.get_mod_storage()
 local PLACED_KEY = "pw_placed_settlements"
@@ -318,6 +319,8 @@ end
 
 local choice = perfectworld.core.choice
 local hash32 = perfectworld.core.hash32
+local SETTLEMENT_GRAMMAR_VERSION = 3
+perfectworld.planner.SETTLEMENT_GRAMMAR_VERSION = SETTLEMENT_GRAMMAR_VERSION
 
 local ARCHETYPES = {"linear", "compact", "hillside"}
 perfectworld.planner.ARCHETYPES = ARCHETYPES
@@ -352,22 +355,47 @@ local function make_world_terrain()
   local cache = {}
   local terrain = {kind = "world"}
 
-  function terrain.surface_y(x, z)
+  function terrain.sample_column(x, z)
     local key = x .. ":" .. z
     local cached = cache[key]
     if cached ~= nil then
       if cached == false then return nil end
-      return cached
+      return perfectworld.core.deep_copy(cached)
     end
-    for y = 200, -32, -1 do
+    local tree_count = 0
+    local vegetation_count = 0
+    for y = 256, -64, -1 do
       local node = minetest.get_node({x = x, y = y, z = z})
       if node.name ~= "air" and node.name ~= "ignore" then
-        cache[key] = y
-        return y
+        local class = perfectworld.compat.classify_node(node.name)
+        if class.vegetation then
+          vegetation_count = vegetation_count + 1
+          if class.tree then tree_count = tree_count + 1 end
+        else
+          local result = {
+            y = y,
+            node_name = node.name,
+            buildable = class.buildable_ground,
+            soil = class.soil,
+            liquid = class.liquid
+              or perfectworld.compat.is_unbuildable_surface(node.name),
+            tree = tree_count > 0,
+            tree_count = tree_count,
+            vegetation_count = vegetation_count,
+            stone = class.stone,
+          }
+          cache[key] = result
+          return perfectworld.core.deep_copy(result)
+        end
       end
     end
     cache[key] = false
     return nil
+  end
+
+  function terrain.surface_y(x, z)
+    local column = terrain.sample_column(x, z)
+    return column and column.y or nil
   end
 
   --- True when the column cannot carry a building.
@@ -377,13 +405,12 @@ local function make_world_terrain()
   -- and the planner will happily lay a crossroads across it. Anything liquid,
   -- icy, or sitting directly on top of liquid is unbuildable ground.
   function terrain.is_liquid(x, z)
-    local y = terrain.surface_y(x, z)
-    if not y then return false end
-    local name = minetest.get_node({x = x, y = y, z = z}).name
-    if perfectworld.compat.is_unbuildable_surface(name) then return true end
+    local column = terrain.sample_column(x, z)
+    if not column then return false end
+    if column.liquid then return true end
     -- thin shelf: solid crust directly over liquid
     for depth = 1, 3 do
-      local below = minetest.get_node({x = x, y = y - depth, z = z}).name
+      local below = minetest.get_node({x = x, y = column.y - depth, z = z}).name
       if perfectworld.compat.is_liquid_node(below) then return true end
       if below == "air" or below == "ignore" then break end
     end
@@ -392,10 +419,8 @@ local function make_world_terrain()
 
   --- Soil, sand or snow-covered soil: ground a village would be built on.
   function terrain.is_livable(x, z)
-    local y = terrain.surface_y(x, z)
-    if not y then return false end
-    return perfectworld.compat.is_livable_ground(
-      minetest.get_node({x = x, y = y, z = z}).name)
+    local column = terrain.sample_column(x, z)
+    return column and column.buildable or false
   end
 
   function terrain.reset()
@@ -452,32 +477,59 @@ function perfectworld.planner.make_synthetic_terrain(spec)
     return (top + (bottom - top) * tz) * relief
   end
 
-  function terrain.surface_y(x, z)
+  local function calculated_height(x, z)
+    return math.floor(base + x * slope_x + z * slope_z + smooth_noise(x, z))
+  end
+
+  function terrain.sample_column(x, z)
     local key = x .. ":" .. z
     local cached = cache[key]
     if cached == nil then
-      cached = math.floor(base + x * slope_x + z * slope_z + smooth_noise(x, z))
+      if type(spec.column_at) == "function" then
+        cached = perfectworld.core.deep_copy(spec.column_at(x, z) or {})
+      else
+        cached = {}
+      end
+      cached.y = cached.y or calculated_height(x, z)
+      if cached.liquid == nil then
+        cached.liquid = water_line ~= nil and cached.y <= water_line
+      end
+      if cached.buildable == nil then cached.buildable = not cached.liquid end
+      if cached.soil == nil then cached.soil = cached.buildable end
+      if cached.tree == nil then cached.tree = false end
+      if cached.tree_count == nil then cached.tree_count = cached.tree and 1 or 0 end
+      if cached.vegetation_count == nil then
+        cached.vegetation_count = cached.tree_count
+      end
+      if cached.stone == nil then cached.stone = false end
       cache[key] = cached
     end
-    return cached
+    return perfectworld.core.deep_copy(cached)
+  end
+
+  function terrain.surface_y(x, z)
+    return terrain.sample_column(x, z).y
   end
 
   function terrain.is_liquid(x, z)
-    if not water_line then return false end
-    return terrain.surface_y(x, z) <= water_line
+    return terrain.sample_column(x, z).liquid
   end
 
   function terrain.is_livable(x, z)
-    return not terrain.is_liquid(x, z)
+    return terrain.sample_column(x, z).buildable
   end
 
-  function terrain.reset() end
+  function terrain.reset()
+    cache = {}
+  end
 
   return terrain
 end
 
 local world_terrain = make_world_terrain()
 perfectworld.planner._world_terrain = world_terrain
+perfectworld.planner.ecology = dofile(
+  minetest.get_modpath("pw_planner") .. "/ecology.lua")
 
 -- === Seed key ===
 -- Depends only on world seed, region, candidate identity and planner version,
@@ -489,9 +541,10 @@ perfectworld.planner._world_terrain = world_terrain
 -- never sets it.
 local function village_seed_key(candidate)
   return table.concat({
-    "pwv2",
+    "pwv3",
     candidate.world_seed_override or perfectworld.world_seed_string,
     "v" .. tostring(perfectworld.PLANNER_VERSION),
+    "g" .. tostring(SETTLEMENT_GRAMMAR_VERSION),
     "rs" .. tostring(perfectworld.REGION_SIZE),
     perfectworld.core.coord_tag(candidate.rx or 0),
     perfectworld.core.coord_tag(candidate.rz or 0),
@@ -549,6 +602,7 @@ function perfectworld.planner.create_village_profile(candidate, environment)
   local profile = {
     village_id = candidate.id,
     generator_version = perfectworld.PLANNER_VERSION,
+    settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION,
     environment = environment,
     seed_key = seed_key,
     seed_hash = hash32(seed_key),
@@ -1397,16 +1451,8 @@ end
 -- biome_family so palette branches the local map does not contain can still be
 -- exercised. `terrain` (tests only) replaces the live-map sampler.
 function perfectworld.planner.plan_village(candidate, env_override, terrain)
-  local environment
-  if terrain then
-    environment = {
-      biome_id = "synthetic", biome_name = "synthetic", biome_family = "temperate",
-      heat = 50, humidity = 50,
-      elevation = terrain.surface_y(candidate.x, candidate.z) or 0,
-      roughness = 0, average_slope = 0, water_proximity = 999, vegetation_density = 0,
-      available_material_profile = "temperate",
-    }
-  else
+  terrain = terrain or world_terrain
+  if terrain == world_terrain then
     world_terrain.reset()
     local center = {x = candidate.x, y = 0, z = candidate.z}
     if minetest.load_area then
@@ -1414,14 +1460,123 @@ function perfectworld.planner.plan_village(candidate, env_override, terrain)
         {x = center.x - 70, y = -32, z = center.z - 70},
         {x = center.x + 70, y = 200, z = center.z + 70})
     end
-    local surface = world_terrain.surface_y(center.x, center.z)
-    environment = perfectworld.compat.get_environment({x = center.x, y = surface or 0, z = center.z})
   end
-  if type(env_override) == "table" then
-    for key, value in pairs(env_override) do environment[key] = value end
+
+  local function environment_at(site, column)
+    local environment
+    if terrain.kind == "synthetic" then
+      environment = {
+        biome_id = "synthetic",
+        biome_name = "synthetic",
+        biome_family = "temperate",
+        heat = 50,
+        humidity = 50,
+        elevation = column and column.y or 0,
+        roughness = 0,
+        average_slope = 0,
+        water_proximity = 999,
+        vegetation_density = 0,
+        available_material_profile = "temperate",
+      }
+    else
+      environment = perfectworld.compat.get_environment({
+        x = site.x,
+        y = column and column.y or 0,
+        z = site.z,
+      })
+    end
+    if type(env_override) == "table" then
+      for key, value in pairs(env_override) do environment[key] = value end
+    end
+    return environment
   end
-  local profile = perfectworld.planner.create_village_profile(candidate, environment)
-  local plan = perfectworld.planner.build_village_plan(candidate, profile, environment, terrain)
+
+  local selection, selection_error = perfectworld.planner.ecology.select_site(
+    candidate, terrain, environment_at)
+  if not selection then
+    local environment = environment_at(
+      {x = candidate.x, z = candidate.z},
+      terrain.sample_column(candidate.x, candidate.z))
+    local profile = perfectworld.planner.create_village_profile(candidate, environment)
+    profile.regional_anchor = {x = candidate.x, z = candidate.z}
+    profile.selected_site = nil
+    profile.ecology_error = selection_error
+    local plan = {
+      village_id = candidate.id,
+      generator_version = profile.generator_version,
+      settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION,
+      seed_key = profile.seed_key,
+      archetype = profile.archetype,
+      size_class = profile.size_class,
+      environment = environment,
+      material_palette = profile.material_palette,
+      palette_id = profile.palette_id,
+      center = {x = candidate.x, z = candidate.z},
+      bounds = {
+        min_x = candidate.x, max_x = candidate.x,
+        min_z = candidate.z, max_z = candidate.z,
+      },
+      roads = {},
+      lots = {},
+      structure_roles = profile.structure_roles,
+      required_roles = profile.required_roles,
+      optional_roles = profile.optional_roles,
+      role_counts = {},
+      rejections = {[selection_error or "no_suitable_ecological_site"] = 1},
+      viable = false,
+      regional_anchor = {x = candidate.x, z = candidate.z},
+      ecology_error = selection_error,
+    }
+    plan.road_graph_signature = road_graph_signature(plan.roads, plan.center)
+    plan.road_graph_fingerprint = hash32(plan.road_graph_signature)
+    plan.exact_plan_signature = exact_plan_signature(plan)
+    plan.exact_plan_fingerprint = hash32(plan.exact_plan_signature)
+    plan.structural_signature = structural_plan_signature(plan)
+    plan.structural_fingerprint = hash32(plan.structural_signature)
+    plan.fingerprint = plan.exact_plan_fingerprint
+    return plan, profile, environment
+  end
+
+  local selected_candidate = perfectworld.core.deep_copy(candidate)
+  selected_candidate.x = selection.site.x
+  selected_candidate.z = selection.site.z
+  local environment = selection.environment
+  local ecology_record = perfectworld.core.deep_copy(selection.evidence)
+  ecology_record.specialization_scores =
+    perfectworld.core.deep_copy(selection.specialization_scores)
+  environment.elevation = selection.evidence.elevation
+  environment.roughness = selection.evidence.roughness
+  environment.average_slope = selection.evidence.average_slope
+  environment.water_proximity = selection.evidence.shore_distance or 999
+  environment.vegetation_density =
+    math.floor((selection.evidence.tree_ratio or 0) * 100 + 0.5)
+  environment.available_material_profile = environment.biome_family or "temperate"
+  environment.specialization = selection.specialization
+  environment.specialization_score = selection.specialization_score
+  environment.ecology = ecology_record
+
+  local profile = perfectworld.planner.create_village_profile(
+    selected_candidate, environment)
+  profile.regional_anchor = {x = candidate.x, z = candidate.z}
+  profile.selected_site = {
+    x = selection.site.x,
+    y = terrain.surface_y(selection.site.x, selection.site.z) or 0,
+    z = selection.site.z,
+  }
+  profile.specialization = selection.specialization
+  profile.specialization_score = selection.specialization_score
+  profile.specialization_definition =
+    perfectworld.core.deep_copy(selection.definition)
+  profile.ecology = ecology_record
+
+  local plan = perfectworld.planner.build_village_plan(
+    selected_candidate, profile, environment, terrain)
+  plan.settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION
+  plan.regional_anchor = perfectworld.core.deep_copy(profile.regional_anchor)
+  plan.selected_site = perfectworld.core.deep_copy(profile.selected_site)
+  plan.specialization = profile.specialization
+  plan.specialization_score = profile.specialization_score
+  plan.ecology = perfectworld.core.deep_copy(profile.ecology)
 
   -- Documented fallback: the archetype is chosen from the environment profile
   -- before any lot is tested against the ground. When a flat archetype turns
@@ -1434,9 +1589,16 @@ function perfectworld.planner.plan_village(candidate, env_override, terrain)
     local fallback = perfectworld.core.deep_copy(profile)
     fallback.archetype = "hillside"
     fallback.archetype_fallback_from = profile.archetype
-    local retry = perfectworld.planner.build_village_plan(candidate, fallback, environment, terrain)
+    local retry = perfectworld.planner.build_village_plan(
+      selected_candidate, fallback, environment, terrain)
     if retry.viable then
       retry.archetype_fallback_from = profile.archetype
+      retry.settlement_grammar_version = SETTLEMENT_GRAMMAR_VERSION
+      retry.regional_anchor = perfectworld.core.deep_copy(profile.regional_anchor)
+      retry.selected_site = perfectworld.core.deep_copy(profile.selected_site)
+      retry.specialization = profile.specialization
+      retry.specialization_score = profile.specialization_score
+      retry.ecology = perfectworld.core.deep_copy(profile.ecology)
       return retry, fallback, environment
     end
   end
