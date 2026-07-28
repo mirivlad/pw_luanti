@@ -50,4 +50,6 @@ function perfectworld.settlements.get_by_candidate(candidate_id)
   return perfectworld.settlements.get(candidate_id)
 end
 
+dofile(minetest.get_modpath("pw_settlements") .. "/specializations.lua")
+
 minetest.log("action", "[pw_settlements] loaded")
