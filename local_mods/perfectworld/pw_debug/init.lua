@@ -122,6 +122,232 @@ minetest.register_chatcommand("pw_plan", {
   end,
 })
 
+minetest.register_chatcommand("pw_road_network", {
+  params = "[radius] | <rx> <rz> [radius]",
+  description = "Report the planned roads between settlements around the player",
+  privs = {interact = true},
+  func = function(name, params)
+    local rx, rz, radius
+    local rx_str, rz_str, radius_str = tostring(params or ""):match("^(%-?%d+)%s+(%-?%d+)%s*(%-?%d*)$")
+    if rx_str then
+      rx, rz = tonumber(rx_str), tonumber(rz_str)
+      radius = tonumber(radius_str) or 1
+    else
+      local player = minetest.get_player_by_name(name)
+      if not player then return false, "Player not found" end
+      local pos = player:get_pos()
+      if not pos then return false, "No position" end
+      radius = tonumber(params) or 1
+      rx, rz = perfectworld.get_region_coords(pos)
+    end
+
+    -- Collect by id: the same link is planned by both the regions it joins,
+    -- and counting it twice would flatter the network.
+    local links, classes, total_distance = {}, {}, 0
+    local anchors = 0
+    for dx = -radius, radius do
+      for dz = -radius, radius do
+        local plan = perfectworld.planner.plan_region(rx + dx, rz + dz)
+        anchors = anchors + #(plan.road_anchors or {})
+        for _, link in ipairs(perfectworld.roads.plan_links(rx + dx, rz + dz)) do
+          if not links[link.id] then
+            links[link.id] = link
+            classes[link.kind] = (classes[link.kind] or 0) + 1
+            total_distance = total_distance + link.distance
+          end
+        end
+      end
+    end
+
+    local ordered = {}
+    for _, link in pairs(links) do ordered[#ordered + 1] = link end
+    table.sort(ordered, function(a, b) return a.id < b.id end)
+
+    local lines = {
+      string.format("regions=%d^2 around (%d,%d)  anchors=%d  links=%d  total_length=%d",
+        radius * 2 + 1, rx, rz, anchors, #ordered, total_distance),
+    }
+    local class_parts = {}
+    for _, class in ipairs({"highway", "road", "track"}) do
+      class_parts[#class_parts + 1] = class .. "=" .. (classes[class] or 0)
+    end
+    table.insert(lines, table.concat(class_parts, " "))
+    for _, link in ipairs(ordered) do
+      table.insert(lines, string.format("%s %s w=%d %d nodes (%d,%d)->(%d,%d) points=%d",
+        link.kind, link.id, link.width, link.distance,
+        link.from.x, link.from.z, link.to.x, link.to.z, #link.points))
+    end
+    return true, table.concat(lines, "\n")
+  end,
+})
+
+minetest.register_chatcommand("pw_roads_pave", {
+  params = "[chunk_radius]",
+  description = "Lay the settlement roads crossing the area around the player",
+  privs = {server = true},
+  func = function(name, params)
+    local player = minetest.get_player_by_name(name)
+    if not player then return false, "Player not found" end
+    local pos = player:get_pos()
+    if not pos then return false, "No position" end
+
+    -- Terrain that was generated before roads existed never had the chunk hook
+    -- run over it. This lays the same stretches by hand, over the area the
+    -- caller is standing in.
+    --
+    -- The ground has to be there to pave on: `set_node` into an unloaded block
+    -- writes nothing and reports nothing, so the area is emerged first and the
+    -- work happens when it arrives.
+    local radius = math.min(math.max(tonumber(params) or 1, 0), 4)
+    local size = 80
+    local base_x = math.floor(pos.x / size) * size
+    local base_z = math.floor(pos.z / size) * size
+    local minp = {x = base_x - radius * size, y = -64, z = base_z - radius * size}
+    local maxp = {
+      x = base_x + (radius + 1) * size - 1, y = 200,
+      z = base_z + (radius + 1) * size - 1,
+    }
+
+    minetest.emerge_area(minp, maxp, function(_, _, remaining)
+      if remaining > 0 then return end
+      local total = {links = 0, segments = 0, nodes = 0, chunks = 0, bridged = 0, unbridged = 0}
+      for cx = -radius, radius do
+        for cz = -radius, radius do
+          local chunk_min = {x = base_x + cx * size, y = -64, z = base_z + cz * size}
+          local chunk_max = {x = chunk_min.x + size - 1, y = 256, z = chunk_min.z + size - 1}
+          local result = perfectworld.planner.pave_links_in_chunk(chunk_min, chunk_max)
+          total.chunks = total.chunks + 1
+          total.links = total.links + result.links
+          total.segments = total.segments + result.segments
+          total.nodes = total.nodes + result.nodes
+          total.bridged = total.bridged + (result.bridged or 0)
+          total.unbridged = total.unbridged + (result.unbridged or 0)
+        end
+      end
+      local report = string.format(
+        "pw_roads_pave: %d chunk(s) around (%d,%d): %d link stretch(es), %d nodes, "
+          .. "%d bridged, %d left at the water's edge",
+        total.chunks, math.floor(pos.x), math.floor(pos.z),
+        total.links, total.nodes, total.bridged, total.unbridged)
+      minetest.log("action", "[pw_debug] " .. report)
+      minetest.chat_send_player(name, report)
+    end)
+
+    return true, string.format("emerging %d chunk(s) to pave; the report follows",
+      (radius * 2 + 1) ^ 2)
+  end,
+})
+
+minetest.register_chatcommand("pw_road_check", {
+  params = "[range]",
+  description = "Read back the settlement roads on the ground around the player",
+  privs = {interact = true},
+  func = function(name, params)
+    local player = minetest.get_player_by_name(name)
+    if not player then return false, "Player not found" end
+    local pos = player:get_pos()
+    if not pos then return false, "No position" end
+    local range = math.min(math.max(tonumber(params) or 120, 16), 600)
+
+    local minp = {x = math.floor(pos.x - range), y = -64, z = math.floor(pos.z - range)}
+    local maxp = {x = math.floor(pos.x + range), y = 256, z = math.floor(pos.z + range)}
+
+    --- Where the road surface sits in this column, if it is there at all.
+    --
+    -- The whole column is searched rather than a window around the caller: a
+    -- road runs downhill, the caller is standing wherever they teleported to,
+    -- and a search anchored to them reports "no road" for a road that is
+    -- simply lower down the valley.
+    local function surface_at(x, z, material, deck)
+      for y = 200, -20, -1 do
+        local name = minetest.get_node({x = x, y = y, z = z}).name
+        -- The deck of a bridge is road as much as the paving either side of it
+        -- is; a check that only recognised the surface material would report a
+        -- working crossing as a hole in the road.
+        if name == material or name == deck then return y end
+      end
+      return nil
+    end
+    local deck_material = perfectworld.compat.get_material("wood_planks",
+      {required = false})
+
+    local lines = {}
+    local any = false
+    for _, link in ipairs(perfectworld.planner._links_near_chunk(minp, maxp)) do
+      local material = perfectworld.compat.get_material(link.surface or "road",
+        {required = false})
+      -- Walk the centreline one node at a time and ask the world what is there.
+      local paved, missing, biggest_step, gap, worst_gap = 0, 0, 0, 0, 0
+      local previous_y = nil
+      local lowest, highest = nil, nil
+      local instead = {}
+      local inside = 0
+      for i = 1, #link.points - 1 do
+        local from, to = link.points[i], link.points[i + 1]
+        local dx, dz = to.x - from.x, to.z - from.z
+        local steps = math.max(math.abs(dx), math.abs(dz), 1)
+        for s = 0, steps do
+          local t = s / steps
+          local x = math.floor(from.x + dx * t + 0.5)
+          local z = math.floor(from.z + dz * t + 0.5)
+          if x >= minp.x and x <= maxp.x and z >= minp.z and z <= maxp.z then
+            inside = inside + 1
+            local y = surface_at(x, z, material, deck_material)
+            if y then
+              paved = paved + 1
+              if not lowest or y < lowest then lowest = y end
+              if not highest or y > highest then highest = y end
+              if previous_y then
+                local step = math.abs(y - previous_y)
+                if step > biggest_step then biggest_step = step end
+              end
+              previous_y = y
+              if gap > worst_gap then worst_gap = gap end
+              gap = 0
+            else
+              missing = missing + 1
+              gap = gap + 1
+              previous_y = nil
+              -- Saying "not paved" is not a diagnosis. What is standing there
+              -- instead usually is: water says the road needs a bridge, stone
+              -- says it was refused, ignore says the ground was never loaded.
+              local found = "ignore"
+              for y = 200, -20, -1 do
+                local node = minetest.get_node({x = x, y = y, z = z}).name
+                if node ~= "air" then found = node break end
+              end
+              instead[found] = (instead[found] or 0) + 1
+            end
+          end
+        end
+      end
+      if gap > worst_gap then worst_gap = gap end
+
+      if inside > 0 then
+        any = true
+        local excuses = {}
+        for node, count in pairs(instead) do
+          excuses[#excuses + 1] = node .. "x" .. count
+        end
+        table.sort(excuses)
+        local line = string.format(
+          "%s %s: %d/%d cells paved, longest gap %d, biggest step %d, y %s..%s%s",
+          link.kind, link.id, paved, inside, worst_gap, biggest_step,
+          tostring(lowest), tostring(highest),
+          #excuses > 0 and ("  instead: " .. table.concat(excuses, " ")) or "")
+        table.insert(lines, line)
+        -- One line per link in the log as well: a multi-line chat result is
+        -- one log entry, and everything after the first line is invisible to
+        -- anything reading the log.
+        minetest.log("action", "[pw_debug] pw_road_check " .. line)
+      end
+    end
+
+    if not any then return true, "no settlement road passes within " .. range .. " nodes" end
+    return true, table.concat(lines, "\n")
+  end,
+})
+
 minetest.register_chatcommand("pw_structure", {
   params = "<structure_id>",
   description = "Show a materialized PerfectWorld structure record",

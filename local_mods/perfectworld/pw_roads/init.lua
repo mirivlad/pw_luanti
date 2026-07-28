@@ -3,6 +3,10 @@ _G.perfectworld = perfectworld
 perfectworld.roads = perfectworld.roads or {}
 
 dofile(minetest.get_modpath("pw_roads") .. "/geometry.lua")
+-- The inter-settlement graph reads region plans, which pw_planner supplies
+-- later. It resolves the planner at call time, so loading order does not
+-- matter and there is no cycle to break.
+dofile(minetest.get_modpath("pw_roads") .. "/network.lua")
 
 -- Road persistence is supplied after pw_planner loads. Keeping geometry and
 -- the public API here avoids a dependency cycle and gives every consumer the

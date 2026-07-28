@@ -259,6 +259,9 @@ perfectworld.roads.set_provider({
 function perfectworld.planner._test_clear_cache()
 	cache = {}
 	store.drop_cache()
+	if perfectworld.roads and perfectworld.roads._test_clear_link_cache then
+		perfectworld.roads._test_clear_link_cache()
+	end
 end
 
 -- === Candidate Type Helpers ===
@@ -3319,6 +3322,337 @@ function perfectworld.planner.pending_village_count()
 	return n
 end
 
+-- === Roads between settlements ===
+--
+-- Village streets are built when the village is; the roads that join villages
+-- cannot be, because the far end of a link is usually hundreds of nodes away in
+-- terrain nobody has generated yet, and `minetest.set_node` into an unloaded
+-- block writes nothing at all.
+--
+-- So a link is paved the way the world is discovered: each mapchunk lays the
+-- stretch that crosses it, and the road grows to meet itself. Which end was
+-- built first stops mattering, and no pass ever writes outside the chunk it was
+-- handed.
+
+--- How far outside the chunk a segment may start and still be worth paving.
+--- A road two wide, drawn diagonally, reaches a little past its centreline.
+local LINK_CHUNK_MARGIN = 4
+
+local function segment_touches_chunk(a, b, minp, maxp)
+  local low_x = math.min(a.x, b.x) - LINK_CHUNK_MARGIN
+  local high_x = math.max(a.x, b.x) + LINK_CHUNK_MARGIN
+  local low_z = math.min(a.z, b.z) - LINK_CHUNK_MARGIN
+  local high_z = math.max(a.z, b.z) + LINK_CHUNK_MARGIN
+  return low_x <= maxp.x and high_x >= minp.x
+    and low_z <= maxp.z and high_z >= minp.z
+end
+
+perfectworld.planner._segment_touches_chunk = segment_touches_chunk
+
+--- Every link that could possibly cross this chunk, each one once.
+--
+-- `plan_links` returns the links with an end in the region it is asked about,
+-- so a link merely passing overhead is only found by asking the region its far
+-- end sits in. A link is capped below one region in length, which is why one
+-- ring of neighbours is enough to catch every one of them.
+local function links_near_chunk(minp, maxp)
+  if not perfectworld.roads or not perfectworld.roads.plan_links then return {} end
+  local rx_min, rz_min = perfectworld.get_region_coords(minp)
+  local rx_max, rz_max = perfectworld.get_region_coords(maxp)
+  local seen, found = {}, {}
+  for rx = rx_min - 1, rx_max + 1 do
+    for rz = rz_min - 1, rz_max + 1 do
+      for _, link in ipairs(perfectworld.roads.plan_links(rx, rz)) do
+        if not seen[link.id] then
+          seen[link.id] = true
+          found[#found + 1] = link
+        end
+      end
+    end
+  end
+  table.sort(found, function(a, b) return a.id < b.id end)
+  return found
+end
+
+perfectworld.planner._links_near_chunk = links_near_chunk
+
+--- Ground that already has a building on it.
+--
+-- A link is drawn to the middle of the settlement it serves, because that is
+-- where the anchor is; what it must actually do on arrival is stop at the
+-- houses and let the village's own streets take over.
+local function standing_buildings(minp, maxp)
+  local rx_min, rz_min = perfectworld.get_region_coords(minp)
+  local rx_max, rz_max = perfectworld.get_region_coords(maxp)
+  local coord_tag = perfectworld.core.coord_tag
+  local boxes = {}
+
+  -- Only the regions around this chunk. A settlement's structures are stored in
+  -- its own region's shard, and a settlement near a border can spill one region
+  -- over, so one ring of neighbours covers everything that could stand here.
+  local visited = {}
+  for rx = rx_min - 1, rx_max + 1 do
+    for rz = rz_min - 1, rz_max + 1 do
+      local shard = coord_tag(rx) .. "_" .. coord_tag(rz)
+      if not visited[shard] then
+        visited[shard] = true
+        for _, record in pairs(store.region("structures", shard)) do
+          if record and record.status == "materialized"
+            and record.footprint_min and record.footprint_max then
+            local low, high = record.footprint_min, record.footprint_max
+            if low.x - 1 <= maxp.x and high.x + 1 >= minp.x
+              and low.z - 1 <= maxp.z and high.z + 1 >= minp.z then
+              boxes[#boxes + 1] = {
+                min_x = low.x - 1, max_x = high.x + 1,
+                min_z = low.z - 1, max_z = high.z + 1,
+              }
+            end
+          end
+        end
+      end
+    end
+  end
+  if #boxes == 0 then return nil end
+  return function(x, z)
+    for _, box in ipairs(boxes) do
+      if x >= box.min_x and x <= box.max_x
+        and z >= box.min_z and z <= box.max_z then
+        return true
+      end
+    end
+    return false
+  end
+end
+
+perfectworld.planner._standing_buildings = standing_buildings
+
+--- The greatest rise between one node of road and the next.
+--
+-- One, because that is what a walker can step up. Everything about the height
+-- profile below exists to hold this, which is the difference between a road
+-- and a line of blocks laid on a hillside.
+local LINK_GRADE = 1
+
+--- How far past the chunk a stretch is paved, so neighbouring passes overlap
+--- instead of meeting at a seam neither of them smoothed.
+local LINK_SEAM_OVERLAP = 8
+
+--- The widest water a road will cross. Beyond this it is not a bridge, it is a
+--- causeway across a sea, and the road simply stops at the shore.
+local BRIDGE_MAX_SPAN = 48
+
+--- The centreline of a link, one cell per node travelled.
+local function link_centreline(link)
+  local cells = {}
+  local last_key = nil
+  for i = 1, #(link.points or {}) - 1 do
+    local from, to = link.points[i], link.points[i + 1]
+    local dx, dz = to.x - from.x, to.z - from.z
+    local steps = math.max(math.abs(dx), math.abs(dz), 1)
+    for s = 0, steps do
+      local t = s / steps
+      local x = math.floor(from.x + dx * t + 0.5)
+      local z = math.floor(from.z + dz * t + 0.5)
+      local key = x .. ":" .. z
+      if key ~= last_key then
+        cells[#cells + 1] = {x = x, z = z}
+        last_key = key
+      end
+    end
+  end
+  return cells
+end
+
+perfectworld.planner._link_centreline = link_centreline
+
+--- Flatten a run of ground heights into a profile a walker can follow.
+--
+-- The rule is one-sided: a road may be cut into a hill, never raised above it.
+-- Raising would leave the carriageway floating over the slope it is supposed to
+-- be part of, and every attempt to fill underneath turns a hillside into a
+-- viaduct. Cutting leaves a hollow way, which is what old roads actually are.
+--
+-- Two passes are enough and are exact. `min(raw[j] + |i - j|)` over every j is
+-- the lowest profile that both stays under the ground and never rises faster
+-- than the grade, and a forward min-pass followed by a backward one computes
+-- precisely that.
+local function walkable_profile(raw, first, last, grade)
+  grade = grade or LINK_GRADE
+  local y = {}
+  for i = first, last do y[i] = raw[i] end
+  for i = first + 1, last do
+    if y[i] and y[i - 1] and y[i] > y[i - 1] + grade then y[i] = y[i - 1] + grade end
+  end
+  for i = last - 1, first, -1 do
+    if y[i] and y[i + 1] and y[i] > y[i + 1] + grade then y[i] = y[i + 1] + grade end
+  end
+  return y
+end
+
+perfectworld.planner._walkable_profile = walkable_profile
+
+--- Which cells sit on water, and whether that water is narrow enough to bridge.
+local function bridgeable(water, first, last)
+  local ok = {}
+  local run_start = nil
+  for i = first, last + 1 do
+    if water[i] and i <= last then
+      run_start = run_start or i
+    elseif run_start then
+      local span = i - run_start
+      for j = run_start, i - 1 do ok[j] = span <= BRIDGE_MAX_SPAN end
+      run_start = nil
+    end
+  end
+  return ok
+end
+
+perfectworld.planner._bridgeable = bridgeable
+
+--- Lay one continuous stretch of a link.
+--
+-- The whole stretch shares one height profile. Paving segment by segment, as
+-- village streets do, restarts the profile at every corner: on a slope the road
+-- drifts away from the ground within a segment and then jumps back to it at the
+-- next, which reads as a staircase with a cliff in it every forty nodes.
+local function pave_link_stretch(link, cells, first, last, blocked)
+  local surface = perfectworld.compat.get_material(link.surface or "road",
+    {required = false})
+  local deck = perfectworld.compat.get_material("wood_planks", {required = false})
+  local fill = perfectworld.compat.get_material("ground", {required = false})
+  local width = link.width or 1
+
+  -- What the ground does under the stretch. Water is recorded at its surface:
+  -- a bridge is laid level with the bank, not on the lake bed.
+  local raw, water = {}, {}
+  for i = first, last do
+    local column = world_terrain.sample_column(cells[i].x, cells[i].z)
+    if column then
+      -- A deck already laid over this water reads as solid ground, and the next
+      -- pass — the neighbouring chunk's, overlapping this one — would replace
+      -- the planks with road surface and turn the bridge into a dirt causeway.
+      -- What is underneath still says water, so that is what is asked.
+      local underneath = minetest.get_node(
+        {x = cells[i].x, y = column.y - 1, z = cells[i].z}).name
+      water[i] = column.liquid == true
+        or perfectworld.compat.is_liquid_node(underneath)
+      raw[i] = water[i] and column.y
+        or (paving_level(cells[i].x, cells[i].z) or column.y)
+    end
+  end
+
+  local y = walkable_profile(raw, first, last)
+  local crossable = bridgeable(water, first, last)
+
+  local placed, bridged, unbridged, deepest_cut = 0, 0, 0, 0
+  for i = first, last do
+    local level = y[i]
+    local skip = water[i] and not crossable[i]
+    if level and not skip then
+      -- Across the direction of travel, taken from the neighbours rather than
+      -- from one segment, so the strip does not kink at a corner.
+      local ahead = cells[math.min(i + 1, last)]
+      local behind = cells[math.max(i - 1, first)]
+      local offsets = perfectworld.roads.cross_section(
+        ahead.x - behind.x, ahead.z - behind.z, width)
+      local material = water[i] and deck or surface
+      local cut = (raw[i] and raw[i] > level) and (raw[i] - level) or 0
+      if cut > deepest_cut then deepest_cut = cut end
+      if water[i] then bridged = bridged + 1 end
+
+      for _, offset in ipairs(offsets) do
+        local px, pz = cells[i].x + offset.x, cells[i].z + offset.z
+        if not (blocked and blocked(px, pz)) then
+          -- Head-room, and enough of it to see daylight out of a cutting.
+          for above = 1, math.max(3, cut + 3) do
+            local pos = {x = px, y = level + above, z = pz}
+            local name = minetest.get_node(pos).name
+            if name ~= "air" and name ~= "ignore" then
+              minetest.set_node(pos, {name = "air"})
+            end
+          end
+          minetest.set_node({x = px, y = level, z = pz}, {name = material})
+          local below = minetest.get_node({x = px, y = level - 1, z = pz}).name
+          if below == "air" or below == "ignore" then
+            minetest.set_node({x = px, y = level - 1, z = pz}, {name = fill})
+          end
+          placed = placed + 1
+        end
+      end
+    elseif skip then
+      unbridged = unbridged + 1
+    end
+  end
+
+  return placed, bridged, unbridged, deepest_cut
+end
+
+perfectworld.planner._pave_link_stretch = pave_link_stretch
+
+--- Lay the stretch of every settlement link that crosses this chunk.
+function perfectworld.planner.pave_links_in_chunk(minp, maxp)
+  local result = {links = 0, segments = 0, nodes = 0, bridged = 0, unbridged = 0}
+  if perfectworld.materialization_enabled == false then return result end
+
+  local blocked = standing_buildings(minp, maxp)
+  world_terrain.reset()
+  for _, link in ipairs(links_near_chunk(minp, maxp)) do
+    local nodes, segments = 0, 0
+
+    -- Cheap rejection first. Walking a link cell by cell means up to nine
+    -- hundred columns, and most links near a chunk do not come near it.
+    local worth_walking = false
+    for i = 1, #link.points - 1 do
+      if segment_touches_chunk(link.points[i], link.points[i + 1], minp, maxp) then
+        worth_walking = true
+        break
+      end
+    end
+
+    local cells = worth_walking and link_centreline(link) or {}
+
+    -- The run of cells this chunk is responsible for, widened so that the
+    -- neighbouring chunk's run overlaps it rather than butting against it.
+    local first, last = nil, nil
+    for i = 1, #cells do
+      local cell = cells[i]
+      if cell.x >= minp.x - LINK_CHUNK_MARGIN and cell.x <= maxp.x + LINK_CHUNK_MARGIN
+        and cell.z >= minp.z - LINK_CHUNK_MARGIN and cell.z <= maxp.z + LINK_CHUNK_MARGIN then
+        first = first or i
+        last = i
+      end
+    end
+
+    if first then
+      first = math.max(1, first - LINK_SEAM_OVERLAP)
+      last = math.min(#cells, last + LINK_SEAM_OVERLAP)
+      segments = 1
+      local bridged, unbridged
+      nodes, bridged, unbridged = pave_link_stretch(link, cells, first, last, blocked)
+      result.bridged = result.bridged + bridged
+      result.unbridged = result.unbridged + unbridged
+    end
+
+    if segments > 0 then
+      result.links = result.links + 1
+      result.segments = result.segments + segments
+      result.nodes = result.nodes + nodes
+
+      -- Record what exists, adding to whatever earlier chunks laid rather than
+      -- replacing it: no single pass ever sees the whole road.
+      local existing = perfectworld.planner.get_road(link.id)
+      local record = deep_copy(link)
+      record.path = link.points
+      record.length = #link.points
+      record.segment_count = math.max(#link.points - 1, 0)
+      record.nodes_placed = (existing and existing.nodes_placed or 0) + nodes
+      record.chunks_paved = (existing and existing.chunks_paved or 0) + 1
+      perfectworld.planner.save_road(record)
+    end
+  end
+  return result
+end
+
 function perfectworld.planner.materialize_chunk(minp, maxp)
 	local rx_min, rz_min = perfectworld.get_region_coords(minp)
 	local rx_max, rz_max = perfectworld.get_region_coords(maxp)
@@ -3361,6 +3695,10 @@ function perfectworld.planner.materialize_chunk(minp, maxp)
 			end
 		end
 	end
+
+	-- Roads last, so the chunk's own buildings are standing and the paving
+	-- stops at them rather than through them.
+	result.roads = perfectworld.planner.pave_links_in_chunk(minp, maxp)
 	return result
 end
 

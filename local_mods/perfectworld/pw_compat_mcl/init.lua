@@ -8,6 +8,10 @@ local materials = {
   roof = "mcl_stairs:slab_oak",
   floor = "mcl_core:wood",
   road = "mcl_core:coarse_dirt",
+  -- A footpath: visibly not the ground it crosses, which is what lets both a
+  -- player and the bot tell a track from a stretch of bare earth. Named apart
+  -- from the biome palettes' own `path`, which is a village street surface.
+  footpath = "mcl_core:grass_path",
   fence = "mcl_fences:fence",
   door = "mcl_doors:door_oak_b_1",
   door_top = "mcl_doors:door_oak_t_1",
@@ -53,6 +57,7 @@ local materials = {
 
 local fallbacks = {
   road = "mcl_core:dirt",
+  footpath = "mcl_core:coarse_dirt",
   fence = "air",
   door = "mcl_core:wood",
   door_top = "air",

@@ -174,6 +174,19 @@ function store.all(kind)
   return out
 end
 
+--- Every record of this kind that belongs to one region, as `id -> record`.
+--
+-- The point of sharding is that a caller who knows where it is looking should
+-- not pay for the rest of the world. Mapchunk generation asks this on every
+-- chunk; `all` would have made it read every region that has ever been built.
+function store.region(kind, shard)
+  local out = {}
+  for id, record in pairs(read_map(shard_key(kind, shard))) do
+    out[id] = record
+  end
+  return out
+end
+
 --- Forget every decoded map. For tests that write storage behind the API.
 function store.drop_cache()
   decoded = {}
