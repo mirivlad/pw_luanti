@@ -48,3 +48,6 @@ __pycache__/
 runtime/pw-bot-artifacts/
 runtime/pwbot.toml
 runtime/secrets/
+
+# Agent worktrees
+.worktrees/
