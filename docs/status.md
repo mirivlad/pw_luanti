@@ -159,6 +159,7 @@ it is meant to fail. Run it with `scripts/pw-bot-course.sh build` then
 | `walk_straight`, `turn_corner`, `step_up`, `climb_stairs` | reached — the body walks, turns, climbs a kerb and takes stairs |
 | `open_door` | reached — `door_acacia_t_1` → `_t_2`, closed to open, empty hand, crosshair on the door |
 | `enter_room`, `leave_room` | reached — through the doorway it opened, and out the far side |
+| `open_gate`, `open_trapdoor` | reached — a fence gate and a trapdoor inside the room, both opened by hand |
 | the five obstacles that must fail | all `blocked`, and no longer by an unopened door |
 
 Everything physical the bot does goes through XTEST into a real client. Nothing
@@ -166,8 +167,8 @@ teleports it after the start line.
 
 ### What was wrong, and how it was found
 
-Four defects, each of which alone stopped every interaction, and all four found
-by measuring rather than reasoning:
+Six defects, each of which alone stopped an interaction, and all found by
+measuring rather than reasoning:
 
 1. **The pointer warp destroyed the aim.** The runtime aimed, then warped the
    pointer to the window centre, then pressed. Luanti turns the head from
@@ -183,6 +184,17 @@ by measuring rather than reasoning:
    its lower node, which from the doorstep is a node below eye level a node
    away — the ray hit the floor at the bot's feet. Aiming is now closed-loop
    against what the crosshair reports.
+5. **Aiming at a node's centre misses a thin node.** A closed trapdoor fills a
+   fraction of its node; a ray through the middle passes into the wall behind.
+   The aim tries fractional heights too.
+6. **An opened gate stops being visible, and that read as failure.** A closed
+   leaf blocks the ray, an open one does not. Had the click done nothing, the
+   closed leaf would still be blocking and still be reported — so the
+   disappearance is evidence, not silence.
+
+The wrong-field lookup in (3) appeared in three separate places and was fixed
+three times, each time after it had produced a different, plausible-looking
+failure. It is the single most expensive mistake in this cycle.
 
 Ruled out along the way, with evidence rather than argument: the client does
 read `client.conf` and its bindings are live (moving `keymap_forward` to a
@@ -200,8 +212,15 @@ wall of the *first* of them. Only that first obstacle is genuinely under test;
 the other four sit behind a wall the bot cannot pass. Better than being stopped
 by an unopened door, and still not proof.
 
-Interaction is also tested against one door and nothing else. Chests, gates,
-levers and buttons go through the same path but have never been tried.
+Interaction is tested against a door, a fence gate and a trapdoor. Chests,
+levers, buttons and furnaces go through the same path but have never been tried,
+and a chest is the interesting case: opening one changes no node state, so the
+current "did the world answer" check has nothing to see.
+
+One run in three had `leave_room` return `blocked by something` with no node
+named, and the next run of the same course passed it. That is flaky rather than
+fixed, and an obstacle report that cannot name what stopped the bot is worth
+chasing on its own.
 
 ## Missing Systems
 
