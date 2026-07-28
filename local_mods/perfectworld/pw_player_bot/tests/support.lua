@@ -185,6 +185,41 @@ function support.drop_scratch_brain()
   bridge.unregister_bot(support.SCRATCH_BOT, support.ACTOR)
 end
 
+--- Somewhere flat, dry and dull to run an integration test from.
+support.SCRATCH_GROUND = {x = 31337, y = 24, z = -31337}
+
+--- Put the test player on ordinary ground for the duration of `fn`.
+--
+-- Integration tests otherwise inherit whatever position the world last left the
+-- player in — after a diagnostic that teleported them into a lake, for one. A
+-- bot standing in water is *right* to re-decide every tick, because safety
+-- overrides holding on to a plan, so a test about not dithering that runs from
+-- a lake is measuring the lake.
+--
+-- The platform is built rather than searched for: a test that goes looking for
+-- suitable ground is only as reliable as the ground it happens to find.
+function support.on_ordinary_ground(player, fn)
+  local origin = support.SCRATCH_GROUND
+  local ground = (perfectworld and perfectworld.compat
+    and perfectworld.compat.get_material("ground", {required = false}))
+    or "mcl_core:dirt"
+  local radius = 10
+  for x = origin.x - radius, origin.x + radius do
+    for z = origin.z - radius, origin.z + radius do
+      minetest.set_node({x = x, y = origin.y - 1, z = z}, {name = ground})
+      for dy = 0, 4 do
+        minetest.set_node({x = x, y = origin.y + dy, z = z}, {name = "air"})
+      end
+    end
+  end
+
+  local previous = player:get_pos()
+  player:set_pos({x = origin.x, y = origin.y, z = origin.z})
+  local ok, err = pcall(fn)
+  if previous then player:set_pos(previous) end
+  if not ok then error(err, 0) end
+end
+
 --- Restore whatever brain and bridge state a real player had.
 function support.with_bot_state(player_name, fn)
   local was_thinking = P.is_thinking(player_name)

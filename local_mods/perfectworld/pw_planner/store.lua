@@ -46,6 +46,8 @@ store.KINDS = {
   structures  = {prefix = "pw_structures",  legacy = "pw_materialized_structures"},
   settlements = {prefix = "pw_settlements", legacy = "pw_settlement_plans"},
   roads       = {prefix = "pw_roads_store", legacy = "pw_roads"},
+  -- Who lives where. No legacy key: nothing has ever written this before.
+  population  = {prefix = "pw_population",  legacy = "pw_population_legacy"},
 }
 
 --- Decoded shards, by storage key. Same contract as the cache this replaces:

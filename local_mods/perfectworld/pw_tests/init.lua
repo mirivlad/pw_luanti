@@ -22,6 +22,7 @@ local test_files = {
   "ecology",
   "roads",
   "road_network",
+  "population",
   "worksites",
 }
 

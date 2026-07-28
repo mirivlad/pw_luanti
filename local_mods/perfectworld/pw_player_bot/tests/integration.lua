@@ -137,6 +137,7 @@ test("brain_holds_a_fresh_intent_instead_of_dithering", function(ctx)
   if not player then return ctx.skip(reason) end
 
   support.with_bot_state(name, function()
+   support.on_ordinary_ground(player, function()
     bridge.register_bot(name, {mode = "player", limits = {
       max_requests_per_second = 100, max_request_burst = 200,
     }}, support.ACTOR)
@@ -151,12 +152,24 @@ test("brain_holds_a_fresh_intent_instead_of_dithering", function(ctx)
       ctx.assert.equal(document.intent_id, first.intent_id,
         "the same plan is kept while it is fresh")
     end
-    ctx.assert.is_true(reused >= 4,
-      "a bot that re-decides every tick never gets anywhere, reused=" .. reused)
 
     local status = P.get_status(name)
+    -- State the premise. A bot in danger is right to drop its plan every tick,
+    -- so if that is what happened the test must say so rather than blame the
+    -- brain for the water it was standing in.
+    local safety = (type(status.drives) == "table" and status.drives.safety) or 0
+    ctx.assert.is_true(safety <= 0.5,
+      "the premise is a bot in no danger; safety=" .. tostring(safety))
+
+    ctx.assert.is_true(reused >= 4,
+      "a bot that re-decides every tick never gets anywhere, reused=" .. reused)
     ctx.assert.is_true(status.stats.skipped_fresh_intent >= 4,
-      "and it says how often it held the plan")
+      "and it says how often it held the plan, skipped_fresh_intent="
+        .. tostring(status.stats.skipped_fresh_intent)
+        .. " reused=" .. reused
+        .. " stuck_ticks=" .. tostring(status.history and status.history.stuck_ticks)
+        .. " ticks=" .. tostring(status.ticks))
+   end)
   end)
 end)
 

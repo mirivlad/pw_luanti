@@ -2703,6 +2703,19 @@ local function materialize_village_plan(plan, profile, candidate)
   })
   perfectworld.planner.mark_placed(candidate.id)
 
+  -- People move in as soon as there is somewhere to sleep. Doing it here rather
+  -- than on a later visit means the village is inhabited the first time anyone
+  -- sees it, and the buildings are still loaded, which is what the bed search
+  -- needs. A failure to populate is not a failure to build: it is recorded and
+  -- the settlement stands regardless.
+  if perfectworld.population and perfectworld.population.populate then
+    local settled, detail = perfectworld.population.populate(candidate.id)
+    if not settled then
+      warnings[#warnings + 1] = "unpopulated:"
+        .. tostring(type(detail) == "table" and detail.reason or detail)
+    end
+  end
+
   return true, {
     settlement = settlement_record,
     structures = placed_structures,

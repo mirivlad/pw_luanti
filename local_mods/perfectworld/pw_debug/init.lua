@@ -1063,6 +1063,80 @@ minetest.register_chatcommand("pw_village_list", {
   end,
 })
 
+minetest.register_chatcommand("pw_population", {
+  params = "[settlement_id]",
+  description = "Report who lives in a settlement, or in all of them",
+  privs = {interact = true},
+  func = function(name, param)
+    if not perfectworld.population then return false, "population module not loaded" end
+
+    if param and param ~= "" then
+      local status = perfectworld.population.status(param)
+      if not status then return false, "Settlement not found: " .. param end
+      return true, string.format(
+        "%s status=%s settled=%s beds=%d spawned=%d loaded_now=%d",
+        status.settlement_id, tostring(status.status), tostring(status.settled),
+        status.recorded_beds, status.recorded_spawned, status.loaded_villagers)
+    end
+
+    -- The world-wide answer only counts records: asking every settlement how
+    -- many villagers are standing in it would load nothing and report zero for
+    -- everywhere nobody happens to be.
+    local settled, beds, people, unsettled = 0, 0, 0, 0
+    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+      local record = perfectworld.population.get_record(id)
+      if record and record.settled then
+        settled = settled + 1
+        beds = beds + (record.beds or 0)
+        people = people + (record.spawned or 0)
+      else
+        unsettled = unsettled + 1
+      end
+    end
+    return true, string.format(
+      "settlements settled=%d unsettled=%d | beds=%d villagers moved in=%d",
+      settled, unsettled, beds, people)
+  end,
+})
+
+minetest.register_chatcommand("pw_populate", {
+  params = "[settlement_id] [force]",
+  description = "Move people into a settlement that was built before they existed",
+  privs = {server = true},
+  func = function(name, param)
+    if not perfectworld.population then return false, "population module not loaded" end
+    local id, flag = (param or ""):match("^%s*(%S*)%s*(%S*)%s*$")
+    local force = flag == "force"
+
+    if not id or id == "" then
+      -- Nearest settlement to the caller, which is the one they are looking at.
+      local player = minetest.get_player_by_name(name)
+      if not player then return false, "Player not found" end
+      local pos = player:get_pos()
+      if not pos then return false, "No position" end
+      local best, best_distance = nil, math.huge
+      for _, candidate_id in ipairs(perfectworld.settlements.list_ids()) do
+        local s = perfectworld.settlements.get(candidate_id)
+        if s and s.center_pos then
+          local dx, dz = pos.x - s.center_pos.x, pos.z - s.center_pos.z
+          local d = dx * dx + dz * dz
+          if d < best_distance then best, best_distance = candidate_id, d end
+        end
+      end
+      if not best then return false, "No settlements found" end
+      id = best
+    end
+
+    local ok, result = perfectworld.population.populate(id, {force = force})
+    if not ok then
+      return false, id .. ": " .. tostring(type(result) == "table" and result.reason or result)
+    end
+    return true, string.format(
+      "%s: %d bed(s), %d already there, %d moved in, %d bed(s) with nowhere to stand",
+      id, result.beds, result.already_there, result.spawned, result.unreachable_beds)
+  end,
+})
+
 minetest.register_chatcommand("pw_village_failures", {
   params = "",
   description = "Tally why settlements did not get built",
