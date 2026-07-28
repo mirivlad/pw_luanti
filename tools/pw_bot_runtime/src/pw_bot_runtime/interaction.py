@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 from .bridge_client import BridgeClient
 from .errors import BridgeRefused, BridgeUnavailable
-from .input_backend import InputBackend
+from .input_backend import InputBackend, InputBackendError
 from .movement import MovementController
 
 #: How far a player can reach. Luanti's default hand range is 4 nodes; the
@@ -40,13 +40,25 @@ EYE_HEIGHT = 1.625
 #: landing one node above or below the named position is still the door.
 TARGET_VERTICAL_SLACK = 1
 
-#: Hotbar slot the bot selects before interacting.
+#: Hotbar slots to try, in order, when looking for an empty hand.
 #:
-#: It must actually be empty. With a *block* in hand, "use" places the block;
-#: with a *throwable* in hand it throws it; only with an empty hand does "use"
-#: reliably mean "use the thing I am looking at". Slot 8 looked empty and holds
-#: a block on this server's test player, which cost an afternoon.
-EMPTY_HOTBAR_SLOT = 5
+#: What is held decides what "use" means. With a *throwable* in hand the item's
+#: own handler runs and the pointed node is never asked; with a *block* the
+#: engine may place it instead. Only an empty hand reliably means "use the thing
+#: I am looking at".
+#:
+#: Which slot is empty is a property of the player, not of the code. Two
+#: successive guesses at a permanently-empty slot were both wrong on this
+#: server's test player — slot 8 held a block, and so did slot 5 — so the
+#: runtime stopped guessing: it selects a slot, asks the bridge what is now in
+#: hand, and moves on until the answer is "nothing".
+HOTBAR_SLOTS = (5, 4, 3, 6, 7, 8, 9, 2, 1)
+
+#: How many times to press "use" before calling an interaction ineffective.
+#: Each attempt is checked against the world, so a retry cannot turn a real
+#: failure into a reported success — it only covers a press the client's frame
+#: loop never sampled.
+INTERACT_ATTEMPTS = 3
 
 
 @dataclass
@@ -59,28 +71,47 @@ class InteractionOutcome:
 
 class InteractionController:
     def __init__(self, backend: InputBackend, bridge: BridgeClient,
-                 movement: MovementController, logger=None,
-                 window_centre=None) -> None:
+                 movement: MovementController, logger=None) -> None:
         self.input = backend
         self.bridge = bridge
         self.movement = movement
         self.log = logger
-        #: Callable returning the client window's centre, or None. A click is
-        #: delivered to whatever sits under the X pointer, and turning the head
-        #: has by then walked the pointer far from the window.
-        self.window_centre = window_centre
         self.interactions = 0
 
-    def _centre_pointer(self) -> bool:
-        """Put the pointer back on the client window before clicking."""
-        if not self.window_centre:
-            return False
-        spot = self.window_centre()
-        if not spot:
-            return False
-        self.input.warp_pointer(spot[0], spot[1])
-        time.sleep(0.12)
-        return True
+    def _wielded(self) -> str | None:
+        """What the bridge says is in the bot's hand, or None if it cannot say."""
+        try:
+            state = self.bridge.self_state()
+        except (BridgeUnavailable, BridgeRefused):
+            return None
+        item = state.raw.get("wielded_item")
+        return "" if item is None else str(item)
+
+    def _empty_hand(self) -> tuple[bool, str]:
+        """Select hotbar slots until the bridge reports an empty hand.
+
+        Returns whether the hand ended up empty, and what is in it. A hand that
+        cannot be emptied is not fatal — the interaction is still attempted, and
+        what was held is recorded so a failure can be read afterwards rather
+        than guessed at.
+        """
+        held = self._wielded()
+        if held is None:
+            return False, "unknown"
+        if held == "":
+            return True, ""
+        for slot in HOTBAR_SLOTS:
+            try:
+                self.input.select_hotbar_slot(slot)
+            except InputBackendError:
+                continue
+            time.sleep(0.15)
+            held = self._wielded()
+            if held == "":
+                return True, ""
+            if held is None:
+                return False, "unknown"
+        return False, held
 
     # --- looking at the thing ------------------------------------------------
 
@@ -178,30 +209,58 @@ class InteractionController:
 
         already_open = "door_open" in before["tags"] or "gate_open" in before["tags"]
 
-        # An empty hand. What is held decides what "use" does, and the bot
-        # starts with throwables in the first slots.
-        try:
-            self.input.select_hotbar_slot(EMPTY_HOTBAR_SLOT)
-            time.sleep(0.15)
-        except Exception:  # noqa: BLE001 - an unselectable slot is not fatal
-            pass
+        hand_empty, held = self._empty_hand()
 
-        # A key, not a button: the client config binds place to one, and a
-        # button would be delivered wherever the X pointer happens to be.
-        centred = self._centre_pointer()
-        self.input.use()
-        self.interactions += 1
-        # Mineclonia animates the leaf and the server has to tell us about it.
-        time.sleep(0.7)
+        # A key, and deliberately without touching the pointer.
+        #
+        # Luanti turns the head from *relative* pointer motion, and on a bare
+        # Xvfb with no window manager the client never grabs the pointer — which
+        # is the whole reason place is bound to a key here. So any warp, even one
+        # aimed at the middle of the client's own window, arrives as a large
+        # mouse movement and swings the view off the target in the moment
+        # between aiming and pressing. Aim, then press, and leave the pointer
+        # where it lies.
+        aimed_at = self._target_under_crosshair()
 
-        after = self._observed_state(target)
+        # Press, then look; repeat while nothing has happened.
+        #
+        # Luanti reads "place" as a *held state*, once per rendered frame. The
+        # client here draws through software GL on an Xvfb display, where a frame
+        # can take longer than a brief tap — so a press and release can fall
+        # entirely between two frames and be missed, silently and intermittently.
+        # Holding longer is not free either: `repeat_place_time` defaults to a
+        # quarter second, and a hold past it fires twice, which on a door means
+        # open-then-closed and looks exactly like nothing happening.
+        #
+        # So the press is held long enough to span a slow frame and short enough
+        # not to repeat, and the outcome is checked after each attempt rather
+        # than assumed. Attempts stop the moment the world answers.
+        after = before
+        for attempt in range(INTERACT_ATTEMPTS):
+            self.input.use()
+            self.interactions += 1
+            # Mineclonia animates the leaf and the server has to tell us about it.
+            time.sleep(0.7)
+            after = self._observed_state(target)
+            if after["tags"] != before["tags"] or after["node_name"] != before["node_name"]:
+                break
+            if self.log and attempt + 1 < INTERACT_ATTEMPTS:
+                self.log.info("interact: nothing changed, pressing again (%d of %d)",
+                              attempt + 2, INTERACT_ATTEMPTS)
+
         details = {
             "before_tags": sorted(before["tags"]),
             "after_tags": sorted(after["tags"]),
             "before_node": before["node_name"],
             "after_node": after["node_name"],
             "distance": round(distance, 2),
-            "pointer_centred": centred,
+            # What the crosshair was actually on at the instant of the press.
+            # When an interaction fails this is the first thing worth seeing:
+            # aiming at the right node and pressing at the wrong one looks
+            # identical from the outside.
+            "aimed_at": _crosshair_summary(aimed_at),
+            "hand_empty": hand_empty,
+            "held": held,
         }
 
         if expect != "state_change":

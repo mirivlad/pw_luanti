@@ -229,9 +229,8 @@ class BotRun:
             self.event(f"yaw calibration: {calibration['radians_per_pixel']:.6f} rad/px "
                        f"({calibration['source']})")
             self._record_control("calibrate_yaw", **calibration)
-        self.interaction = InteractionController(
-            self.input, self.bridge, self.movement, logger=self.log,
-            window_centre=(self.client.window_centre if self.client else None))
+        self.interaction = InteractionController(self.input, self.bridge, self.movement,
+                                                 logger=self.log)
         self.executor = IntentExecutor(self.input, self.bridge, self.movement,
                                        self.interaction, self.config, logger=self.log,
                                        should_continue=self.control.should_continue)

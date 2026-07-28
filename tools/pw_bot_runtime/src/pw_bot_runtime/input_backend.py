@@ -139,8 +139,16 @@ class InputBackend(abc.ABC):
         The client config binds `keymap_place` to a key precisely so this does
         not have to be a mouse button. A button goes to whatever is under the X
         pointer, and the pointer is not where the crosshair is looking.
+
+        The hold is 0.18 s for two reasons that pull against each other. Luanti
+        samples the place key once per rendered frame, and a software-rendered
+        client can take longer than a short tap to draw one — so anything much
+        briefer is missed intermittently. But `repeat_place_time` defaults to
+        0.25 s, and a hold past that fires the action twice, which on a door
+        means opened and closed again. 0.18 s clears the first problem without
+        reaching the second.
         """
-        self.tap("place", 0.08)
+        self.tap("place", 0.18)
 
     def right_click(self) -> None:
         """The mouse-button form. Kept for completeness and not used to interact.
