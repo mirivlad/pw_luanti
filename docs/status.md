@@ -1,16 +1,15 @@
 # Project Status
 
-**Date:** 2026-07-28
-**Test baseline:** 334 total | 332 PASS | 2 FAIL | 0 SKIP | 0 ERROR
-(171 in `perfectworld`, 4 in `player`, 89 in `pw_bot_bridge`,
-64 in `pw_player_bot`, 6 in `smoke`)
+**Date:** 2026-07-29
+**Test baseline:** 359 total | 357 PASS | 2 FAIL | 0 SKIP | 0 ERROR
 
 The two failures are the long-standing `external_transport` configuration
 contradiction: two `pw_bot_bridge` tests require the setting to be off by
 default, while `config/luanti.conf` turns it on so `pw_bot_runtime` can reach
 the spool.
 
-Measured on `master` after the catalogue was wired into the planner.
+Measured on `master` after roads between settlements, larger settlements and
+population.
 
 ## Implemented Modules
 
@@ -20,21 +19,19 @@ Measured on `master` after the catalogue was wired into the planner.
 | `pw_compat_mcl` | ✅ Complete | Material mappings, biome and ecological node classification, 7 families, environment profiles, palettes and abstract decor materials |
 | `pw_planner` | ✅ Implemented | Region planning, grammar v3, bounded ecological survey, 3 archetypes, exact local roads, transactional worksites, real-world validation and cached persistence reads |
 | `pw_structures` | ✅ Complete | 10 registered structures, including fishery, sawmill and mine workshop; palette-aware placement, bounded terrain prep and rollback |
-| `pw_roads` | ✅ Implemented | Shared exact-width raster, persistence facade and canonical road cells |
+| `pw_roads` | ✅ Implemented | Shared exact-width raster, persistence facade, canonical road cells, and the Gabriel-graph network joining settlement to settlement |
 | `pw_settlements` | ✅ Implemented | Four specialization definitions, scoring and normalized legacy/current settlement records |
-| `pw_debug` | ✅ Complete | 22 chat commands including validation, batch build, diversity analysis, screenshot support |
+| `pw_debug` | ✅ Complete | 27 chat commands including validation, batch build, diversity analysis, road network report and readback, population report, screenshot support |
 | `pw_bot_bridge` | ✅ Implemented | Server-side perception: `player`/`oracle` modes, stable `pw_bot_bridge/v1`, normalized oracle settlement records, semantic registry and bounded transport; player-mode contract unchanged |
 | `pw_player_bot` | ✅ Complete | Bounded memory, beliefs, navigation over remembered ground, needs, goals and `pw_player_bot/v1`. Movement is judged over elapsed time, so thinking faster than the world moves is not mistaken for being stuck. Decides only — never acts |
 | `pw_schemes` | ✅ Implemented | 61 declarative building schemes across five architectural styles, five roof kinds, interiors by role, deterministic per-settlement style choice |
-| `pw_tests` | ✅ Complete | 163 PerfectWorld tests across core, store, schemes, planner, structures, ecology, worksites, roads, variation, fingerprints, village and diversity |
+| `pw_tests` | ✅ Complete | PerfectWorld tests across core, store, schemes, planner, structures, ecology, worksites, roads, road network, population, variation, fingerprints, village and diversity |
 | `luanti_testkit` | ✅ Complete | Universal test framework |
 | `pw_remote_control` | ✅ Complete | JSON remote control |
 
-## Skeleton Modules
+| `pw_population` | ✅ Implemented | Ordinary Mineclonia villagers, one per bed standing in the world, moved in when the settlement is built |
 
-| Module | Status | Notes |
-|--------|--------|-------|
-| `pw_population` | 🟡 Skeleton | Table declared, no functionality |
+No skeleton modules remain.
 
 ## Building Schemes (`pw_schemes`)
 
@@ -85,6 +82,112 @@ Verified in the world rather than only in the plan, with
 `scripts/pw-village-check.sh`: a radius-9 batch produced 26 new structures, 15
 from the catalogue, japanese and stilt villages both appearing, and no
 settlement mixing two styles.
+
+## Roads Between Settlements
+
+Villages had streets; the countryside between them had nothing. It now carries a
+road network, planned from the road anchors regions already produce.
+
+**Which settlements are joined** is a Gabriel graph: a and b are neighbours when
+no third settlement lies inside the circle on diameter ab — "there is nothing
+between them". The property that made it the right choice is that deciding one
+edge only ever needs the anchors near that edge, so two regions sharing a border
+reach the same answer without talking to each other. Joining everything within
+range gives a cobweb; joining each anchor to its k nearest is not even
+symmetric. The inside test is exact in integers, `(a-c)·(b-c) < 0`, so there is
+no epsilon for the two sides to disagree about. Nearest-neighbour pairs are
+always Gabriel edges, so nothing within range is stranded.
+
+Three classes, by the smaller of the two places served: `highway` (gravel, three
+wide), `road` (coarse dirt, two) and `track` (grass path, one). A track to a
+lone farm does not become a highway because the other end is a village.
+
+**Paving happens per mapchunk.** The far end of a link is usually hundreds of
+nodes away in terrain nobody has generated, and `set_node` into an unloaded
+block writes nothing at all. Each chunk lays the stretch crossing it, with an
+overlap so neighbouring passes meet rather than butt together, and the road
+grows to meet itself whichever end was built first.
+
+**One height profile per stretch, not per segment.** Paving segment by segment
+let the road drift from the ground within a segment and jump back at the next,
+which read as a staircase with a cliff in it every forty nodes. The rule is
+one-sided — a road may be cut into a hill, never raised above it — and a forward
+then backward minimum pass computes the lowest profile that stays under the
+ground and never rises faster than one node per step.
+
+Water up to forty-eight nodes is bridged with a plank deck at the water surface;
+wider than that the road stops at the shore. A deck already laid reads as solid
+ground, so what is *underneath* is asked instead — without that the overlapping
+pass replaced the planks with dirt.
+
+Measured on the ground with `/pw_road_check`: 124 of 124 cells, no gaps, no step
+above one, across three chunk seams, on a link that crosses a lake.
+
+Two instruments, both of which were needed to find the above: `/pw_road_network`
+reports what is planned; `/pw_road_check` reads back what is on the ground and
+says what is there instead when nothing is. The first readback claimed 138 of
+170 cells paved and was measuring the dirt under the grass, which is why tracks
+are surfaced in grass path rather than dirt.
+
+## Settlement Size
+
+Villages were coming out at four buildings when they were planned for eight to
+twelve. The cause was not terrain: on perfectly flat synthetic ground, where
+terrain can be ruled out entirely, only 34 of 50 reached their planned size and
+every rejection was `lot_overlap` or `road_conflict` — geometry, not ground.
+
+Street length was drawn independently of how many buildings were meant to stand
+on it. `branches` was computed for every archetype and read only by the compact
+one, so a long thin village had nowhere to put its last houses, and the branches
+that were drawn were seated at independent random points and could land on top
+of each other.
+
+Frontage is now two sides of street, a lot every average gap, half again on top
+for the anchors lost to neighbours and to the carriageway. That figure is a
+*floor* under the length, not a replacement for it: sizing the street only from
+the target was tried first and was worse in every direction, and the valid rate
+fell from 177 in 241 to 135.
+
+Measured over the same 241-input synthetic sample:
+
+| | before | after |
+|---|---:|---:|
+| valid plans | 177 | 183 |
+| lots achieved, of target | 905 (0.82) | 1077 (0.94) |
+| reached their planned size | 104 of 177 | 136 of 183 |
+| settlements of 8 lots or more | 19 | 39 |
+
+In the world, a batch of twenty fresh candidates went from 4.1 to 5.0 lots per
+settlement built, with slightly fewer outright failures.
+
+The street length is capped at 96 nodes so the settlement stays inside the area
+`emerge_village_area` generates for it. Towns larger than that need a wider
+emerge, which is not done.
+
+## Population
+
+Settlements hold ordinary Mineclonia villagers. Ordinary on purpose: the game
+already knows how a villager sleeps, claims a bed, takes a profession from a job
+block and flees a zombie, and a parallel implementation would have to be as good
+as that before it was worth anything.
+
+The unit of population is **a bed standing in the world** — not a planned
+dwelling, which would put people inside buildings that failed to materialize,
+and not a lot, which would put them in barns. People move in when the village is
+built, while its buildings are still loaded; the record makes that idempotent so
+walking past twice does not double it.
+
+Two failure modes that would have been silent:
+
+- a node search over unloaded mapblocks returns nothing, exactly as an empty
+  village does, so "not loaded" is a distinct answer and is not written down;
+- spawning on the bed puts the mob inside a node, so villagers are placed on
+  walkable ground beside it and a bed with nowhere to stand beside it is counted
+  rather than papered over.
+
+Verified in the world: six beds, six villagers, still six loaded in the village
+after a full server restart. A batch of eight fresh villages populated itself as
+it was built, two to five people each.
 
 ## Village Generation System (grammar v3)
 
@@ -138,6 +241,12 @@ Resource-aware, multi-archetype physical settlement pipeline. See
 | Production was only a label on a building | Every complete grammar-v3 village requires a physical transactional worksite |
 | A frozen shore passed ecological selection but failed dock placement | The dock consumes the same open/frozen-water surface contract as the survey |
 | Oracle settlement reads repeatedly parsed the entire storage map | Decoded storage maps are cached between writes; a 500-record oracle integration went from 8+ minutes to an immediate PASS |
+| Street length was drawn independently of the number of buildings meant to stand on it | Villages planned for eight to twelve came out at four; frontage is now a floor under the length |
+| `branches` was computed for every archetype and read only by the compact one | Long thin villages had nowhere to put their last houses |
+| Branch streets were seated at independent random points | Two branches could land on top of each other and add no frontage at all |
+| Settlement links paved segment by segment | Each segment restarted the height profile, so the road drifted from the ground and jumped back every forty nodes |
+| A bridge deck reads as solid ground on the next pass | The overlapping chunk replaced the planks with road surface; what is under the deck is asked instead |
+| `brain_holds_a_fresh_intent_instead_of_dithering` inherited the player's position | A diagnostic had left the test player in a lake, where dropping the plan every tick is correct; the test now builds its own dry ground and states the premise |
 
 ## Known Test Issues
 
@@ -149,8 +258,7 @@ regressions:
 
 Both expect `pw_bot_bridge.external_transport=false`, while the local
 development file `config/luanti.conf` explicitly sets it to `true`. Configuration
-was not changed during this cycle. All 143 `perfectworld` tests and all 62
-`pw_player_bot` tests pass.
+was not changed during this cycle. Every other test passes.
 
 Expected log noise remains: the world-format test deliberately feeds `pw_core`
 an incompatible lock, terrain rollback fixtures provoke
@@ -190,16 +298,18 @@ worksite cameras.
 | Most settlements come out `hillside` on this mapgen | The hillside fallback fires whenever a flat archetype finds no viable layout, which is common on `carpathian` | On flat ground hillside looks like linear |
 | No complete fishing village was found inside valid world coordinates in this seed's acceptance sample | Viable shore geometry must fit two houses, a fishery and a dock without using water or a cliff | Fishery and dock components pass physical tests, but full real-world fishing composition still needs a deterministic acceptance fixture |
 | `/pw_village_batch` accepts radii beyond the engine's usable coordinate range | The development command enumerates arbitrary region coordinates and does not clamp to `mapgen_limit` | It can write non-visualizable diagnostic records; normal mapgen does not generate those regions |
-| House interiors are close to empty | A dwelling places a bed and a chest and nothing else | A village reads as a shell from the inside. `pw_schemes` furnishes by role and carries the fix; it is not wired into the planner yet |
+| A settlement link can leave one water cell unpaved at a lake edge | The bridge decides from the column it probes; water that flows back over a freshly laid deck is not re-probed | One cell in sixty-two on the link measured; the road either side is continuous |
 
 Fixed: roof stairs pointed downhill, so every course rose at its outer edge and
 dropped at its inner one and the roof read as a row of combs from the gable end.
 `roof_stairs_rise_towards_the_ridge` now measures orientation; nothing did
 before.
 
-Fix directions: furnish interiors, add a valid-coordinate deterministic fishing
-acceptance seed, order lots by approach quality before accepting them, clamp
-debug batch radius, and widen carriageway smoothing to bridge one-block gaps.
+Fix directions: add a valid-coordinate deterministic fishing acceptance seed,
+order lots by approach quality before accepting them, clamp debug batch radius,
+and give village streets the same one-sided height profile the settlement links
+now use — the patchy-carriageway defect above is exactly what that profile was
+written to remove.
 
 ## PW Bot: measured on the obstacle course
 
@@ -283,12 +393,16 @@ chasing on its own.
 - The acting PW Bot client layer remains outside this world-generation cycle;
   `pw_bot_bridge` only perceives and `pw_player_bot` only decides — see
   [docs/pw-bot/](pw-bot/README.md)
-- NPCs and villagers
-- Production simulation, inventories, economy and trading
-- Roads between settlements (local village streets and driveways exist)
-- Bridges and tunnels
-- Global route pathfinding
-- Building interiors beyond minimal
+- Terrain generated before a feature existed never had its chunk hook run over
+  it: settlement links in an old world have to be laid by hand with
+  `/pw_roads_pave`, and villages built before people existed need `/pw_populate`
+- Production simulation, inventories, economy and trading — deliberately out of
+  scope for now
+- Towns and cities: the settlement types exist in `pw_settlements` but region
+  planning never produces them, and a street longer than 96 nodes needs a wider
+  `emerge_village_area` than the emerge queue comfortably allows
+- Tunnels, and bridges over water wider than forty-eight nodes
+- Global route pathfinding over the settlement link network
 - Save migration between planner versions
 
 ## Immediate Technical Tasks
@@ -296,8 +410,6 @@ chasing on its own.
 - Add a deterministic, in-range complete fishing-village acceptance fixture
 - Clamp `/pw_village_batch` and other world-debug enumeration to the engine
   `mapgen_limit`
-- Shard settlement/road persistence: decoded reads are now cached, but every
-  write still serializes the whole growing JSON map
 - Integrate the remaining legacy settlement type weights into the specialization
   definitions
 - Add a save migration framework for world format changes
