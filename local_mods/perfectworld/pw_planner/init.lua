@@ -3201,10 +3201,18 @@ local function materialize_village_plan(plan, profile, candidate)
         profile.material_palette, "foundation", "foundation")
       -- Candidate spots around the street anchor, nearest first. The anchor
       -- itself is carriageway and must stay clear.
-      local offsets = {
-        {x = 2, z = 0}, {x = -2, z = 0}, {x = 0, z = 2}, {x = 0, z = -2},
-        {x = 2, z = 2}, {x = -2, z = -2}, {x = 3, z = 0}, {x = 0, z = 3},
-      }
+      -- A spiral out from the street, not eight fixed spots. In a village the
+      -- first ring is empty ground; in a town it is built up, and a town that
+      -- reported `no_bell_site` is a town whose villagers have nowhere to
+      -- gather and no alarm to raise — which also costs it the golems the game
+      -- would otherwise post around a bell.
+      local offsets = {}
+      for radius = 2, 7 do
+        for _, direction in ipairs({{1, 0}, {-1, 0}, {0, 1}, {0, -1},
+          {1, 1}, {-1, -1}, {1, -1}, {-1, 1}}) do
+          offsets[#offsets + 1] = {x = direction[1] * radius, z = direction[2] * radius}
+        end
+      end
       for _, offset in ipairs(offsets) do
         local x = street_anchor.x + offset.x
         local z = street_anchor.z + offset.z

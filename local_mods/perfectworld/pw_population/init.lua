@@ -148,6 +148,31 @@ end
 -- A count of what the server has in memory, not of who lives there. Entities in
 -- unloaded mapblocks are on disk and invisible to this, which is exactly why
 -- the record below exists rather than the world being asked every time.
+--- Count entities of one kind inside a settlement's bounds.
+function population.count_entities(bounds, entity_name, margin)
+  if type(bounds) ~= "table" or not bounds.min_x then return 0 end
+  margin = margin or population.BOUNDS_MARGIN
+  local centre_x = (bounds.min_x + bounds.max_x) / 2
+  local centre_z = (bounds.min_z + bounds.max_z) / 2
+  local half_x = (bounds.max_x - bounds.min_x) / 2 + margin
+  local half_z = (bounds.max_z - bounds.min_z) / 2 + margin
+  local radius = math.sqrt(half_x * half_x + half_z * half_z) + 128
+
+  local found = 0
+  for _, object in ipairs(minetest.get_objects_inside_radius(
+    {x = centre_x, y = 32, z = centre_z}, radius)) do
+    local entity = object:get_luaentity()
+    if entity and entity.name == entity_name then
+      local pos = object:get_pos()
+      if pos and pos.x >= bounds.min_x - margin and pos.x <= bounds.max_x + margin
+        and pos.z >= bounds.min_z - margin and pos.z <= bounds.max_z + margin then
+        found = found + 1
+      end
+    end
+  end
+  return found
+end
+
 function population.count_villagers(bounds, margin)
   if type(bounds) ~= "table" or not bounds.min_x then return 0 end
   margin = margin or population.BOUNDS_MARGIN
@@ -446,6 +471,14 @@ function population.status(settlement_id)
     professions = population.professions(bounds),
     workstations = select(2, population.workstations(bounds)),
     workstation_kinds = population.workstations(bounds),
+    -- The guard. A town with walls and gates and nobody on them is a stage set.
+    --
+    -- Counted with the wall inside the box. The wall stands eight nodes outside
+    -- the settlement bounds and the gates are in it, so a guard at his post is
+    -- outside the bounds: counting villagers' margin reported every town as
+    -- having no guard at all while they were standing right there.
+    golems = population.count_entities(bounds, population.GOLEM_ENTITY,
+      population.BOUNDS_MARGIN + 12),
   }
 end
 

@@ -370,3 +370,66 @@ T.register_test("perfectworld", "a_workstation_is_one_the_game_hands_out_jobs_fo
   ctx.assert.equal(#unrecognised, 0,
     "these are furniture, not workstations: " .. table.concat(unrecognised, " "))
 end)
+
+T.register_test("perfectworld", "a_walled_town_gets_a_guard_on_its_gates", function(ctx)
+  if not population.post_guards then
+    ctx.assert.not_nil(population.post_guards, "population must be able to post a guard")
+    return
+  end
+  if not minetest.registered_entities[population.GOLEM_ENTITY] then
+    ctx.assert.is_true(true, "this game has no iron golem to post")
+    return
+  end
+
+  -- A town measured in the world reported three gates and no guard on any of
+  -- them. Whether that is the posting or the counting is not something the
+  -- world can answer quickly, so it is asked here on ground built for it.
+  local origin = {x = 28900, y = 24, z = -28900}
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 4, y = origin.y - 4, z = origin.z - 4},
+      {x = origin.x + 40, y = origin.y + 8, z = origin.z + 4})
+  end
+  for x = origin.x - 3, origin.x + 39 do
+    for z = origin.z - 3, origin.z + 3 do
+      minetest.set_node({x = x, y = origin.y - 1, z = z}, {name = ground})
+      for dy = 0, 4 do
+        minetest.set_node({x = x, y = origin.y + dy, z = z}, {name = "air"})
+      end
+    end
+  end
+
+  local bounds = {
+    min_x = origin.x - 3, max_x = origin.x + 39,
+    min_z = origin.z - 3, max_z = origin.z + 3,
+  }
+  local before = population.count_entities(bounds, population.GOLEM_ENTITY)
+
+  local spots = {
+    {x = origin.x, y = origin.y - 1, z = origin.z},
+    {x = origin.x + 16, y = origin.y - 1, z = origin.z},
+    {x = origin.x + 32, y = origin.y - 1, z = origin.z},
+  }
+  local posted = population.post_guards(spots, 3)
+  ctx.assert.equal(posted, 3,
+    "three gates on open ground must get three guards, not " .. tostring(posted))
+
+  local after = population.count_entities(bounds, population.GOLEM_ENTITY)
+  ctx.assert.is_true(after - before >= 3,
+    "and the guards must be in the world, not only in the return value: "
+      .. before .. " -> " .. after)
+
+  for _, object in ipairs(minetest.get_objects_inside_radius(
+    {x = origin.x + 18, y = origin.y, z = origin.z}, 60)) do
+    local entity = object:get_luaentity()
+    if entity and entity.name == population.GOLEM_ENTITY then object:remove() end
+  end
+  for x = origin.x - 3, origin.x + 39 do
+    for z = origin.z - 3, origin.z + 3 do
+      for dy = -1, 4 do
+        minetest.set_node({x = x, y = origin.y + dy, z = z}, {name = "air"})
+      end
+    end
+  end
+end)

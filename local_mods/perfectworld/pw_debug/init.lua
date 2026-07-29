@@ -1315,9 +1315,10 @@ minetest.register_chatcommand("pw_population", {
       end
       table.sort(shops)
       return true, string.format(
-        "%s status=%s settled=%s beds=%d spawned=%d loaded_now=%d | trades: %s | workstations %d: %s",
+        "%s status=%s settled=%s beds=%d spawned=%d loaded_now=%d golems=%d | trades: %s | workstations %d: %s",
         status.settlement_id, tostring(status.status), tostring(status.settled),
         status.recorded_beds, status.recorded_spawned, status.loaded_villagers,
+        status.golems or 0,
         #trades > 0 and table.concat(trades, " ") or "(none loaded)",
         status.workstations or 0,
         #shops > 0 and table.concat(shops, " ") or "(none)")
