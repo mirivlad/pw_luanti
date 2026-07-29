@@ -453,6 +453,24 @@ minetest.register_chatcommand("pw_street_check", {
   end,
 })
 
+minetest.register_chatcommand("pw_daylight", {
+  params = "[hold]",
+  description = "Put the sun overhead, and optionally stop the clock",
+  privs = {interact = true},
+  func = function(_, param)
+    -- Our own command on purpose. `/time` needs the `settime` privilege, and in
+    -- test mode the server runs without a terminal, so the usual way of
+    -- granting privileges — writing to the server's stdin — reaches nothing.
+    -- Every screenshot taken through that route came out black.
+    minetest.set_timeofday(0.5)
+    local hold = (param or ""):match("hold") ~= nil or param == ""
+    if hold then
+      minetest.settings:set("time_speed", "0")
+    end
+    return true, "noon" .. (hold and ", clock stopped" or "")
+  end,
+})
+
 minetest.register_chatcommand("pw_road_check", {
   params = "[range]",
   description = "Read back the settlement roads on the ground around the player",
@@ -497,6 +515,11 @@ minetest.register_chatcommand("pw_road_check", {
       local lowest, highest = nil, nil
       local instead = {}
       local inside = 0
+      -- Somewhere to stand. A link is routed against the ground and can end up
+      -- eighty nodes off the line it was planned on, so the planned midpoint is
+      -- not a place to point a camera: the first time this was tried the camera
+      -- came up on the sea bed.
+      local paved_at = {}
       for i = 1, #link.points - 1 do
         local from, to = link.points[i], link.points[i + 1]
         local dx, dz = to.x - from.x, to.z - from.z
@@ -510,6 +533,9 @@ minetest.register_chatcommand("pw_road_check", {
             local y = surface_at(x, z, material, deck_material)
             if y then
               paved = paved + 1
+              if #paved_at < 3 and (paved % 40 == 1) then
+                paved_at[#paved_at + 1] = string.format("(%d,%d,%d)", x, y, z)
+              end
               if not lowest or y < lowest then lowest = y end
               if not highest or y > highest then highest = y end
               if previous_y then
@@ -549,7 +575,8 @@ minetest.register_chatcommand("pw_road_check", {
           "%s %s: %d/%d cells paved, longest gap %d, biggest step %d, y %s..%s%s",
           link.kind, link.id, paved, inside, worst_gap, biggest_step,
           tostring(lowest), tostring(highest),
-          #excuses > 0 and ("  instead: " .. table.concat(excuses, " ")) or "")
+          (#paved_at > 0 and ("  on the ground at " .. table.concat(paved_at, " ")) or "")
+            .. (#excuses > 0 and ("  instead: " .. table.concat(excuses, " ")) or ""))
         table.insert(lines, line)
         -- One line per link in the log as well: a multi-line chat result is
         -- one log entry, and everything after the first line is invisible to

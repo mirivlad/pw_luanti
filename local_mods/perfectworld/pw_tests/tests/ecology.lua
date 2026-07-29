@@ -662,6 +662,12 @@ end
 
 T.register_test("perfectworld", "ecology_plan_uses_selected_physical_site", function(ctx)
   local candidate = village_candidate("ecology_plan_site")
+  -- Pin the world seed. The terrain here is synthetic and fixed, but the plan
+  -- laid on it is not: archetype, size and lot count all come from the village
+  -- seed key, which includes the seed of whatever world the test happens to be
+  -- running in. It passed for as long as the test world stayed the same one and
+  -- failed the first time a fresh world was generated under it.
+  candidate.world_seed_override = "ecology_plan_site_fixed_seed"
   local terrain = perfectworld.planner.make_synthetic_terrain({
     base = 32,
     seed_key = "ecology_plan_site",
