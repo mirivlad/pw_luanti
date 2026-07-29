@@ -1283,8 +1283,12 @@ minetest.register_chatcommand("pw_village_list", {
     for _, id in ipairs(ids) do
       local s = perfectworld.settlements.get(id)
       if s then
+        -- `name_of` falls back to deriving the name, so a settlement built
+        -- before names existed shows the name it would have rather than a
+        -- question mark. The record is left alone: a place is not renamed
+        -- because the generator learned to name places.
         table.insert(lines, "  " .. id
-          .. " \"" .. tostring(s.name or "?") .. "\""
+          .. " \"" .. tostring(perfectworld.settlements.name_of(s) or "?") .. "\""
           .. " archetype=" .. (s.archetype or "?")
           .. " status=" .. (s.status or "?")
           .. " lots=" .. (s.lot_count or "?"))
