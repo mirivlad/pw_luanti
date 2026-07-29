@@ -2252,8 +2252,13 @@ local MAX_CUT = 4
 local MAX_FILL = 3
 
 --- How far a road may be nudged sideways from the line that was planned for it.
---- Past this it is not the same road any more.
-local LATERAL_MAX = 10
+--
+-- Forty, not ten. Ten is less than the width of a hill, so a road with ten
+-- nodes of room had no way round anything and bored through instead. A road
+-- that bends fifty nodes over a quarter of a mile to keep to the low ground is
+-- what a road looks like; a road that holds a straight line and tunnels is what
+-- a machine does because a machine finds tunnelling cheap.
+local LATERAL_MAX = 40
 
 --- How fast it may be nudged: one node of sideways for every four forward,
 --- which is about fourteen degrees. A road that swerves faster than that reads
@@ -2483,13 +2488,18 @@ perfectworld.planner._build_landing = build_landing
 -- The sideways choice is made on blocks of four cells rather than per cell, and
 -- adjacent blocks may differ by one, which is what enforces the fourteen
 -- degrees without a second smoothing pass.
-function perfectworld.planner.route_way(cells, first, last, raw_in, water)
+function perfectworld.planner.route_way(cells, first, last, raw_in, water, deviate)
   local count = last - first + 1
   local mode, out_cells = {}, {}
 
-  -- Straight down the planned line, with no room to move, there is nothing to
-  -- decide: a single cell has no direction and no flank.
-  if count < 3 then
+  -- A village street may not move. Its lots were planned against the line it
+  -- was drawn on, its doors face it, and its driveways run to it; nudging it
+  -- aside to avoid a rise would leave a street of houses facing nothing. Only
+  -- the roads between settlements are free to choose their own way.
+  --
+  -- Straight down the planned line there is nothing to decide, and a stretch of
+  -- one or two cells has no direction and no flank either.
+  if deviate == false or count < 3 then
     local y = walkable_profile(raw_in, first, last)
     for i = first, last do
       out_cells[i] = cells[i]
@@ -2516,9 +2526,24 @@ function perfectworld.planner.route_way(cells, first, last, raw_in, water)
     }
   end
 
-  -- Score each sideways offset over a block of cells by how high and how broken
-  -- the ground under it is. Lower and smoother wins, which is exactly "go round
-  -- the hill rather than into it" without having to name the hill.
+  -- What height this road is trying to hold.
+  --
+  -- A road runs between two places, and the level it wants is the level of the
+  -- ground between them — not the lowest ground it can find. Scoring by "lowest
+  -- wins" sends a road down every valley it passes and, on a hill, straight
+  -- through; scoring by "closest to the line between the ends" makes it keep to
+  -- the contour and go round, which is what a road walked before it was
+  -- surveyed actually does.
+  local start_ground = paving_level(cells[first].x, cells[first].z)
+  local end_ground = paving_level(cells[last].x, cells[last].z)
+  local function reference_at(i)
+    if not start_ground or not end_ground then return nil end
+    local t = (i - first) / math.max(last - first, 1)
+    return start_ground + (end_ground - start_ground) * t
+  end
+
+  -- Score each sideways offset over a block of cells by how far the ground
+  -- under it departs from the height the road is holding, and how broken it is.
   local blocks = math.ceil(count / LATERAL_EVERY)
   local chosen = {}
   for block = 0, blocks - 1 do
@@ -2546,15 +2571,23 @@ function perfectworld.planner.route_way(cells, first, last, raw_in, water)
         end
       end
       if samples > 0 then
-        -- Height first, roughness second, and a small pull back towards the
-        -- planned line so the road does not wander for a one-node saving.
+        local mean = total / samples
+        local reference = reference_at(math.floor((block_first + block_last) / 2))
+        -- Departure from the height the road is holding, then roughness, then a
+        -- small pull back towards the planned line so it does not wander for a
+        -- one-node saving.
         --
-        -- Water is scored out of reach, not merely disliked. Preferring the
-        -- lowest ground is right on a hill and catastrophic on a coast, where
-        -- the lowest ground for miles is the sea bed: without this the rule
-        -- that steers a road round a hill steers it into the sea.
-        local score = total / samples + roughest * 2 + math.abs(offset) * 0.35
-          + wet * 60
+        -- Climbing is charged for, and charged more the higher it goes: two
+        -- nodes up is nothing, twenty is a haul. Squaring it is what makes the
+        -- road prefer a long way round a hill to a short way over it, which is
+        -- the whole difference between a road and a bulldozed line.
+        --
+        -- Water is scored out of reach rather than merely disliked. Preferring
+        -- low ground is right on a hill and catastrophic on a coast, where the
+        -- lowest ground for miles is the sea bed.
+        local departure = reference and math.abs(mean - reference) or 0
+        local score = departure + departure * departure * 0.08
+          + roughest * 2 + math.abs(offset) * 0.35 + wet * 60
         if not best_score or score < best_score then
           best_score, best_offset = score, offset
         end
@@ -2653,7 +2686,8 @@ local function pave_way(cells, first, last, opts)
     end
   end
 
-  local route = perfectworld.planner.route_way(cells, first, last, raw, water)
+  local route = perfectworld.planner.route_way(cells, first, last, raw, water,
+    opts.deviate)
   local y = route.y
   local crossable = bridgeable(water, first, last)
 
@@ -3051,6 +3085,7 @@ local function materialize_village_plan(plan, profile, candidate)
       nodes = pave_way(cells, 1, #cells, {
         width = road.width or 2,
         material = road_material,
+        deviate = false,
       })
     end
     local road_record = {

@@ -697,3 +697,73 @@ T.register_test("perfectworld", "a_road_does_not_bore_a_mine_under_a_mountain", 
   ctx.assert.is_true(y[120] > 150,
     "the road must be up on the mountain by the far end, not under it: " .. y[120])
 end)
+
+T.register_test("perfectworld", "a_road_goes_round_a_hill_rather_than_through_it", function(ctx)
+  local route = perfectworld.planner.route_way
+  if not route then
+    ctx.assert.not_nil(route, "the planner must route a way against the ground")
+    return
+  end
+
+  -- A round hill with clear ground either side of it, straddling the line. A
+  -- road with somewhere to go should go round: tunnelling is what a machine
+  -- does because a machine finds tunnelling cheap, and people do not.
+  local origin = {x = 29500, z = -29500}
+  local base, crest = 30, 52
+  local length = 120
+  local hill_at, hill_radius = 60, 22
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 2, y = base - 6, z = origin.z - 60},
+      {x = origin.x + length + 2, y = crest + 8, z = origin.z + 60})
+  end
+  for i = 1, length do
+    for dz = -55, 55 do
+      -- A dome: high on the line, falling away to open ground either side.
+      local from_centre = math.sqrt((i - hill_at) ^ 2 + dz ^ 2)
+      local top = base
+      if from_centre < hill_radius then
+        top = base + math.floor((crest - base) * (1 - from_centre / hill_radius))
+      end
+      for y = base - 4, crest + 6 do
+        minetest.set_node({x = origin.x + i, y = y, z = origin.z + dz},
+          {name = y <= top and ground or "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+
+  local cells, raw, water = {}, {}, {}
+  for i = 1, length do
+    cells[i] = {x = origin.x + i, z = origin.z}
+    raw[i] = perfectworld.planner._paving_level(cells[i].x, cells[i].z)
+    water[i] = false
+  end
+
+  local result = route(cells, 1, length, raw, water)
+  ctx.assert.not_nil(result, "the way must be routed")
+
+  local tunnelled, moved = 0, 0
+  for i = 1, length do
+    if result.mode[i] == "tunnel" then tunnelled = tunnelled + 1 end
+    local shifted = math.abs(result.cells[i].z - origin.z)
+    if shifted > moved then moved = shifted end
+  end
+
+  ctx.assert.is_true(moved >= 8,
+    "the road must move aside to clear the hill; it moved " .. moved)
+  ctx.assert.is_true(tunnelled == 0,
+    "with open ground either side there is no reason to tunnel, and it tunnelled "
+      .. tunnelled .. " cell(s) after moving " .. moved)
+
+  for i = 1, length do
+    for dz = -55, 55 do
+      for y = base - 4, crest + 6 do
+        minetest.set_node({x = origin.x + i, y = y, z = origin.z + dz}, {name = "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+end)
