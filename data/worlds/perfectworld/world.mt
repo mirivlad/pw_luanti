@@ -5,8 +5,8 @@ auth_backend = sqlite3
 mod_storage_backend = sqlite3
 
 mg_name = carpathian
-seed = 768581848846183985
-fixed_map_seed = 768581848846183985
+seed = 794424260809658199
+fixed_map_seed = 794424260809658199
 water_level = 1
 chunksize = 5
 

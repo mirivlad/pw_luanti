@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-29
-**Test baseline:** 370 total | 368 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 379 total | 377 PASS | 2 FAIL | 0 SKIP | 0 ERROR
 
 The two failures are the long-standing `external_transport` configuration
 contradiction: two `pw_bot_bridge` tests require the setting to be off by
@@ -82,6 +82,35 @@ Verified in the world rather than only in the plan, with
 `scripts/pw-village-check.sh`: a radius-9 batch produced 26 new structures, 15
 from the catalogue, japanese and stilt villages both appearing, and no
 settlement mixing two styles.
+
+## Doors Nobody Can Reach
+
+Measured, not estimated. `scripts/pw-accessibility-check.sh` regenerates a
+world, builds a sample of settlements and writes a report of how many doors have
+no walkable route from the street, using the counts the planner recorded while
+materializing — so they were produced with the walker's own limits rather than
+re-derived afterwards with different ones.
+
+On a fresh world, thirty-two settlements asked for, twenty-two with anything
+built, **162 lots materialized and 16 doors with no walkable route** — one in
+ten. A rescue route was needed sixteen times, the direct shape was accepted all
+sixteen times, and **not one of them made the door reachable**.
+
+That is the state of it, and it is not fixed. What the run establishes:
+
+- the rescue's own test of whether a way is connected — every cell has a level,
+  none is refused for a building — does not mean what the engine's pathfinder
+  means by walkable, so a route is accepted, built, and still unusable;
+- because the direct shape always reports itself connected, the corner shapes
+  are never reached. The corner logic is therefore untested against the world,
+  whatever the unit tests say about it in isolation;
+- ten settlements of thirty-two materialized nothing at all, which is a separate
+  matter and not counted above.
+
+The regression tests that do exist prove the parts that can be proved on a
+built scene: a door behind a neighbour is reached round a corner, a rejected
+candidate route leaves no trace, and building a planned way twice builds the
+same way. What they cannot prove is the part the world run just disproved.
 
 ## What a Road Does About the Ground
 

@@ -68,6 +68,10 @@ deterministically from the world seed.
 - **Cities.** The type exists; region planning never produces one, and a street
   longer than 96 nodes would be planned against terrain that has not been
   generated yet
+- **Doors that can be reached.** Measured on a fresh world: 162 lots
+  materialized, 16 doors with no walkable route from the street. A rescue route
+  was built for all sixteen and none of them worked. Run
+  `scripts/pw-accessibility-check.sh --fresh` to reproduce the figure
 - Global route pathfinding over the settlement network
 - Save migration between planner versions
 
@@ -114,7 +118,7 @@ That restarts the server in test mode, connects `pwbot`, runs everything and
 prints the summary. `--keep` reuses a running server; `--no-client` skips
 starting the client.
 
-Current: **370 total | 368 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
+Current: **379 total | 377 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
 
 The two failures are a configuration contradiction, not a regression: two
 `pw_bot_bridge` tests require `external_transport` to be off by default, while
