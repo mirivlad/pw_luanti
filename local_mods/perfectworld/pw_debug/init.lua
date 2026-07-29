@@ -453,6 +453,32 @@ minetest.register_chatcommand("pw_street_check", {
   end,
 })
 
+minetest.register_chatcommand("pw_town_wall", {
+  params = "<settlement_id>",
+  description = "Rebuild a town's wall and report what it did about the water",
+  privs = {server = true},
+  func = function(_, param)
+    local settlement = perfectworld.settlements.get(param or "")
+    if not settlement then return false, "Settlement not found: " .. tostring(param) end
+    if not settlement.bounds or not settlement.bounds.min_x then
+      return false, "that settlement has no bounds"
+    end
+
+    -- Rebuilding on demand is the only way to see what a wall does about a
+    -- particular piece of ground without waiting for region planning to place
+    -- a town there: towns are one candidate in sixteen, and a batch of fourteen
+    -- produced none at all.
+    local plan = perfectworld.planner.get_settlement_plan(param)
+    local profile = (plan and plan.profile) or {}
+    local result = perfectworld.planner.build_town_wall(
+      settlement.bounds, profile, {})
+    if not result then return false, "the wall could not be built" end
+    return true, string.format(
+      "%s: %d nodes, %d gate(s), %d node(s) left open to water",
+      param, result.nodes, result.gates, result.water_frontage or 0)
+  end,
+})
+
 minetest.register_chatcommand("pw_daylight", {
   params = "[hold]",
   description = "Put the sun overhead, and optionally stop the clock",

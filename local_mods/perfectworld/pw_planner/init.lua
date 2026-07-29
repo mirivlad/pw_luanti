@@ -3331,8 +3331,9 @@ local function materialize_village_plan(plan, profile, candidate)
     end
     wall_result = perfectworld.planner.build_town_wall(plan.bounds, profile, ways)
     if wall_result then
-      warnings[#warnings + 1] = string.format("wall:%d nodes, %d gate(s)",
-        wall_result.nodes, wall_result.gates)
+      warnings[#warnings + 1] = string.format(
+        "wall:%d nodes, %d gate(s), %d node(s) left open to water",
+        wall_result.nodes, wall_result.gates, wall_result.water_frontage or 0)
       -- A guard on the gates from the first day, rather than waiting for the
       -- population to reach the threshold Mineclonia raises golems at. That
       -- mechanism is left alone and still applies.
@@ -4551,6 +4552,44 @@ function perfectworld.planner.build_town_wall(bounds, profile, ways)
   end
 
   world_terrain.reset()
+
+  -- No wall on water.
+  --
+  -- The perimeter is a rectangle eight nodes outside the settlement, and on a
+  -- shore that rectangle runs out into the sea. Photographed from the air, a
+  -- town wall marching in a straight line across shallow water is the most
+  -- artificial thing a generated world can show — and it happens because the
+  -- wall is founded on `paving_level`, which in a flooded column returns the
+  -- floor of the basin, so the wall rises from the sea bed through the water.
+  --
+  -- A town on a headland is walled on its landward sides and open to the water,
+  -- because the water is the wall. The wet cells are dropped from the perimeter
+  -- here rather than skipped inside the build, so the gate logic below sees
+  -- exactly the run of cells it did before.
+  local water_frontage = 0
+  for index, wall in ipairs(walls) do
+    local dry = {}
+    for _, cell in ipairs(wall) do
+      local ground = paving_level(cell.x, cell.z)
+      local wet = false
+      if ground then
+        for above = 0, 4 do
+          local node = minetest.get_node({x = cell.x, y = ground + above, z = cell.z})
+          if node and node.name and perfectworld.compat.is_liquid_node(node.name) then
+            wet = true
+            break
+          end
+        end
+      end
+      if wet then
+        water_frontage = water_frontage + 1
+      else
+        dry[#dry + 1] = cell
+      end
+    end
+    walls[index] = dry
+  end
+
   local nodes = 0
   local gate_spots = {}
   for _, wall in ipairs(walls) do
@@ -4594,6 +4633,7 @@ function perfectworld.planner.build_town_wall(bounds, profile, ways)
   end
 
   return {nodes = nodes, gates = gates, gate_spots = gate_spots,
+    water_frontage = water_frontage,
     min_x = min_x, max_x = max_x,
     min_z = min_z, max_z = max_z, height = height}
 end
