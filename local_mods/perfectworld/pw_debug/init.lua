@@ -1550,6 +1550,42 @@ minetest.register_chatcommand("pw_village_info", {
       "ecology_water_ratio=" .. tostring(s.ecology and s.ecology.water_ratio),
       "ecology_buildable_ratio=" .. tostring(s.ecology and s.ecology.buildable_ratio),
       "ecology_sample_count=" .. tostring(s.ecology and s.ecology.sample_count),
+      -- Asked of the ground the settlement actually covers, not of the patch
+      -- the survey looked at. The two disagreeing is the whole story of the
+      -- town that was built into a shoal: the survey said water 0%, and the
+      -- bounds it was judged for were three times wider than the survey.
+      -- Standing water inside the settlement, at the level the settlement is
+      -- built at.
+      --
+      -- Not "the top of each column is liquid": after a settlement is built its
+      -- columns are topped by platform, street and roof, so that question
+      -- answers 0% for a town visibly sitting in the sea. What matters is
+      -- whether there is water between the buildings at the height people walk
+      -- at, which is what is asked here.
+      "standing_water=" .. (function()
+        local b = s.bounds
+        local centre = s.center_pos
+        if not b or not b.min_x or not centre or not centre.y then return "?" end
+        local wet, checked = 0, 0
+        for x = math.floor(b.min_x), math.ceil(b.max_x), 3 do
+          for z = math.floor(b.min_z), math.ceil(b.max_z), 3 do
+            local seen = false
+            for dy = -2, 2 do
+              local name = minetest.get_node({x = x, y = centre.y + dy, z = z}).name
+              if name ~= "ignore" then
+                seen = true
+                if perfectworld.compat.is_liquid_node(name) then
+                  wet = wet + 1
+                  break
+                end
+              end
+            end
+            if seen then checked = checked + 1 end
+          end
+        end
+        if checked == 0 then return "not loaded" end
+        return string.format("%.0f%% of %d probe(s)", wet / checked * 100, checked)
+      end)(),
       "palette=" .. tostring(s.palette_id),
       "archetype=" .. tostring(s.archetype),
       "size_class=" .. tostring(s.size_class),

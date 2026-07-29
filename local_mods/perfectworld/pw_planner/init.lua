@@ -300,6 +300,13 @@ local choice = perfectworld.core.choice
 local hash32 = perfectworld.core.hash32
 local SETTLEMENT_GRAMMAR_VERSION = 3
 
+--- How much of a settlement's own footprint may be standing water.
+--
+-- A third. A fishing village stands beside water and a village on a river has
+-- some of it inside the bounds, so zero would be wrong; more than a third and
+-- the place is in the sea rather than beside it.
+local FLOODED_SITE_LIMIT = 0.35
+
 --- The longest a village street may be, so the settlement stays inside the
 --- area `emerge_village_area` generates for it.
 perfectworld.planner.MAX_STREET_LENGTH = 96
@@ -1590,6 +1597,33 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
   for _, key in ipairs({"min_x", "min_z"}) do bounds[key] = bounds[key] - 2 end
   for _, key in ipairs({"max_x", "max_z"}) do bounds[key] = bounds[key] + 2 end
 
+  -- Is the settlement, taken as a whole, standing in the sea?
+  --
+  -- Every lot is checked against water on its own, so no house is built in it —
+  -- but nothing asked about the ground between them, and a chain of dry
+  -- hummocks across a shoal passes lot by lot. Measured after the fact on a
+  -- fresh world: one settlement stood with 98% of its own footprint under
+  -- water, another with 29%.
+  --
+  -- A fishing village stands beside water, which is why the threshold is
+  -- generous rather than zero. It does not stand in it.
+  local flooded_share = 0
+  do
+    local wet, checked = 0, 0
+    for x = math.floor(bounds.min_x), math.ceil(bounds.max_x), 3 do
+      for z = math.floor(bounds.min_z), math.ceil(bounds.max_z), 3 do
+        if terrain.surface_y(x, z) then
+          checked = checked + 1
+          if terrain.is_liquid(x, z) then wet = wet + 1 end
+        end
+      end
+    end
+    if checked > 0 then flooded_share = wet / checked end
+  end
+  if flooded_share > FLOODED_SITE_LIMIT then
+    reject("site_flooded")
+  end
+
   local role_counts = {}
   for _, lot in ipairs(lots) do
     role_counts[lot.role] = (role_counts[lot.role] or 0) + 1
@@ -1623,7 +1657,9 @@ function perfectworld.planner.build_village_plan(candidate, profile, environment
     role_counts = role_counts,
     missing_required_roles = missing_required,
     rejections = rejections,
-    viable = #lots > 0 and #missing_required == 0,
+    flooded_share = flooded_share,
+    viable = #lots > 0 and #missing_required == 0
+      and flooded_share <= FLOODED_SITE_LIMIT,
   }
 
   plan.road_graph_signature = road_graph_signature(roads, center)

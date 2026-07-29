@@ -589,3 +589,33 @@ T.register_test("perfectworld", "one_road_through_a_wall_is_one_gate", function(
   end
   perfectworld.planner._world_terrain.reset()
 end)
+
+T.register_test("perfectworld", "a_settlement_is_not_planned_standing_in_the_sea", function(ctx)
+  -- Every lot is checked against water on its own, so no house is built in it.
+  -- Nothing asked about the ground between them, and a chain of dry hummocks
+  -- across a shoal passes lot by lot: measured on a fresh world, one settlement
+  -- stood with 98% of its own footprint under water.
+  local candidate = make_candidate("flooded_site_v1", 61, 61, 61000, -61000)
+  local env = make_env("coastal", 0, 4)
+
+  local dry = perfectworld.planner.plan_village(candidate, env, terrain("flat_lowland"))
+  ctx.assert.is_true(dry.viable, "the same candidate on dry land must be viable")
+  ctx.assert.is_true((dry.flooded_share or 0) < 0.05,
+    "flat lowland must read as dry, got " .. tostring(dry.flooded_share))
+
+  local drowned = perfectworld.planner.plan_village(candidate, env, terrain("submerged"))
+  ctx.assert.is_false(drowned.viable,
+    "a settlement whose own footprint is under water must not be viable")
+
+  -- Refused for the water, by whichever check got there first. Ground that is
+  -- wholly submerged never reaches the footprint test: the ecological survey
+  -- finds no site to stand on and says so, which is the same answer earlier.
+  local by_footprint = (drowned.flooded_share or 0) > 0.35
+  local by_survey = (drowned.rejections or {}).no_suitable_ecological_site
+    or (drowned.rejections or {}).site_flooded
+    or (drowned.rejections or {}).water
+  ctx.assert.is_true(by_footprint or by_survey ~= nil,
+    "and refused for the water rather than for something else; share="
+      .. tostring(drowned.flooded_share)
+      .. " rejections=" .. minetest.write_json(drowned.rejections or {}))
+end)
