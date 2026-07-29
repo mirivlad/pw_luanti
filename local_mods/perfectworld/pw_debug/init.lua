@@ -1281,7 +1281,11 @@ minetest.register_chatcommand("pw_village_list", {
     for _, id in ipairs(ids) do
       local s = perfectworld.settlements.get(id)
       if s then
-        table.insert(lines, "  " .. id .. " archetype=" .. (s.archetype or "?") .. " status=" .. (s.status or "?") .. " lots=" .. (s.lot_count or "?"))
+        table.insert(lines, "  " .. id
+          .. " \"" .. tostring(s.name or "?") .. "\""
+          .. " archetype=" .. (s.archetype or "?")
+          .. " status=" .. (s.status or "?")
+          .. " lots=" .. (s.lot_count or "?"))
       end
     end
     return true, table.concat(lines, "\n")
@@ -1456,6 +1460,8 @@ minetest.register_chatcommand("pw_village_info", {
     if not s then return false, "Settlement not found: " .. param end
     local env = s.environment_profile or {}
     local lines = {
+      "name=" .. tostring(s.name or (perfectworld.settlements.name_of
+        and perfectworld.settlements.name_of(s)) or "?"),
       "settlement_id=" .. tostring(s.settlement_id),
       "candidate_id=" .. tostring(s.candidate_id),
       "region_id=" .. tostring(s.region_id),

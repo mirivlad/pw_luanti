@@ -47,6 +47,8 @@ function perfectworld.settlements.normalize(data)
     or profile.selected_site)
   normalized.bounds = deep_copy(settlement.bounds or plan.bounds)
   normalized.archetype = settlement.archetype or plan.archetype
+  normalized.name = settlement.name
+  normalized.settlement_type = settlement.settlement_type
   normalized.size_class = settlement.size_class or plan.size_class
   normalized.plan_lots = deep_copy(plan.lots or settlement.plan_lots or {})
   normalized.ecology = deep_copy(settlement.ecology or profile.ecology or {})
@@ -86,5 +88,6 @@ function perfectworld.settlements.get_by_candidate(candidate_id)
 end
 
 dofile(minetest.get_modpath("pw_settlements") .. "/specializations.lua")
+dofile(minetest.get_modpath("pw_settlements") .. "/naming.lua")
 
 minetest.log("action", "[pw_settlements] loaded")

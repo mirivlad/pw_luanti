@@ -424,3 +424,96 @@ T.register_test("perfectworld", "a_bigger_settlement_never_gets_a_shorter_street
       "street shrank as the settlement grew: " .. table.concat(shrunk, "; "))
   end
 end)
+
+-- === Names ===
+
+T.register_test("perfectworld", "a_place_has_the_same_name_every_time_it_is_asked", function(ctx)
+  if not perfectworld.settlements.name_for then
+    ctx.assert.not_nil(perfectworld.settlements.name_for,
+      "settlements must be able to say what they are called")
+    return
+  end
+  local a = perfectworld.settlements.name_for("settlement_v1_p3_n7_0", "wet", "fishing", "village")
+  local b = perfectworld.settlements.name_for("settlement_v1_p3_n7_0", "wet", "fishing", "village")
+  ctx.assert.equal(a, b, "a name is a function of the seed and the id, nothing else")
+  ctx.assert.is_true(#a >= 4, "a name must be a name: got " .. tostring(a))
+end)
+
+T.register_test("perfectworld", "names_are_not_all_the_same_name", function(ctx)
+  if not perfectworld.settlements.name_for then
+    ctx.assert.not_nil(perfectworld.settlements.name_for, "settlements must be named")
+    return
+  end
+
+  -- A generator that returns one name for everything passes every test that
+  -- only checks one name.
+  local seen, total = {}, 0
+  for i = 1, 200 do
+    local family = ({"cold", "coastal", "dry", "forest", "rocky", "temperate", "wet"})[1 + i % 7]
+    local kind = ({"farm", "hamlet", "village", "town"})[1 + i % 4]
+    local name = perfectworld.settlements.name_for(
+      "settlement_v1_p" .. i .. "_n" .. (i * 7 % 41) .. "_0", family, nil, kind)
+    if not seen[name] then
+      seen[name] = true
+      total = total + 1
+    end
+  end
+  ctx.assert.is_true(total >= 60,
+    "two hundred settlements produced only " .. total .. " distinct names")
+end)
+
+T.register_test("perfectworld", "a_name_says_what_kind_of_place_it_is", function(ctx)
+  if not perfectworld.settlements.name_for then
+    ctx.assert.not_nil(perfectworld.settlements.name_for, "settlements must be named")
+    return
+  end
+
+  -- The suffix carries the size. A hamlet called Ashbury and a town called
+  -- Ashcote are both wrong, in a way a reader feels before they can name it.
+  local small = {cote = true, thorpe = true, croft = true, stead = true,
+    wick = true, worth = true, ham = true}
+  local large = {ton = true, bury = true, borough = true, market = true,
+    port = true, minster = true, chester = true}
+
+  local town_large, town_total = 0, 0
+  local farm_small, farm_total = 0, 0
+  for i = 1, 120 do
+    local id = "settlement_v1_p" .. (i * 13) .. "_n" .. i .. "_0"
+    local town = perfectworld.settlements.name_for(id, "temperate", nil, "town")
+    local farm = perfectworld.settlements.name_for(id, "temperate", nil, "farm")
+    for suffix in pairs(large) do
+      if town:sub(-#suffix) == suffix then town_large = town_large + 1 break end
+    end
+    for suffix in pairs(small) do
+      if farm:sub(-#suffix) == suffix then farm_small = farm_small + 1 break end
+    end
+    town_total = town_total + 1
+    farm_total = farm_total + 1
+  end
+
+  -- Not every name takes a size suffix — some are named for a feature instead —
+  -- so this asks for a clear majority rather than for all of them.
+  ctx.assert.is_true(town_large > town_total * 0.5,
+    "towns must mostly carry a town's suffix: " .. town_large .. " of " .. town_total)
+  ctx.assert.is_true(farm_small > farm_total * 0.5,
+    "farms must mostly carry a small place's suffix: " .. farm_small .. " of " .. farm_total)
+end)
+
+T.register_test("perfectworld", "a_name_is_written_the_way_a_place_is_called", function(ctx)
+  if not perfectworld.settlements.name_for then
+    ctx.assert.not_nil(perfectworld.settlements.name_for, "settlements must be named")
+    return
+  end
+
+  -- One capital, at the front. A capital in the middle — SnowRidge — is how a
+  -- program writes a name and not how a place is called.
+  local offenders = {}
+  for i = 1, 150 do
+    local family = ({"cold", "coastal", "dry", "forest", "rocky", "temperate", "wet"})[1 + i % 7]
+    local name = perfectworld.settlements.name_for(
+      "settlement_v1_n" .. i .. "_p" .. (i * 3 % 29) .. "_1", family, nil, "village")
+    if name:sub(2):match("%u") then offenders[#offenders + 1] = name end
+  end
+  ctx.assert.equal(#offenders, 0,
+    "these names have a capital in the middle: " .. table.concat(offenders, " "))
+end)

@@ -3113,6 +3113,27 @@ local function materialize_village_plan(plan, profile, candidate)
     end
   end
 
+  -- The name of the place, where somebody arriving would read it.
+  do
+    local ways = {}
+    if perfectworld.roads.links_for_settlement then
+      local rx, rz = candidate.rx, candidate.rz
+      if not rx then
+        rx, rz = perfectworld.get_region_coords({x = candidate.x, y = 0, z = candidate.z})
+      end
+      for _, link in ipairs(perfectworld.roads.links_for_settlement(candidate.id, rx, rz)) do
+        ways[#ways + 1] = link
+      end
+    end
+    local place_name = perfectworld.settlements.name_for(candidate.id,
+      profile.environment and profile.environment.biome_family,
+      profile.specialization, profile.settlement_type)
+    local signs = perfectworld.planner.signpost_settlement(
+      candidate, profile, plan.bounds, ways, place_name)
+    warnings[#warnings + 1] = string.format("name:%s signs:%d",
+      place_name, signs.placed)
+  end
+
   -- Guarantee that every door can be walked to.
   --
   -- The planned driveway is a straight line and terrain does not always
@@ -3220,6 +3241,10 @@ local function materialize_village_plan(plan, profile, candidate)
     regional_anchor = deep_copy(profile.regional_anchor),
     selected_site = deep_copy(profile.selected_site),
     ecology = deep_copy(profile.ecology),
+    name = perfectworld.settlements.name_for(candidate.id,
+      profile.environment and profile.environment.biome_family,
+      profile.specialization, profile.settlement_type),
+    settlement_type = profile.settlement_type,
     center_pos = settlement_center,
     bell_pos = bell_placed,
     street_anchor = street_anchor,
@@ -4069,6 +4094,107 @@ end
 
 perfectworld.planner._standing_buildings = standing_buildings
 
+
+--- Put the settlement's name where somebody arriving would read it.
+--
+-- At every way in, not at one of them. A settlement joined to three neighbours
+-- has three roads arriving and a traveller comes down whichever one they were
+-- already on; a single sign at a nominal front gate is a sign nobody sees.
+--
+-- The sign goes beside the carriageway rather than on it, at the point where
+-- the road crosses into the settlement, facing back down the road — which is
+-- the direction the reader is coming from.
+local SIGN_MARGIN = 10
+
+local function sign_node_name()
+  -- Whatever wood this game registered signs in. Asking rather than naming one
+  -- means a game with different trees still gets signs.
+  for name, _ in pairs(minetest.registered_nodes) do
+    if name:match("^mcl_signs:standing_sign_") then return name end
+  end
+  return nil
+end
+
+function perfectworld.planner.signpost_settlement(candidate, profile, bounds, ways, name)
+  if type(bounds) ~= "table" or not bounds.min_x or not name then
+    return {placed = 0}
+  end
+  local sign = sign_node_name()
+  if not sign then return {placed = 0, reason = "no_sign_node"} end
+
+  local low_x = bounds.min_x - SIGN_MARGIN
+  local high_x = bounds.max_x + SIGN_MARGIN
+  local low_z = bounds.min_z - SIGN_MARGIN
+  local high_z = bounds.max_z + SIGN_MARGIN
+
+  local function inside(x, z)
+    return x >= low_x and x <= high_x and z >= low_z and z <= high_z
+  end
+
+  local placed, seen = 0, {}
+  for _, way in ipairs(ways or {}) do
+    local points = way.path or way.points or {}
+    -- Walk the way and find where it crosses the boundary. Both directions
+    -- matter: a road that starts inside and leaves is the same entrance as one
+    -- that arrives, and a settlement at the end of a road still has one.
+    local previous_inside = nil
+    local cells = {}
+    for i = 1, #points - 1 do
+      local from, to = points[i], points[i + 1]
+      local dx, dz = to.x - from.x, to.z - from.z
+      local steps = math.max(math.abs(dx), math.abs(dz), 1)
+      for step = 0, steps do
+        local t = step / steps
+        cells[#cells + 1] = {
+          x = math.floor(from.x + dx * t + 0.5),
+          z = math.floor(from.z + dz * t + 0.5),
+        }
+      end
+    end
+
+    for index, cell in ipairs(cells) do
+      local here = inside(cell.x, cell.z)
+      if previous_inside ~= nil and here ~= previous_inside then
+        -- A crossing. Put the sign one node to the side of the road, on the
+        -- outside, so the traveller passes it rather than walks through it.
+        local before = cells[math.max(index - 1, 1)]
+        local after = cells[math.min(index + 1, #cells)]
+        local dx, dz = after.x - before.x, after.z - before.z
+        local length = math.sqrt(dx * dx + dz * dz)
+        if length > 0.001 then
+          local px = math.floor(cell.x - dz / length * 2 + 0.5)
+          local pz = math.floor(cell.z + dx / length * 2 + 0.5)
+          local key = math.floor(px / 8) .. ":" .. math.floor(pz / 8)
+          if not seen[key] then
+            seen[key] = true
+            local ground = paving_level(px, pz)
+            if ground then
+              local above = minetest.get_node({x = px, y = ground + 1, z = pz}).name
+              if above == "air" or above == "ignore" then
+                minetest.set_node({x = px, y = ground + 1, z = pz},
+                  {name = sign, param2 = 0})
+                local meta = minetest.get_meta({x = px, y = ground + 1, z = pz})
+                if mcl_signs and mcl_signs.string_to_ustring then
+                  meta:set_string("utext",
+                    minetest.serialize(mcl_signs.string_to_ustring(name)))
+                end
+                meta:set_string("text", name)
+                meta:set_string("infotext", name)
+                if mcl_signs and mcl_signs.update_sign then
+                  mcl_signs.update_sign({x = px, y = ground + 1, z = pz})
+                end
+                placed = placed + 1
+              end
+            end
+          end
+        end
+      end
+      previous_inside = here
+    end
+  end
+
+  return {placed = placed}
+end
 
 --- Ring a town with fields, outside its wall.
 --
