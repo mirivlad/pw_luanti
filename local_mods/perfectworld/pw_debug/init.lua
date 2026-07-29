@@ -2085,6 +2085,78 @@ local function summarise_analysis(rows)
   return metrics
 end
 
+minetest.register_chatcommand("pw_accessibility_report", {
+  params = "",
+  description = "Write a report of every settlement's door accessibility",
+  privs = {server = true},
+  func = function()
+    -- The question is whether a villager can get from the street to each door.
+    -- Answered from the records the planner wrote while materializing, which
+    -- were produced with the walker's own limits — one node of rise, two of
+    -- drop — rather than re-derived here with different ones.
+    local settlements, totals = {}, {
+      settlements = 0, lots = 0, materialized = 0, unreachable = 0,
+      complete = 0, partial = 0, failed = 0, rescues = {},
+    }
+
+    for _, id in ipairs(perfectworld.settlements.list_ids()) do
+      local s = perfectworld.settlements.get(id)
+      if s then
+        local access = s.access or {}
+        local unreachable = access.unreachable or {}
+        local rescues = access.rescues or {}
+        local materialized = 0
+        for _, lot in ipairs(s.plan_lots or {}) do
+          if lot.status == "materialized" then materialized = materialized + 1 end
+        end
+
+        totals.settlements = totals.settlements + 1
+        totals.lots = totals.lots + (tonumber(s.lot_count) or 0)
+        totals.materialized = totals.materialized + materialized
+        totals.unreachable = totals.unreachable + #unreachable
+        totals[s.status or "failed"] = (totals[s.status or "failed"] or 0) + 1
+        for route, count in pairs(rescues) do
+          totals.rescues[route] = (totals.rescues[route] or 0) + count
+        end
+
+        settlements[#settlements + 1] = {
+          id = id,
+          name = perfectworld.settlements.name_of(s),
+          settlement_type = s.settlement_type or s.size_class,
+          archetype = s.archetype,
+          status = s.status,
+          lot_count = s.lot_count or 0,
+          planned_lot_count = s.planned_lot_count or 0,
+          materialized_lots = materialized,
+          unreachable_doors = #unreachable,
+          unreachable_ids = unreachable,
+          rescues = rescues,
+          center_pos = s.center_pos,
+        }
+      end
+    end
+
+    table.sort(settlements, function(a, b) return a.id < b.id end)
+
+    local path = write_world_file(
+      "pw_accessibility_" .. os.date("!%Y%m%d_%H%M%S") .. ".json",
+      minetest.write_json({
+        generated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        world_seed = perfectworld.world_seed_string,
+        totals = totals,
+        settlements = settlements,
+      }, true))
+
+    minetest.log("action", string.format(
+      "[pw_debug] pw_accessibility_report wrote %s: %d settlement(s), %d lot(s), "
+        .. "%d unreachable door(s)",
+      tostring(path), totals.settlements, totals.lots, totals.unreachable))
+    return true, string.format(
+      "%d settlement(s), %d lot(s), %d unreachable door(s) -> %s",
+      totals.settlements, totals.lots, totals.unreachable, tostring(path))
+  end,
+})
+
 minetest.register_chatcommand("pw_village_analyze", {
   params = "[synthetic|world] [count]",
   description = "Plan N villages and write a diversity report to the world directory",

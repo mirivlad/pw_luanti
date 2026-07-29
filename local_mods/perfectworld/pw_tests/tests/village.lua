@@ -274,6 +274,11 @@ end)
 T.register_test("perfectworld", "village_missing_production_role_is_not_viable", function(ctx)
   local candidate = make_candidate(
     "missing_production_v3", 71, 71, 71000, 71000)
+  -- Pin the world seed. The terrain here is synthetic and fixed; the plan laid
+  -- on it is not, because archetype, size and lot count come from the village
+  -- seed key, which includes the seed of whatever world the test runs in. This
+  -- fixture fitted its dwellings until a fresh world was generated under it.
+  candidate.world_seed_override = "missing_production_fixed_seed"
   local env = make_env("forest", 1, 300)
   env.specialization = "forestry"
   env.ecology = {

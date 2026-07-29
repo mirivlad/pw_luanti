@@ -23,6 +23,7 @@ local test_files = {
   "roads",
   "road_network",
   "population",
+  "accessibility",
   "worksites",
 }
 

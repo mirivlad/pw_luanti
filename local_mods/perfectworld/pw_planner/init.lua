@@ -3570,9 +3570,16 @@ local function materialize_village_plan(plan, profile, candidate)
           {name = "anchor_corner_zx", via = {{x = street_anchor.x, z = door.z}, street_anchor}},
         }
 
+        -- Only when the door cannot already be reached.
+        --
+        -- The guard was lost when this loop was rewritten, and every door got a
+        -- driveway carved to it whether or not it needed one: 155 of 164 lots
+        -- in a measured world had a "rescue" route built to a door that was
+        -- already reachable, which levels ground and cuts head-room for nothing
+        -- and makes the tally meaningless.
         local chosen = nil
         for _, route in ipairs(routes) do
-          if chosen then break end
+          if chosen or path then break end
           local legs, ok = {}, true
           local from = door
           for step, waypoint in ipairs(route.via) do
@@ -3595,6 +3602,31 @@ local function materialize_village_plan(plan, profile, candidate)
           end
         end
 
+        if not chosen and not path then
+          -- Say why every shape was refused. "No route" on its own is not a
+          -- diagnosis: a way refused for a neighbour's wall and a way refused
+          -- for having no ground under it need different answers.
+          local why = {}
+          for _, route in ipairs(routes) do
+            local from = door
+            local parts = {}
+            for step, waypoint in ipairs(route.via) do
+              local leg = plan_walkway(from, waypoint, blocked_by_building, {
+                keep_destination = (step == #route.via),
+                palette = profile.material_palette,
+              })
+              parts[#parts + 1] = string.format("%d/%d blocked=%d",
+                #leg.cells, math.max(math.abs(waypoint.x - from.x),
+                  math.abs(waypoint.z - from.z), 1) + 1, leg.blocked_cells)
+              if not leg.connected then break end
+              from = {x = waypoint.x, y = leg.end_y, z = waypoint.z}
+            end
+            why[#why + 1] = route.name .. "[" .. table.concat(parts, " ") .. "]"
+          end
+          minetest.log("warning", "[pw_planner] no rescue route for "
+            .. tostring(lot.structure_id) .. ": " .. table.concat(why, " "))
+        end
+
         if chosen then
           rescues[chosen] = (rescues[chosen] or 0) + 1
           origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y) or origin
@@ -3606,8 +3638,16 @@ local function materialize_village_plan(plan, profile, candidate)
 
         if not path then
           table.insert(unreachable, lot.structure_id)
-          minetest.log("warning", "[pw_planner] no walkable route to "
-            .. tostring(lot.structure_id) .. " in " .. tostring(candidate.id))
+          -- Which of the two it is matters. A door with no route and no route
+          -- built is blocked ground; a door with a route built and still no
+          -- route walkable means the way that was laid is not one a walker can
+          -- use, and that is a different bug in a different place.
+          minetest.log("warning", string.format(
+            "[pw_planner] no walkable route to %s in %s (%s; door %s kerb %s)",
+            tostring(lot.structure_id), tostring(candidate.id),
+            chosen and ("built " .. chosen) or "nothing built",
+            minetest.pos_to_string(lot.door),
+            minetest.pos_to_string(lot.road_point)))
         end
       end
     end
