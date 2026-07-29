@@ -4,37 +4,72 @@ Procedural physical world generation for [Luanti](https://www.luanti.org/) with
 [Mineclonia](https://content.luanti.org/packages/ryvnf/mineclonia/).
 
 PerfectWorld builds the physical shape of a living world: regions, settlements,
-buildings, roads, and farms — placed deterministically through mapgen
-integration.
+buildings, roads between them, and the people who live there — all placed
+deterministically from the world seed.
 
-> **Status:** experimental. See [docs/status.md](docs/status.md) for current
-> test baseline and known issues.
+> **Status:** experimental. See [docs/status.md](docs/status.md) for the current
+> test baseline, what was measured, and what is known to be wrong.
 
 ## What It Does
 
-- Divides the world into 1024×1024 deterministic regions
-- Exposes a server-side perception API (`pw_bot_bridge`) so an automated player
-  and the test kit can inspect what was built
-- Decides what such a player would do (`pw_player_bot`): bounded memory, beliefs,
-  needs, goals and routes — written down as an intent, never executed
-- Plans settlement candidates (farms, hamlets, villages) per region
-- Places 5 structure types: farmstead, two house variants, barn, well
-- Generates village layouts: main street, plots, building assignment
-- Builds local roads between village and farm
-- All placement is deterministic from world seed — same seed, same world
+**The land and what stands on it**
+
+- Divides the world into 1024×1024 deterministic regions, each holding on
+  average 1.8 settlements
+- Plans farms, hamlets, villages and towns, choosing each site from a bounded
+  physical survey rather than from a biome label
+- Gives each settlement a trade — fishing, farming, forestry or mining — that
+  has to be supported by measured water, soil, trees or stone
+- Builds from a catalogue of **68 declarative building schemes in six styles**:
+  vernacular, nordic, japanese, mediterranean, stilt, and urban for towns. A
+  settlement picks one style and builds only from it
+- Walls a town, cuts a gate where each road arrives, posts guards on them, and
+  rings it with fields outside the wall
+- Names every place from what the land is, and puts a sign at every way in
+
+**Roads**
+
+- Joins settlements with a network computed as a Gabriel graph, so two regions
+  either side of a border agree about the countryside between them without
+  talking to each other
+- Follows the ground with one height profile per road: goes round a hill where
+  there is a flank, bores through where there is not, decks a gorge on piers,
+  and bridges water up to forty-eight nodes
+- Ends in a landing — deck, mooring posts, lamp and a boat — where it meets
+  water it cannot cross
+
+**People**
+
+- Moves ordinary Mineclonia villagers in, one per bed standing in the world
+- Puts a workstation in every dwelling, chosen from the settlement's trade, so a
+  fishing village fills with fishermen and a mining one with masons
+- Hangs a bell, which is what makes a cluster of houses read as a village to the
+  game rather than as loose mobs standing near each other
+
+**The bot**
+
+- `pw_bot_bridge` — a server-side perception API, so an automated player and the
+  test kit can inspect what was built
+- `pw_player_bot` — decides what such a player would do: bounded memory,
+  beliefs, needs, goals and routes, written down as an intent and never executed
+- `pw_bot_runtime` — drives a real client through XTEST. It walks, climbs, and
+  opens doors, gates and trapdoors
 
 ## What It Doesn't Do (Yet)
 
-- Errands. PW Bot has a body now: it walks a course, climbs stairs and opens
-  doors, gates and trapdoors through a real client. What it has no goal for is
-  going somewhere *in order to do something* — see
-  [docs/pw-bot/](docs/pw-bot/README.md)
-- NPCs, villagers, economy
-- Roads between settlements
-- Bridges or tunnels
-- Global route network
-- Interior decoration beyond minimal
-- Save migration between versions
+- **Economy.** Nothing in the world changes after it is generated: every
+  `globalstep` in the project belongs to the bot. A settlement built today is
+  identical in a year
+- **Caravans.** The roads between settlements carry nobody
+- **Port towns.** A road that meets the sea gets a landing stage; the town that
+  should stand behind it is not built
+- **Errands.** The bot has a body and walks a course, but has no goal for going
+  somewhere *in order to do something* — see [docs/pw-bot/](docs/pw-bot/README.md)
+- **Cities.** The type exists; region planning never produces one, and a street
+  longer than 96 nodes would be planned against terrain that has not been
+  generated yet
+- Global route pathfinding over the settlement network
+- Save migration between planner versions
 
 ## Requirements
 
@@ -72,27 +107,14 @@ See [docs/quickstart.md](docs/quickstart.md) for detailed first-run instructions
 ## Running Tests
 
 ```bash
-# Setup
-cp secrets/pwbot.password.example secrets/pwbot.password  # edit password
-
-# Test mode
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
-
-# Start test client
-./scripts/run-test-client.sh
-
-# Grant privileges
-docker exec perfectworld-dev sh -c 'echo "/grant pwbot all" > /proc/1/fd/0'
-
-# Tests auto-run when pwbot connects, or manually:
-echo '{"command":"runchat","chatcmd":"pw_test_all","player":"pwbot"}' \
-  > data/worlds/perfectworld/rc_cmd.json
-
-# Results
-ls -t data/worlds/perfectworld/ltk_report_*.json | head -1
+./scripts/run-testkit.sh
 ```
 
-Current: **310 total | 308 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
+That restarts the server in test mode, connects `pwbot`, runs everything and
+prints the summary. `--keep` reuses a running server; `--no-client` skips
+starting the client.
+
+Current: **370 total | 368 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
 
 The two failures are a configuration contradiction, not a regression: two
 `pw_bot_bridge` tests require `external_transport` to be off by default, while
@@ -117,20 +139,23 @@ PerfectWorld/
 ├── docs/                         # Documentation
 ├── local_mods/
 │   ├── perfectworld/             # PerfectWorld modpack
-│   │   ├── pw_core/              # API, version, world format lock
-│   │   ├── pw_compat_mcl/        # Mineclonia material mappings
-│   │   ├── pw_planner/           # Region planning, materialization
-│   │   ├── pw_structures/        # Structure registry, placement
-│   │   ├── pw_roads/             # Road network API
-│   │   ├── pw_settlements/       # Settlement types (skeleton)
-│   │   ├── pw_population/        # Population (skeleton)
-│   │   ├── pw_debug/             # Chat commands, screenshots
-│   │   ├── pw_bot_bridge/        # Server-side perception for the future PW Bot
-│   │   ├── pw_player_bot/        # The bot's decision layer: memory, needs, goals, intents
+│   │   ├── pw_core/              # API, version, world format lock, hashed choices
+│   │   ├── pw_compat_mcl/        # Mineclonia materials, biome families, palettes
+│   │   ├── pw_planner/           # Region planning, village grammar, materialization
+│   │   ├── pw_structures/        # Structure registry, terrain preparation, placement
+│   │   ├── pw_schemes/           # 68 declarative building schemes in six styles
+│   │   ├── pw_roads/             # Road raster, and the network between settlements
+│   │   ├── pw_settlements/       # Settlement types, specializations, trades, names
+│   │   ├── pw_population/        # The people: villagers, one per bed
+│   │   ├── pw_debug/             # /pw_* chat commands, reports, screenshots
+│   │   ├── pw_bot_bridge/        # Server-side perception for the bot
+│   │   ├── pw_player_bot/        # The bot's decision layer: memory, needs, goals
 │   │   └── pw_tests/             # TestKit-based tests
 │   ├── luanti_testkit/           # Universal test framework
 │   └── pw_remote_control/        # JSON remote controller
-├── scripts/                      # Build, install, test utilities
+├── tools/
+│   └── pw_bot_runtime/           # Drives a real client through XTEST
+├── scripts/                      # Build, install, test and diagnostic utilities
 └── secrets/                      # Password files (gitignored)
 ```
 
@@ -145,7 +170,7 @@ PerfectWorld/
 | [docs/testing.md](docs/testing.md) | Running and understanding tests |
 | [docs/development.md](docs/development.md) | Architecture and contributing |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems and fixes |
-| [docs/status.md](docs/status.md) | Current state, known issues |
+| [docs/status.md](docs/status.md) | Current state, what was measured, known issues |
 | [docs/perfectworld-architecture.md](docs/perfectworld-architecture.md) | Detailed design |
 | [docs/pw-bot/](docs/pw-bot/README.md) | The bot bridge: perception API, protocol, security |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |

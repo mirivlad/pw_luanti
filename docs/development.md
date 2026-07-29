@@ -10,17 +10,20 @@ See `docs/perfectworld-architecture.md` for the detailed design document.
 pw_core  ←  (root, no dependencies)
   ↑
   ├── pw_compat_mcl  (depends: pw_core)
-  ├── pw_planner     (depends: pw_core, opt: pw_structures)
+  ├── pw_roads       (depends: pw_core)
+  ├── pw_planner     (depends: pw_core, pw_roads, opt: pw_structures,
+  │                    pw_compat_mcl, pw_settlements, pw_schemes, pw_population)
   ├── pw_structures  (depends: pw_core, opt: pw_compat_mcl)
-  ├── pw_roads       (depends: pw_core, pw_planner)
-  ├── pw_settlements (depends: pw_core) [skeleton]
-  ├── pw_population  (depends: pw_core) [skeleton]
+  ├── pw_schemes     (depends: pw_core, opt: pw_structures, pw_compat_mcl)
+  ├── pw_settlements (depends: pw_core)
+  ├── pw_population  (depends: pw_core)
   ├── pw_debug       (depends: pw_core, opt: pw_planner, pw_structures)
   ├── pw_bot_bridge  (depends: pw_core, opt: pw_compat_mcl, pw_planner,
   │                    pw_structures, pw_roads, pw_settlements, luanti_testkit)
   ├── pw_player_bot  (depends: pw_core, pw_bot_bridge, opt: pw_compat_mcl,
   │                    pw_planner, luanti_testkit)
-  └── pw_tests       (depends: luanti_testkit, pw_core, pw_planner, pw_structures, pw_compat_mcl)
+  └── pw_tests       (depends: luanti_testkit, pw_core, pw_planner, pw_structures,
+                       pw_compat_mcl, pw_settlements, pw_roads, pw_population)
 
 luanti_testkit  ←  (no game dependencies)
 pw_remote_control  ←  (standalone)

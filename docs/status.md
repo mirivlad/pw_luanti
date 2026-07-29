@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-07-29
-**Test baseline:** 359 total | 357 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 370 total | 368 PASS | 2 FAIL | 0 SKIP | 0 ERROR
 
 The two failures are the long-standing `external_transport` configuration
 contradiction: two `pw_bot_bridge` tests require the setting to be off by

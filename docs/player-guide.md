@@ -18,6 +18,21 @@ When you explore new terrain, PerfectWorld places structures through mapgen:
   exposed rock
 - **Villages**: a street network whose homes, production building and physical
   work area reflect the resources at its selected site
+- **Towns**: the same, walled, with a gate where each road arrives, guards on
+  the gates and fields outside the wall
+
+Most buildings you will meet do not come from that list. They come from a
+catalogue of 68 declarative schemes in six styles — vernacular, nordic,
+japanese, mediterranean, stilt, and urban for towns — and a settlement picks one
+style and builds only from it.
+
+Settlements are joined by roads. A road goes round a hill where there is a
+flank, bores through where there is not, decks a gorge on piers and bridges
+water; where it meets water it cannot cross it ends in a landing with a boat.
+
+Every settlement has a name, taken from what the land is, on a sign at each way
+in. People live there: ordinary Mineclonia villagers, one per bed, each with a
+workstation matching what the settlement does, and a bell in the middle.
 
 Villages come in three shapes:
 
@@ -86,6 +101,15 @@ All commands require at least `interact` privilege. Some require `server`.
 | `/pw_village_export` | Write all settlement records and validation reports |
 | `/pw_village_shotlist` | Write camera setups and metadata for screenshots |
 | `/pw_run_tests` | Run all PerfectWorld tests |
+| `/pw_settlement_density [radius]` | Count planned settlements per region, by type |
+| `/pw_village_failures` | Tally why settlements did not get built |
+| `/pw_population [id]` | Who lives in a settlement: beds, villagers, trades, workstations |
+| `/pw_populate [id] [force]` | Move people into a settlement built before they existed |
+| `/pw_road_network [radius]` | The planned roads between settlements around you |
+| `/pw_road_check [range]` | Read back what is on the ground where a road should be |
+| `/pw_street_check [id]` | Measure how walkable a settlement's own streets are |
+| `/pw_roads_pave [chunk_radius]` | Lay the settlement roads crossing the area around you |
+| `/pw_village_rematerialize` | Re-attempt every settlement with the current code |
 
 ## Finding Generated Structures
 

@@ -1,84 +1,119 @@
 # PerfectWorld
 
 PerfectWorld is a Luanti modpack for the physical shape of the world. It owns
-regions, settlement candidates, buildings, roads, farms, and later population
-and transport.
+regions, settlements, buildings, roads, farms and the people who live in them.
 
 ## Modules
 
 | Module | Responsibility |
 | --- | --- |
-| `pw_core` | Shared `perfectworld` API, settings, world seed handling, composite IDs, world format lock |
-| `pw_planner` | Deterministic regional logical plans, settlement/road persistence |
-| `pw_structures` | Structure registry, terrain preparation, rotation, and placement API |
-| `pw_village` | Village layout planner: plots, street, building assignment |
-| `pw_roads` | Road network API skeleton |
-| `pw_settlements` | Settlement type definitions |
-| `pw_population` | Population API skeleton |
-| `pw_debug` | `/pw_*` debug chat commands |
-| `pw_compat_mcl` | Mineclonia node/material compatibility |
+| `pw_core` | Shared `perfectworld` API, settings, world seed handling, composite IDs, world format lock, and the hashed-choice contract every decision is made with |
+| `pw_compat_mcl` | Mineclonia node and material compatibility: seven biome families, per-family palettes, workstations, abstract decor roles |
+| `pw_planner` | Region planning, the village grammar, the bounded ecological survey, road paving and materialization |
+| `pw_structures` | Structure registry, terrain preparation, rotation, placement and rollback |
+| `pw_schemes` | 68 declarative building schemes in six styles, five roof kinds, interiors by role |
+| `pw_roads` | The exact road raster, and the network that joins one settlement to the next |
+| `pw_settlements` | Settlement types, physical specializations, the trades each supports, and place names |
+| `pw_population` | The people: ordinary Mineclonia villagers, one per bed standing in the world |
+| `pw_bot_bridge` | Server-side perception API for an automated player |
+| `pw_player_bot` | That player's decision layer: memory, beliefs, needs, goals, intents |
+| `pw_debug` | `/pw_*` chat commands: reports, diagnostics, batch builds, screenshots |
 | `pw_tests` | Luanti TestKit coverage for PerfectWorld |
 
-## Registered Structures
+## Buildings
 
-| Structure | Type | Size | Description |
-| --- | --- | --- | --- |
-| `pw_farmstead_v1` | farm | 15x7x14 | Farmstead with walls, roof, garden, road connector |
-| `pw_house_small_v1` | residential | 7x5x5 | Compact house, low roof, 1 window |
-| `pw_house_small_v2` | residential | 9x6x5 | Wider house, higher walls, 2 windows |
-| `pw_barn_v1` | farmyard | 9x6x7 | Storage building, no windows, large door |
-| `pw_well_v1` | public | 3x4x3 | Open well with cobble pillars and water |
+Two catalogues, and they are not the same kind of thing.
+
+**`pw_structures`** holds ten buildings written as Lua generators, for the roles
+that carry contracts a scheme cannot yet express: `pw_farmstead_v1`,
+`pw_house_small_v1`, `pw_house_small_v2`, `pw_house_long_v1`,
+`pw_house_tall_v1`, `pw_barn_v1`, `pw_well_v1`, and the three production
+buildings `pw_fishery_v1`, `pw_sawmill_v1` and `pw_mine_workshop_v1`.
+
+**`pw_schemes`** holds 68 buildings written as data. A scheme names its
+footprint, wall height, roof kind, door side, interior fixtures by role, and the
+village roles it can fill. A style adds shared proportions and any material it
+pins outright. One builder reads both; no scheme carries code.
+
+| Style | Belongs in | What carries it |
+| --- | --- | --- |
+| `vernacular` | anywhere (fallback) | 45° gables, timber posts, stone plinth, local wood |
+| `nordic` | cold, rocky | shallow turf roofs, longhouses, few small windows |
+| `japanese` | temperate, forest, wet | raised floors, verandas, eaves two nodes past the wall |
+| `mediterranean` | dry, rocky | flat terraced roofs with parapets, pale stone cubes |
+| `stilt` | wet, coastal | everything on posts over open water, light roofs |
+| `urban` | any town | two to four storeys, stone below and timber above |
+
+A settlement picks **one** style, hashed from its own id and constrained by
+biome family, and builds only from it. `urban` is the exception: it is a size of
+building rather than a place's way of building, so a town draws on it whatever
+style the region otherwise gave it.
 
 ## Village Layout
 
-Villages (settlement type `"village"`) produce a deterministic layout:
+Villages produce a deterministic layout:
 
-1. Main street (40-80 nodes, 2-3 wide) through the settlement center
-2. 4-7 plots on both sides of the street
-3. Building assignment: 2-4 houses, 0-1 barn, 1 public point (well)
-4. Doors face the street
-5. Short path from each plot to the street
+1. A bounded ecological survey of nine sites picks where the settlement stands
+   and what it lives on — fishing, farming, forestry or mining — from measured
+   water, soil, trees and stone
+2. A street network sized from the buildings meant to stand on it, with side
+   lanes for larger settlements
+3. Lots along the streets, each rejected against slope, water, barren ground and
+   its neighbours
+4. Doors face the street, and every one is checked with the engine's pathfinder
+   from the carriageway, on foot
+5. A required production building and a transactional worksite — a dock, a
+   field, a forestry yard or a minehead
+6. A bell, and a signpost at every way in
 
-Layout is deterministic from settlement ID + region coordinates.
+Towns add a wall with a gate where each road arrives, guards on the gates, and
+fields outside the wall.
 
 ## Commands
 
+Reports and diagnostics:
+
 ```text
-/pw_status
-/pw_region
-/pw_plan
-/pw_plan <rx> <rz>
-/pw_structure <structure_id>
-/pw_prepare_shot [player] <structure_id>
-/pw_materialize <rx> <rz> <index> [force]
-/pw_demo
+/pw_status /pw_region /pw_plan [rx] [rz] /pw_structure <id>
+/pw_settlement_density [radius]
+/pw_village_list /pw_village_info [id] /pw_village_failures
+/pw_population [id] /pw_road_network [radius]
+/pw_road_check [range] /pw_street_check [id]
 ```
 
-## Current Behavior
+Building and maintenance (server priv):
 
-- Region size defaults to `1024`.
-- Each region gets a deterministic plan from world seed, region coordinates,
-  planner version, and configuration.
-- A region may contain 0 to 2 settlement candidates.
-- Candidate IDs are composite and readable, for example
-  `settlement_v1_n2_p3_0`; structure IDs use the settlement ID plus a local
-  index, for example `structure_v1_settlement_v1_n2_p3_0_0`.
-- PerfectWorld writes a ModStorage world format lock with
-  `world_format_version`, `planner_version`, `region_size`, and
-  `world_seed_fingerprint`. Incompatible values disable new materialization
-  instead of silently writing a different plan into an existing world.
-- Villages, farms, and roads are materialized through `pw_planner.materialize_chunk`
-  and `pw_planner.materialize_region_candidate`.
-- Materialized structures are recorded separately in ModStorage by structure ID.
-- `pw_farmstead_v1` uses a simple deterministic terrace strategy.
-- Village street and building placement use the same terrain preparation pipeline.
+```text
+/pw_materialize <rx> <rz> <index> [force]
+/pw_village_batch [count] [radius]
+/pw_village_rematerialize
+/pw_roads_pave [chunk_radius]
+/pw_populate [id] [force]
+/pw_village_analyze [synthetic|world] [count]
+```
+
+## Current Behaviour
+
+- Region size defaults to `1024`. A region holds on average 1.8 settlements
+- Every decision is an independent labelled hash of the seed — there is no PRNG
+  stream anywhere, so a decision can be reproduced without replaying the ones
+  before it
+- Candidate IDs are composite and readable: `settlement_v1_n2_p3_0`; structure
+  IDs embed the settlement, `structure_v1_settlement_v1_n2_p3_0_0`
+- Records are sharded by the region their id names, so writing one barn rewrites
+  one region rather than the world
+- PerfectWorld writes a ModStorage world format lock. Incompatible values
+  disable new materialization instead of silently writing a different plan into
+  an existing world
+- Settlements are joined by roads planned as a Gabriel graph and paved per
+  mapchunk, with tunnels, embankments, bridges and landings
 
 ## Limitations
 
-- No real villages, towns, farms, or economy yet.
-- Roads between settlements are simple straight lines with height correction.
-- Bridges are not implemented; roads may fail on steep terrain.
-- Population is a skeleton only.
-- No global route pathfinding exists yet.
-- Terrain adaptation is a flat terrace, not a slope-following building system.
-- Building interiors are minimal (light, table, container).
+- Nothing changes after generation. There is no economy and no clock: every
+  `globalstep` in the modpack belongs to the bot
+- Roads carry nobody. There are no caravans
+- A road that meets the sea gets a landing stage, not a port town
+- Cities are a declared type that region planning never produces
+- No global route pathfinding over the settlement network
+- No save migration between planner versions
