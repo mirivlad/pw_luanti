@@ -122,6 +122,43 @@ minetest.register_chatcommand("pw_plan", {
   end,
 })
 
+minetest.register_chatcommand("pw_settlement_density", {
+  params = "[region_radius]",
+  description = "Count planned settlements per region, by type",
+  privs = {interact = true},
+  func = function(_, params)
+    local radius = math.min(tonumber(params) or 12, 24)
+    local regions, total = 0, 0
+    local by_type, by_count = {}, {}
+    for rx = -radius, radius do
+      for rz = -radius, radius do
+        local plan = perfectworld.planner.plan_region(rx, rz)
+        local here = #(plan.settlement_candidates or {})
+        regions = regions + 1
+        total = total + here
+        by_count[here] = (by_count[here] or 0) + 1
+        for _, candidate in ipairs(plan.settlement_candidates or {}) do
+          by_type[candidate.type] = (by_type[candidate.type] or 0) + 1
+        end
+      end
+    end
+
+    local types = {}
+    for kind, count in pairs(by_type) do
+      types[#types + 1] = string.format("%s=%d(%.0f%%)", kind, count, count / total * 100)
+    end
+    table.sort(types)
+    local counts = {}
+    for n = 0, 6 do
+      if by_count[n] then counts[#counts + 1] = n .. ":" .. by_count[n] end
+    end
+    return true, string.format(
+      "%d regions, %d settlements, %.2f per region | %s | per-region counts %s",
+      regions, total, total / regions, table.concat(types, " "),
+      table.concat(counts, " "))
+  end,
+})
+
 minetest.register_chatcommand("pw_find_candidate", {
   params = "<type> [max_region_radius]",
   description = "Find the nearest planned settlement of a type that has not been built",
@@ -261,7 +298,8 @@ minetest.register_chatcommand("pw_roads_pave", {
 
     minetest.emerge_area(minp, maxp, function(_, _, remaining)
       if remaining > 0 then return end
-      local total = {links = 0, segments = 0, nodes = 0, chunks = 0, bridged = 0, unbridged = 0}
+      local total = {links = 0, segments = 0, nodes = 0, chunks = 0, bridged = 0,
+        unbridged = 0, tunnelled = 0, deepest_cut = 0}
       for cx = -radius, radius do
         for cz = -radius, radius do
           local chunk_min = {x = base_x + cx * size, y = -64, z = base_z + cz * size}
@@ -273,13 +311,16 @@ minetest.register_chatcommand("pw_roads_pave", {
           total.nodes = total.nodes + result.nodes
           total.bridged = total.bridged + (result.bridged or 0)
           total.unbridged = total.unbridged + (result.unbridged or 0)
+          total.tunnelled = total.tunnelled + (result.tunnelled or 0)
+          total.deepest_cut = math.max(total.deepest_cut, result.deepest_cut or 0)
         end
       end
       local report = string.format(
         "pw_roads_pave: %d chunk(s) around (%d,%d): %d link stretch(es), %d nodes, "
-          .. "%d bridged, %d left at the water's edge",
+          .. "%d bridged, %d tunnelled, %d left at the water's edge, deepest cut %d",
         total.chunks, math.floor(pos.x), math.floor(pos.z),
-        total.links, total.nodes, total.bridged, total.unbridged)
+        total.links, total.nodes, total.bridged, total.tunnelled,
+        total.unbridged, total.deepest_cut)
       minetest.log("action", "[pw_debug] " .. report)
       minetest.chat_send_player(name, report)
     end)

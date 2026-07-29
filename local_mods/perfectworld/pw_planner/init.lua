@@ -44,10 +44,18 @@ function perfectworld.planner.plan_region(rx, rz)
 	local reserved_areas = {}
 	local road_anchors = {}
 
+	-- How many settlements a region holds.
+	--
+	-- One region is a square kilometre. At a mean of 1.1 settlements to a region
+	-- the walk between neighbours was long enough that the countryside read as
+	-- empty rather than as countryside. A mean of 1.8 puts them close enough to
+	-- be a network and still far enough apart to be separate places — and
+	-- MIN_DISTANCE keeps two in one region from becoming one sprawl.
 	local num_candidates = choice.weighted(seed_key, "candidate_count", {
-		{value = 0, weight = 20},
-		{value = 1, weight = 50},
-		{value = 2, weight = 30},
+		{value = 0, weight = 8},
+		{value = 1, weight = 32},
+		{value = 2, weight = 38},
+		{value = 3, weight = 22},
 	})
 
 	for i = 0, num_candidates - 1 do
@@ -2226,6 +2234,26 @@ local LINK_SEAM_OVERLAP = 8
 --- causeway across a sea, and the road simply stops at the shore.
 local BRIDGE_MAX_SPAN = 48
 
+--- How deep a cutting may go before the road should be doing something else.
+--
+-- Four. A road in a hollow four deep is a hollow way, which is what old roads
+-- become. Deeper than that and it is a trench with a road at the bottom — the
+-- ground opened with a sword — which is what this project built until the
+-- head-room clearing was bounded.
+local MAX_CUT = 4
+
+--- How high an embankment may go before the road should be a bridge instead.
+local MAX_FILL = 3
+
+--- How far a road may be nudged sideways from the line that was planned for it.
+--- Past this it is not the same road any more.
+local LATERAL_MAX = 10
+
+--- How fast it may be nudged: one node of sideways for every four forward,
+--- which is about fourteen degrees. A road that swerves faster than that reads
+--- as a mistake rather than as a road going round something.
+local LATERAL_EVERY = 4
+
 --- The centreline of a way, one cell per node travelled.
 --
 -- Takes anything with a `points` polyline: a village street and a road between
@@ -2297,6 +2325,152 @@ end
 
 perfectworld.planner._bridgeable = bridgeable
 
+--- Decide where a way actually goes, and what it does where the ground is
+--- against it.
+--
+-- The planned polyline is a wish. This is where it meets the hill.
+--
+-- Three answers, in order of preference, which is the order a road builder
+-- would take them in:
+--
+--   go round     The line is nudged sideways, at most one node for every four
+--                forward — about fourteen degrees — and at most ten nodes from
+--                where it was planned. A hill with a flank is gone round,
+--                because that is cheaper than anything else and it is what
+--                every road that was walked before it was surveyed does.
+--
+--   go through   Where there is no flank within reach, the road holds its level
+--                and bores. The head-room clearing in `pave_way` is bounded to
+--                three, so what comes out is a tunnel: the hill above the road
+--                is untouched. This is the case that used to produce a canyon.
+--
+--   go over      Where the ground falls away instead, the road holds its level
+--                and is decked, on piers. Water was already handled this way;
+--                a dry gorge is the same problem and gets the same answer.
+--
+-- The sideways choice is made on blocks of four cells rather than per cell, and
+-- adjacent blocks may differ by one, which is what enforces the fourteen
+-- degrees without a second smoothing pass.
+function perfectworld.planner.route_way(cells, first, last, raw_in, water)
+  local count = last - first + 1
+  local mode, out_cells = {}, {}
+
+  -- Straight down the planned line, with no room to move, there is nothing to
+  -- decide: a single cell has no direction and no flank.
+  if count < 3 then
+    local y = walkable_profile(raw_in, first, last)
+    for i = first, last do
+      out_cells[i] = cells[i]
+      mode[i] = water[i] and "bridge" or "ground"
+    end
+    return {cells = out_cells, raw = raw_in, y = y, mode = mode}
+  end
+
+  --- The direction across the way at each cell, from its neighbours.
+  local function perpendicular(i)
+    local ahead = cells[math.min(i + 1, last)]
+    local behind = cells[math.max(i - 1, first)]
+    local dx, dz = ahead.x - behind.x, ahead.z - behind.z
+    local length = math.sqrt(dx * dx + dz * dz)
+    if length < 0.001 then return 0, 1 end
+    return -dz / length, dx / length
+  end
+
+  local function shifted(i, offset)
+    local px, pz = perpendicular(i)
+    return {
+      x = math.floor(cells[i].x + px * offset + 0.5),
+      z = math.floor(cells[i].z + pz * offset + 0.5),
+    }
+  end
+
+  -- Score each sideways offset over a block of cells by how high and how broken
+  -- the ground under it is. Lower and smoother wins, which is exactly "go round
+  -- the hill rather than into it" without having to name the hill.
+  local blocks = math.ceil(count / LATERAL_EVERY)
+  local chosen = {}
+  for block = 0, blocks - 1 do
+    local block_first = first + block * LATERAL_EVERY
+    local block_last = math.min(block_first + LATERAL_EVERY - 1, last)
+    local best_offset, best_score = 0, nil
+    for offset = -LATERAL_MAX, LATERAL_MAX, 2 do
+      local total, samples, roughest = 0, 0, 0
+      local previous = nil
+      for i = block_first, block_last do
+        local at = shifted(i, offset)
+        local ground = paving_level(at.x, at.z)
+        if ground then
+          total = total + ground
+          samples = samples + 1
+          if previous then
+            local step = math.abs(ground - previous)
+            if step > roughest then roughest = step end
+          end
+          previous = ground
+        end
+      end
+      if samples > 0 then
+        -- Height first, roughness second, and a small pull back towards the
+        -- planned line so the road does not wander for a one-node saving.
+        local score = total / samples + roughest * 2 + math.abs(offset) * 0.35
+        if not best_score or score < best_score then
+          best_score, best_offset = score, offset
+        end
+      end
+    end
+    chosen[block] = best_offset
+  end
+
+  -- No block may differ from its neighbour by more than one node of offset.
+  -- Forward then backward, the same clamp the height profile uses.
+  for block = 1, blocks - 1 do
+    local limit = chosen[block - 1]
+    if chosen[block] > limit + 1 then chosen[block] = limit + 1 end
+    if chosen[block] < limit - 1 then chosen[block] = limit - 1 end
+  end
+  for block = blocks - 2, 0, -1 do
+    local limit = chosen[block + 1]
+    if chosen[block] > limit + 1 then chosen[block] = limit + 1 end
+    if chosen[block] < limit - 1 then chosen[block] = limit - 1 end
+  end
+
+  -- The route, and the ground under it.
+  local raw = {}
+  for i = first, last do
+    local block = math.floor((i - first) / LATERAL_EVERY)
+    local offset = chosen[block] or 0
+    -- The ends stay where they were planned: a road that arrives at a village
+    -- ten nodes to one side of its own gate has not arrived.
+    local from_end = math.min(i - first, last - i)
+    if from_end < LATERAL_EVERY * 2 then
+      offset = math.floor(offset * from_end / (LATERAL_EVERY * 2) + 0.5)
+    end
+    local at = offset == 0 and cells[i] or shifted(i, offset)
+    out_cells[i] = at
+    if water[i] then
+      raw[i] = raw_in[i]
+    else
+      raw[i] = paving_level(at.x, at.z) or raw_in[i]
+    end
+  end
+
+  local y = walkable_profile(raw, first, last)
+
+  for i = first, last do
+    if water[i] then
+      mode[i] = "bridge"
+    elseif raw[i] and y[i] and raw[i] - y[i] > MAX_CUT then
+      mode[i] = "tunnel"
+    elseif raw[i] and y[i] and y[i] - raw[i] > MAX_FILL then
+      mode[i] = "bridge"
+    else
+      mode[i] = "ground"
+    end
+  end
+
+  return {cells = out_cells, raw = raw, y = y, mode = mode, offsets = chosen}
+end
+
 --- Lay one continuous stretch of a way.
 --
 -- The whole stretch shares one height profile. Paving segment by segment
@@ -2337,30 +2511,41 @@ local function pave_way(cells, first, last, opts)
     end
   end
 
-  local y = walkable_profile(raw, first, last)
+  local route = perfectworld.planner.route_way(cells, first, last, raw, water)
+  local y = route.y
   local crossable = bridgeable(water, first, last)
 
-  local placed, bridged, unbridged, deepest_cut = 0, 0, 0, 0
+  local pier = perfectworld.compat.get_material("cobble", {required = false})
+  local placed, bridged, unbridged, tunnelled, deepest_cut = 0, 0, 0, 0, 0
   for i = first, last do
     local level = y[i]
     local skip = water[i] and not crossable[i]
+    local cell = route.cells[i] or cells[i]
     if level and not skip then
       -- Across the direction of travel, taken from the neighbours rather than
       -- from one segment, so the strip does not kink at a corner.
-      local ahead = cells[math.min(i + 1, last)]
-      local behind = cells[math.max(i - 1, first)]
+      local ahead = route.cells[math.min(i + 1, last)] or cell
+      local behind = route.cells[math.max(i - 1, first)] or cell
       local offsets = perfectworld.roads.cross_section(
         ahead.x - behind.x, ahead.z - behind.z, width)
-      local material = water[i] and deck or surface
-      local cut = (raw[i] and raw[i] > level) and (raw[i] - level) or 0
+      local mode = route.mode[i]
+      local material = (mode == "bridge") and deck or surface
+      local cut = (route.raw[i] and route.raw[i] > level) and (route.raw[i] - level) or 0
       if cut > deepest_cut then deepest_cut = cut end
-      if water[i] then bridged = bridged + 1 end
+      if mode == "bridge" then bridged = bridged + 1 end
+      if mode == "tunnel" then tunnelled = tunnelled + 1 end
 
       for _, offset in ipairs(offsets) do
-        local px, pz = cells[i].x + offset.x, cells[i].z + offset.z
+        local px, pz = cell.x + offset.x, cell.z + offset.z
         if not (blocked and blocked(px, pz)) then
-          -- Head-room, and enough of it to see daylight out of a cutting.
-          for above = 1, math.max(3, cut + 3) do
+          -- Head-room, and no more.
+          --
+          -- This used to clear the whole depth of the cutting, which is how a
+          -- road through a hill became a canyon with a road at the bottom. A
+          -- walker needs three nodes; everything above that is the hill, and
+          -- the hill stays. Bounding it here is what turns a deep cutting into
+          -- a bore — a tunnel — without any other machinery.
+          for above = 1, 3 do
             local pos = {x = px, y = level + above, z = pz}
             local name = minetest.get_node(pos).name
             if name ~= "air" and name ~= "ignore" then
@@ -2375,12 +2560,32 @@ local function pave_way(cells, first, last, opts)
           placed = placed + 1
         end
       end
+
+      -- A bridge stands on something. Piers every fourth cell, carried down to
+      -- whatever is under the deck: without them a crossing over a gorge is a
+      -- ribbon hanging in the air, which is the other way a road can look
+      -- wrong on broken ground.
+      if mode == "bridge" and (i - first) % 4 == 0 and pier and pier ~= "air" then
+        local floor_y = route.raw[i]
+        if floor_y and level - floor_y > 1 then
+          for py = level - 1, math.max(floor_y, level - 24), -1 do
+            local name = minetest.get_node({x = cell.x, y = py, z = cell.z}).name
+            if name == "air" or name == "ignore"
+              or perfectworld.compat.is_liquid_node(name) then
+              minetest.set_node({x = cell.x, y = py, z = cell.z}, {name = pier})
+              placed = placed + 1
+            else
+              break
+            end
+          end
+        end
+      end
     elseif skip then
       unbridged = unbridged + 1
     end
   end
 
-  return placed, bridged, unbridged, deepest_cut
+  return placed, bridged, unbridged, deepest_cut, tunnelled
 end
 
 perfectworld.planner._pave_way = pave_way
@@ -4020,7 +4225,8 @@ end
 
 --- Lay the stretch of every settlement link that crosses this chunk.
 function perfectworld.planner.pave_links_in_chunk(minp, maxp)
-  local result = {links = 0, segments = 0, nodes = 0, bridged = 0, unbridged = 0}
+  local result = {links = 0, segments = 0, nodes = 0, bridged = 0, unbridged = 0,
+    tunnelled = 0, deepest_cut = 0}
   if perfectworld.materialization_enabled == false then return result end
 
   local blocked = standing_buildings(minp, maxp)
@@ -4056,14 +4262,16 @@ function perfectworld.planner.pave_links_in_chunk(minp, maxp)
       first = math.max(1, first - LINK_SEAM_OVERLAP)
       last = math.min(#cells, last + LINK_SEAM_OVERLAP)
       segments = 1
-      local bridged, unbridged
-      nodes, bridged, unbridged = pave_way(cells, first, last, {
+      local bridged, unbridged, deepest, tunnelled
+      nodes, bridged, unbridged, deepest, tunnelled = pave_way(cells, first, last, {
         width = link.width or 1,
         surface = link.surface,
         blocked = blocked,
       })
       result.bridged = result.bridged + bridged
       result.unbridged = result.unbridged + unbridged
+      result.tunnelled = (result.tunnelled or 0) + (tunnelled or 0)
+      result.deepest_cut = math.max(result.deepest_cut or 0, deepest or 0)
     end
 
     if segments > 0 then

@@ -566,3 +566,88 @@ T.register_test("perfectworld", "planning_the_same_region_twice_gives_the_same_r
   ctx.assert.equal(fingerprint(region.rx, region.rz), fingerprint(region.rx, region.rz),
     "the road network must be a function of the seed and nothing else")
 end)
+
+T.register_test("perfectworld", "a_road_through_a_hill_leaves_the_hill_standing", function(ctx)
+  local pave = perfectworld.planner._pave_way
+  if not pave then
+    ctx.assert.not_nil(pave, "the planner must be able to pave a way")
+    return
+  end
+
+  -- A ridge across the line of the road, too long to walk round inside the
+  -- lateral limit, with flat ground either side of it. What the road must not
+  -- do is open the ridge from the sky down: that is a canyon with a road at the
+  -- bottom, and it is what this project built until the head-room clearing was
+  -- bounded.
+  local origin = {x = 28600, z = -28600}
+  local base, crest = 30, 44
+  local length = 60
+  local ridge_from, ridge_to = 22, 38
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 2, y = base - 8, z = origin.z - 26},
+      {x = origin.x + length + 2, y = crest + 12, z = origin.z + 26})
+  end
+  -- The ridge runs across the way and far to either side of it, so there is no
+  -- flank to go round: the only ways past are through it or over it.
+  for i = 1, length do
+    local x = origin.x + i
+    local top = (i >= ridge_from and i <= ridge_to) and crest or base
+    for dz = -24, 24 do
+      for y = base - 6, crest + 10 do
+        minetest.set_node({x = x, y = y, z = origin.z + dz},
+          {name = y <= top and ground or "air"})
+      end
+    end
+  end
+
+  perfectworld.planner._world_terrain.reset()
+  local cells = {}
+  for i = 1, length do cells[i] = {x = origin.x + i, z = origin.z} end
+  local placed = pave(cells, 1, length, {width = 1, surface = "road"})
+  ctx.assert.is_true(placed > 0, "the way must actually be laid")
+
+  local surface = perfectworld.compat.get_material("road", {required = false})
+  -- At the middle of the ridge, find the road and then look up. If the hill is
+  -- still there, there is rock over the road. If it was cut open, there is sky.
+  local middle = math.floor((ridge_from + ridge_to) / 2)
+  local road_y = nil
+  for y = crest + 10, base - 8, -1 do
+    if minetest.get_node({x = origin.x + middle, y = y, z = origin.z}).name == surface then
+      road_y = y
+      break
+    end
+  end
+
+  if road_y then
+    local cover = 0
+    for y = road_y + 4, crest do
+      local name = minetest.get_node({x = origin.x + middle, y = y, z = origin.z}).name
+      if name ~= "air" and name ~= "ignore" then cover = cover + 1 end
+    end
+    ctx.assert.is_true(cover > 0,
+      "the hill must still stand over the road: found " .. cover
+        .. " nodes of cover between y=" .. (road_y + 4) .. " and the crest at " .. crest)
+  else
+    -- No road at the crest at all is the other acceptable answer: the way went
+    -- round, or stopped. What is not acceptable is a road with the hill gone.
+    local standing = 0
+    for y = base, crest do
+      local name = minetest.get_node({x = origin.x + middle, y = y, z = origin.z}).name
+      if name ~= "air" and name ~= "ignore" then standing = standing + 1 end
+    end
+    ctx.assert.is_true(standing > 0,
+      "no road at the crest and no hill either: the ridge was removed")
+  end
+
+  for i = 1, length do
+    for dz = -24, 24 do
+      for y = base - 6, crest + 10 do
+        minetest.set_node({x = origin.x + i, y = y, z = origin.z + dz}, {name = "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+end)
