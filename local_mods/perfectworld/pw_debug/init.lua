@@ -318,10 +318,11 @@ minetest.register_chatcommand("pw_roads_pave", {
       end
       local report = string.format(
         "pw_roads_pave: %d chunk(s) around (%d,%d): %d link stretch(es), %d nodes, "
-          .. "%d bridged, %d tunnelled, %d landing(s), %d left at the water's edge, "
-          .. "deepest cut %d",
+          .. "%d bridged, %d tunnelled (%.0f%%), %d landing(s), "
+          .. "%d left at the water's edge, deepest cut %d",
         total.chunks, math.floor(pos.x), math.floor(pos.z),
         total.links, total.nodes, total.bridged, total.tunnelled,
+        total.nodes > 0 and (total.tunnelled / total.nodes * 100) or 0,
         total.landings, total.unbridged, total.deepest_cut)
       minetest.log("action", "[pw_debug] " .. report)
       minetest.chat_send_player(name, report)

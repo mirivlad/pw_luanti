@@ -208,6 +208,21 @@ function support.place_player(player, pos, yaw, pitch)
   player:set_pos(pos)
   player:set_look_horizontal(yaw or 0)
   player:set_look_vertical(pitch or 0)
+
+  -- And stop them falling.
+  --
+  -- `set_pos` moves a player without touching their velocity, so one who was
+  -- dropping when the test began is still dropping after it has stood them on
+  -- the scene's floor — and `on_ground` is derived from vertical velocity, so
+  -- the scene reports a player in mid-air on solid ground. It passed for as
+  -- long as the test world happened to leave the player standing still, and
+  -- failed the first time a fresh world spawned them on a slope.
+  if player.get_velocity and player.add_velocity then
+    local velocity = player:get_velocity()
+    if velocity then
+      player:add_velocity({x = -velocity.x, y = -velocity.y, z = -velocity.z})
+    end
+  end
 end
 
 -- === Request helpers ===

@@ -2253,12 +2253,13 @@ local MAX_FILL = 3
 
 --- How far a road may be nudged sideways from the line that was planned for it.
 --
--- Forty, not ten. Ten is less than the width of a hill, so a road with ten
--- nodes of room had no way round anything and bored through instead. A road
--- that bends fifty nodes over a quarter of a mile to keep to the low ground is
--- what a road looks like; a road that holds a straight line and tunnels is what
--- a machine does because a machine finds tunnelling cheap.
-local LATERAL_MAX = 40
+-- Eighty. Ten was less than the width of a hill and forty was less than the
+-- width of a ridge: measured on a fresh carpathian world with forty nodes of
+-- room, one road ran 320 of its 997 nodes underground. A road that bends a
+-- hundred nodes over half a mile to reach a pass is what a road looks like; a
+-- road that holds its line and tunnels is what a machine does, because a
+-- machine finds tunnelling cheap and people do not.
+local LATERAL_MAX = 80
 
 --- How fast it may be nudged: one node of sideways for every four forward,
 --- which is about fourteen degrees. A road that swerves faster than that reads
@@ -2552,6 +2553,7 @@ function perfectworld.planner.route_way(cells, first, last, raw_in, water, devia
     local best_offset, best_score = 0, nil
     for offset = -LATERAL_MAX, LATERAL_MAX, 2 do
       local total, samples, roughest, wet = 0, 0, 0, 0
+      local highest = nil
       local previous = nil
       for i = block_first, block_last do
         local at = shifted(i, offset)
@@ -2563,6 +2565,7 @@ function perfectworld.planner.route_way(cells, first, last, raw_in, water, devia
         if ground then
           total = total + ground
           samples = samples + 1
+          if not highest or ground > highest then highest = ground end
           if previous then
             local step = math.abs(ground - previous)
             if step > roughest then roughest = step end
@@ -2585,9 +2588,18 @@ function perfectworld.planner.route_way(cells, first, last, raw_in, water, devia
         -- Water is scored out of reach rather than merely disliked. Preferring
         -- low ground is right on a hill and catastrophic on a coast, where the
         -- lowest ground for miles is the sea bed.
+        -- The *highest* ground in the block, not the mean.
+        --
+        -- A road crossing a range crosses it at the col, and a col is where the
+        -- highest ground along the way is lowest. Scoring the mean lets a block
+        -- with a low valley and a high wall beat a block that is level all the
+        -- way across, which is how a road ends up aimed at a wall. Scoring the
+        -- maximum is what finds the pass.
+        local barrier = reference and math.max(highest - reference, 0) or 0
         local departure = reference and math.abs(mean - reference) or 0
-        local score = departure + departure * departure * 0.08
-          + roughest * 2 + math.abs(offset) * 0.35 + wet * 60
+        local score = barrier + barrier * barrier * 0.12
+          + departure * 0.5
+          + roughest * 2 + math.abs(offset) * 0.25 + wet * 60
         if not best_score or score < best_score then
           best_score, best_offset = score, offset
         end
