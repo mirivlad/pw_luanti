@@ -48,6 +48,7 @@ function perfectworld.settlements.normalize(data)
   normalized.bounds = deep_copy(settlement.bounds or plan.bounds)
   normalized.archetype = settlement.archetype or plan.archetype
   normalized.name = settlement.name
+  normalized.access = deep_copy(settlement.access or {})
   normalized.settlement_type = settlement.settlement_type
   normalized.size_class = settlement.size_class or plan.size_class
   normalized.plan_lots = deep_copy(plan.lots or settlement.plan_lots or {})

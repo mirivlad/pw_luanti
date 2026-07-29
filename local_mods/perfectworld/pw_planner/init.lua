@@ -2858,7 +2858,18 @@ perfectworld.planner._link_centreline = link_centreline
 
 --- Build a walkable way from `from` to `to`, stepping at most one block per
 -- cell and cutting head-room, so a villager on foot can actually use it.
-local function carve_walkway(from, to, material_name, blocked, opts)
+--- Work out where a way would go, without touching the world.
+--
+-- Split out from `carve_walkway` so a route can be judged before it is built.
+-- The rescue below tries several shapes of route; when each shape wrote itself
+-- into the world before being judged, a rejected candidate left its cells
+-- behind — its cut head-room, its felled trees, its levelled ground — and the
+-- route that finally passed could be passing on the sum of two failures rather
+-- than on its own merit. Re-running materialization would carve more each time.
+--
+-- Nothing here writes. The levels are derived from `paving_level` and the same
+-- clamps the builder uses, so the plan and the build agree by construction.
+local function plan_walkway(from, to, blocked, opts)
   opts = opts or {}
   local dx, dz = to.x - from.x, to.z - from.z
   local steps = math.max(math.abs(dx), math.abs(dz), 1)
@@ -2887,9 +2898,8 @@ local function carve_walkway(from, to, material_name, blocked, opts)
   -- shoal was laid along the sea bed. A villager stepping out of the house
   -- walked straight into the sea. A settlement built over water joins its doors
   -- with decking held at the level of the doorstep, on piles.
-  local deck = perfectworld.compat.get_material("wood_planks", {required = false})
-  local pile = perfectworld.structures.palette_material(
-    opts.palette, "wall_post", "tree")
+  local steps_planned = {}
+  local blocked_cells = 0
 
   local function flooded_at(x, z, ground)
     if not ground then return false end
@@ -2921,20 +2931,66 @@ local function carve_walkway(from, to, material_name, blocked, opts)
     -- The street owns its own surface. Writing the last cell re-levelled the
     -- carriageway to whatever height the driveway's chain happened to reach.
     if y and opts.keep_destination and s == steps then
+      steps_planned[#steps_planned + 1] = {x = cell.x, y = y, z = cell.z, arrive = true}
       previous_y = y
       hint = y
     elseif y and blocked and blocked(cell.x, cell.z) then
-      -- Never cut through a building to reach another one.
+      -- Never cut through a building to reach another one. A cell refused here
+      -- is a hole in the way: a walker cannot pass through the house that put
+      -- it there, so a route containing one is not a route.
+      steps_planned[#steps_planned + 1] = {x = cell.x, y = y, z = cell.z, blocked = true}
+      blocked_cells = blocked_cells + 1
       previous_y = y
       hint = y
     elseif y then
-      minetest.set_node({x = cell.x, y = y, z = cell.z},
-        {name = (wet and deck and deck ~= "air") and deck or material_name})
-      if wet then
-        -- Piles every third cell, carried down to the bed. Without them the
-        -- decking is a plank ribbon lying on the sea.
-        if s % 3 == 0 and pile and pile ~= "air" then
-          for py = y - 1, math.max((natural or y) , y - 12), -1 do
+      steps_planned[#steps_planned + 1] = {
+        x = cell.x, y = y, z = cell.z, wet = wet, natural = natural,
+        pile = (s % 3 == 0),
+      }
+      previous_y = y
+      hint = y
+    end
+  end
+
+  -- A way is only a way if a walker can get from one end of it to the other.
+  -- One cell refused for a building in the middle breaks it; a cell with no
+  -- level at all breaks it too.
+  local connected = #steps_planned == steps + 1 and blocked_cells == 0
+  return {
+    cells = steps_planned,
+    connected = connected,
+    blocked_cells = blocked_cells,
+    end_y = previous_y,
+  }
+end
+
+perfectworld.planner._plan_walkway = plan_walkway
+
+--- Build a way that has already been planned.
+--
+-- Separate from the planning so that a route which turns out not to reach its
+-- destination costs nothing: no cut head-room, no felled tree, no levelled
+-- ground left behind for the next candidate to build on.
+local function lay_walkway(plan, material_name, opts)
+  opts = opts or {}
+  if not plan or not plan.cells then return 0 end
+  local deck = perfectworld.compat.get_material("wood_planks", {required = false})
+  local fill = perfectworld.compat.get_material("ground", {required = false})
+  local pile = perfectworld.structures.palette_material(
+    opts.palette, "wall_post", "tree")
+
+  local laid = 0
+  for _, cell in ipairs(plan.cells) do
+    -- `arrive` is the destination street cell, which owns its own surface, and
+    -- `blocked` is somebody else's building. Neither is ours to write.
+    if not cell.arrive and not cell.blocked then
+      minetest.set_node({x = cell.x, y = cell.y, z = cell.z},
+        {name = (cell.wet and deck and deck ~= "air") and deck or material_name})
+      laid = laid + 1
+
+      if cell.wet then
+        if cell.pile and pile and pile ~= "air" then
+          for py = cell.y - 1, math.max(cell.natural or cell.y, cell.y - 12), -1 do
             local name = minetest.get_node({x = cell.x, y = py, z = cell.z}).name
             if name == "air" or name == "ignore"
               or perfectworld.compat.is_liquid_node(name) then
@@ -2945,25 +3001,32 @@ local function carve_walkway(from, to, material_name, blocked, opts)
           end
         end
       else
-        local below = minetest.get_node({x = cell.x, y = y - 1, z = cell.z}).name
+        local below = minetest.get_node({x = cell.x, y = cell.y - 1, z = cell.z}).name
         if below == "air" or below == "ignore" then
-          minetest.set_node({x = cell.x, y = y - 1, z = cell.z},
-            {name = perfectworld.compat.get_material("ground", {required = false})})
+          minetest.set_node({x = cell.x, y = cell.y - 1, z = cell.z}, {name = fill})
         end
       end
+
       for above = 1, 3 do
-        local pos = {x = cell.x, y = y + above, z = cell.z}
+        local pos = {x = cell.x, y = cell.y + above, z = cell.z}
         local name = minetest.get_node(pos).name
         if name ~= "air" and name ~= "ignore"
           and not perfectworld.compat.is_liquid_node(name) then
           minetest.set_node(pos, {name = "air"})
         end
       end
-      previous_y = y
-      hint = y
     end
   end
-  return previous_y
+  return laid
+end
+
+perfectworld.planner._lay_walkway = lay_walkway
+
+--- Plan a way and build it. The shape every existing caller expects.
+local function carve_walkway(from, to, material_name, blocked, opts)
+  local plan = plan_walkway(from, to, blocked, opts)
+  lay_walkway(plan, material_name, opts)
+  return plan.end_y
 end
 
 --- A cell a walker can actually occupy: the air above the first solid node,
@@ -3458,6 +3521,7 @@ local function materialize_village_plan(plan, profile, candidate)
   -- block of rise per cell, which is a staircase by construction. A door
   -- nobody can reach is a house nobody can live in.
   local unreachable = {}
+  local rescues = {}
   if minetest.find_path then
     local origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y)
       or {x = street_anchor.x, y = street_anchor.y + 1, z = street_anchor.z}
@@ -3481,45 +3545,65 @@ local function materialize_village_plan(plan, profile, candidate)
           return false
         end
 
-        -- Straight first, then round a corner.
+        -- Straight first, then round a corner — and nothing is built until
+        -- one of them is known to reach.
         --
-        -- The rescue used to try two straight lines and give up. A straight
-        -- line from a door to its kerb crosses a neighbour's footprint often
-        -- enough in a tight town, and `blocked_by_building` — rightly — refuses
-        -- to cut through it, so the way was laid up to the obstruction and
-        -- stopped. Measured on a town of twenty-two lots: three doors with no
-        -- route to them, which is three houses nobody can enter or leave.
+        -- A straight line from a door to its kerb crosses a neighbour's
+        -- footprint often enough in a tight settlement, and
+        -- `blocked_by_building` — rightly — refuses to cut through it, so the
+        -- way stops at the obstruction. Going round a corner is what a person
+        -- does when a wall is in the way, and one of the two corners of the
+        -- rectangle between door and kerb is almost always clear.
         --
-        -- Going round a corner is what a person does when a wall is in the way,
-        -- and one of the two corners of the rectangle between door and kerb is
-        -- almost always clear.
+        -- Every candidate is planned in full and judged before anything is
+        -- written. When candidates wrote themselves as they went, a rejected
+        -- one left its cells behind and the route that finally passed might be
+        -- passing on the sum of two failures; re-materializing carved more each
+        -- time. Now a rejected candidate costs nothing at all.
         local door = {x = lot.door.x, y = lot.door.y, z = lot.door.z}
         local routes = {
-          {lot.road_point},
-          {{x = door.x, z = lot.road_point.z}, lot.road_point},
-          {{x = lot.road_point.x, z = door.z}, lot.road_point},
-          {street_anchor},
-          {{x = door.x, z = street_anchor.z}, street_anchor},
-          {{x = street_anchor.x, z = door.z}, street_anchor},
+          {name = "direct", via = {lot.road_point}},
+          {name = "corner_xz", via = {{x = door.x, z = lot.road_point.z}, lot.road_point}},
+          {name = "corner_zx", via = {{x = lot.road_point.x, z = door.z}, lot.road_point}},
+          {name = "anchor", via = {street_anchor}},
+          {name = "anchor_corner_xz", via = {{x = door.x, z = street_anchor.z}, street_anchor}},
+          {name = "anchor_corner_zx", via = {{x = street_anchor.x, z = door.z}, street_anchor}},
         }
 
+        local chosen = nil
         for _, route in ipairs(routes) do
-          if path then break end
+          if chosen then break end
+          local legs, ok = {}, true
           local from = door
-          for step, waypoint in ipairs(route) do
-            carve_walkway(from, waypoint, road_material, blocked_by_building, {
-              -- Only the last leg arrives at a street it must not re-level.
-              keep_destination = (step == #route),
+          for step, waypoint in ipairs(route.via) do
+            local leg = plan_walkway(from, waypoint, blocked_by_building, {
+              keep_destination = (step == #route.via),
               palette = profile.material_palette,
             })
-            from = {x = waypoint.x, y = from.y, z = waypoint.z}
+            if not leg.connected then ok = false break end
+            legs[#legs + 1] = leg
+            -- The next leg starts where this one actually ended. Starting it at
+            -- the door's height instead would plan the second leg from a point
+            -- the first never reached.
+            from = {x = waypoint.x, y = leg.end_y, z = waypoint.z}
           end
+          if ok then
+            for _, leg in ipairs(legs) do
+              lay_walkway(leg, road_material, {palette = profile.material_palette})
+            end
+            chosen = route.name
+          end
+        end
+
+        if chosen then
+          rescues[chosen] = (rescues[chosen] or 0) + 1
           origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y) or origin
           target = standing_spot(lot.door.x, lot.door.z, lot.door.y) or target
           kerb = standing_spot(lot.road_point.x, lot.road_point.z, lot.door.y) or kerb
           path = minetest.find_path(origin, target, 160, 1, 2, "A*_noprefetch")
             or (kerb and minetest.find_path(kerb, target, 64, 1, 2, "A*_noprefetch"))
         end
+
         if not path then
           table.insert(unreachable, lot.structure_id)
           minetest.log("warning", "[pw_planner] no walkable route to "
@@ -3587,6 +3671,10 @@ local function materialize_village_plan(plan, profile, candidate)
     regional_anchor = deep_copy(profile.regional_anchor),
     selected_site = deep_copy(profile.selected_site),
     ecology = deep_copy(profile.ecology),
+    access = {
+      unreachable = deep_copy(unreachable),
+      rescues = deep_copy(rescues),
+    },
     name = perfectworld.settlements.name_for(candidate.id,
       profile.environment and profile.environment.biome_family,
       profile.specialization, profile.settlement_type),
