@@ -3646,8 +3646,13 @@ local function materialize_village_plan(plan, profile, candidate)
             "[pw_planner] no walkable route to %s in %s (%s; door %s kerb %s)",
             tostring(lot.structure_id), tostring(candidate.id),
             chosen and ("built " .. chosen) or "nothing built",
-            minetest.pos_to_string(lot.door),
-            minetest.pos_to_string(lot.road_point)))
+            -- Written out by hand: a road point carries x and z and no y, and
+            -- `pos_to_string` wants all three. Formatting it crashed the
+            -- materializer, which is a poor way for a diagnostic to behave.
+            string.format("(%s,%s,%s)", tostring(lot.door.x),
+              tostring(lot.door.y), tostring(lot.door.z)),
+            string.format("(%s,%s)", tostring(lot.road_point.x),
+              tostring(lot.road_point.z))))
         end
       end
     end
