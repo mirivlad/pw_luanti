@@ -3481,11 +3481,39 @@ local function materialize_village_plan(plan, profile, candidate)
           return false
         end
 
-        for _, destination in ipairs({lot.road_point, street_anchor}) do
+        -- Straight first, then round a corner.
+        --
+        -- The rescue used to try two straight lines and give up. A straight
+        -- line from a door to its kerb crosses a neighbour's footprint often
+        -- enough in a tight town, and `blocked_by_building` — rightly — refuses
+        -- to cut through it, so the way was laid up to the obstruction and
+        -- stopped. Measured on a town of twenty-two lots: three doors with no
+        -- route to them, which is three houses nobody can enter or leave.
+        --
+        -- Going round a corner is what a person does when a wall is in the way,
+        -- and one of the two corners of the rectangle between door and kerb is
+        -- almost always clear.
+        local door = {x = lot.door.x, y = lot.door.y, z = lot.door.z}
+        local routes = {
+          {lot.road_point},
+          {{x = door.x, z = lot.road_point.z}, lot.road_point},
+          {{x = lot.road_point.x, z = door.z}, lot.road_point},
+          {street_anchor},
+          {{x = door.x, z = street_anchor.z}, street_anchor},
+          {{x = street_anchor.x, z = door.z}, street_anchor},
+        }
+
+        for _, route in ipairs(routes) do
           if path then break end
-          carve_walkway({x = lot.door.x, y = lot.door.y, z = lot.door.z},
-            destination, road_material, blocked_by_building,
-            {keep_destination = true, palette = profile.material_palette})
+          local from = door
+          for step, waypoint in ipairs(route) do
+            carve_walkway(from, waypoint, road_material, blocked_by_building, {
+              -- Only the last leg arrives at a street it must not re-level.
+              keep_destination = (step == #route),
+              palette = profile.material_palette,
+            })
+            from = {x = waypoint.x, y = from.y, z = waypoint.z}
+          end
           origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y) or origin
           target = standing_spot(lot.door.x, lot.door.z, lot.door.y) or target
           kerb = standing_spot(lot.road_point.x, lot.road_point.z, lot.door.y) or kerb
