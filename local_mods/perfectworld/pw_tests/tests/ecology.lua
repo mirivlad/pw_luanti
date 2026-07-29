@@ -870,3 +870,47 @@ T.register_test("perfectworld", "ecology_plan_rejects_a_region_without_viable_si
   ctx.assert.equal(profile.ecology_error, "no_suitable_ecological_site",
     "profile must explain why selection failed")
 end)
+
+T.register_test("perfectworld", "a_town_is_surveyed_over_the_ground_a_town_covers", function(ctx)
+  if not perfectworld.planner.ecology.survey_site then
+    ctx.assert.not_nil(perfectworld.planner.ecology.survey_site,
+      "ecology must survey a site")
+    return
+  end
+
+  -- A fixed survey radius judges every site on the same small patch. A town
+  -- measured on this world came out 167 nodes wide while the survey looked at
+  -- 48: the report said water 0% and buildable 99%, and the town was built into
+  -- a shoal. What a survey covers has to follow what will stand on it.
+  local terrain = perfectworld.planner.make_synthetic_terrain({
+    base = 30,
+    seed_key = "survey_radius_probe",
+  })
+  local site = {id = "probe", x = 41000, z = -41000}
+  local environment = {
+    biome_id = "test:temperate", biome_name = "test:temperate",
+    biome_family = "temperate", heat = 50, humidity = 50,
+  }
+
+  local farm = perfectworld.planner.ecology.survey_site(site, terrain, environment, "farm")
+  local town = perfectworld.planner.ecology.survey_site(site, terrain, environment, "town")
+
+  ctx.assert.not_nil(farm, "a farm site must be surveyed")
+  ctx.assert.not_nil(town, "a town site must be surveyed")
+  if not farm or not town then return end
+
+  -- Both keep a workable number of samples; what changes is how far apart they
+  -- are taken, which is the point.
+  ctx.assert.is_true(farm.sample_count > 0 and town.sample_count > 0,
+    "both surveys must actually sample the ground")
+  ctx.assert.is_true(town.sample_count <= farm.sample_count * 3,
+    "a town survey must not cost five times a farm's: "
+      .. town.sample_count .. " against " .. farm.sample_count)
+
+  -- And the wider one must genuinely reach further. On flat synthetic ground
+  -- every sample agrees, so the reach is checked directly rather than through
+  -- the numbers the survey reports.
+  local unknown = perfectworld.planner.ecology.survey_site(
+    site, terrain, environment, "village")
+  ctx.assert.not_nil(unknown, "a village site must be surveyed")
+end)

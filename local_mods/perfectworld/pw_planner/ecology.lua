@@ -7,6 +7,31 @@ local deep_copy = perfectworld.core.deep_copy
 local SITE_RADIUS = 40
 local SURVEY_RADIUS = 24
 local SURVEY_STEP = 6
+
+--- How far to survey, by what is going to be built on the ground surveyed.
+--
+-- A fixed radius of 24 judges every site on a patch 48 nodes across. A town
+-- measured on this world came out 167 nodes wide, so two thirds of it stood on
+-- ground nobody had looked at: the survey reported water 0% and buildable 99%,
+-- and the town was built into a shoal.
+--
+-- The radius stops at 48 because `emerge_village_area` generates 64 nodes
+-- around the candidate and a sample past that reads as nothing at all — a
+-- wider survey would not see more, it would only report less.
+local SURVEY_RADIUS_BY_TYPE = {
+  farm = 24,
+  hamlet = 24,
+  village = 36,
+  town = 48,
+  city = 48,
+}
+
+--- Keep the sample count roughly constant as the radius grows: a town survey
+--- at the village step would be five times the columns for no more certainty.
+local function survey_grid(radius)
+  local step = math.max(SURVEY_STEP, math.floor(radius / 4))
+  return radius, step
+end
 local MAX_SHORE_RELIEF = 3
 local OFFSETS = {
   {x = 40, z = 0},
@@ -72,15 +97,21 @@ local function sign(value)
   return value > 0 and 1 or -1
 end
 
-local function shoreline_span(column_by_key, land, water)
+--- How far the usable shore runs, walked along the survey grid.
+--
+-- The grid step and radius are passed in rather than read from the module
+-- constants: the survey is now sized by what will be built on it, and a scan
+-- that stepped by six through a grid sampled every twelve would find nothing in
+-- `column_by_key` and report every shore as one cell long.
+local function shoreline_span(column_by_key, land, water, radius, grid_step)
   local water_dx = sign(water.x - land.x)
   local water_dz = sign(water.z - land.z)
-  local tangent_x = -water_dz * SURVEY_STEP
-  local tangent_z = water_dx * SURVEY_STEP
+  local tangent_x = -water_dz * grid_step
+  local tangent_z = water_dx * grid_step
   local span = 1
 
   for _, direction in ipairs({-1, 1}) do
-    for step = 1, math.floor(SURVEY_RADIUS * 2 / SURVEY_STEP) do
+    for step = 1, math.floor(radius * 2 / grid_step) do
       local x = land.x + tangent_x * step * direction
       local z = land.z + tangent_z * step * direction
       local column = column_by_key[x .. ":" .. z]
@@ -95,7 +126,9 @@ local function shoreline_span(column_by_key, land, water)
   return span
 end
 
-function ecology.survey_site(site, terrain, environment)
+function ecology.survey_site(site, terrain, environment, settlement_type)
+  local SURVEY_RADIUS, SURVEY_STEP = survey_grid(
+    SURVEY_RADIUS_BY_TYPE[settlement_type] or SURVEY_RADIUS)
   local columns = {}
   local column_by_key = {}
   local counts = {
@@ -141,7 +174,8 @@ function ecology.survey_site(site, terrain, environment)
           local apart = distance(column, land)
           if apart <= SURVEY_STEP * math.sqrt(2) + 0.01 then
             local from_center = distance(site, column)
-            local span = shoreline_span(column_by_key, land, column)
+            local span = shoreline_span(column_by_key, land, column,
+              SURVEY_RADIUS, SURVEY_STEP)
             local reachable = from_center <= SURVEY_RADIUS + SURVEY_STEP
             local current_reachable = shore_distance
               and shore_distance <= SURVEY_RADIUS + SURVEY_STEP
@@ -258,7 +292,7 @@ function ecology.select_site(candidate, terrain, environment_provider)
   for _, site in ipairs(ecology.enumerate_sites(candidate)) do
     local center_column = terrain.sample_column(site.x, site.z)
     local environment = environment_provider(site, center_column) or {}
-    local evidence = ecology.survey_site(site, terrain, environment)
+    local evidence = ecology.survey_site(site, terrain, environment, candidate.type)
     local ranked = perfectworld.settlements.evaluate_specializations(evidence)
     local scores = {}
     for _, item in ipairs(ranked) do
