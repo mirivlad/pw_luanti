@@ -367,8 +367,14 @@ T.register_test("perfectworld", "a_road_profile_is_walkable_end_to_end", functio
         math.abs(y[i] - y[i - 1]), i - 1, i))
   end
   for i = 1, #ground do
-    ctx.assert.is_true(y[i] <= ground[i],
-      "a road may be cut into the ground but never float above it, at cell " .. i)
+    -- The rule used to be "never above the ground at all". It is now "never
+    -- more than an embankment above it": the profile has a floor under it so a
+    -- road does not bore a mine under a mountain, and lifting it out of the
+    -- abyss means it sometimes rides a little proud of a dip. More than an
+    -- embankment's worth and the road is decked instead.
+    ctx.assert.is_true(y[i] <= ground[i] + 3,
+      "a road may ride an embankment but not float, at cell " .. i
+        .. ": ground " .. ground[i] .. ", road " .. y[i])
   end
   -- Flat ground must be left exactly as it is, or every road would sit in a
   -- trench of its own making.
@@ -650,4 +656,44 @@ T.register_test("perfectworld", "a_road_through_a_hill_leaves_the_hill_standing"
     end
   end
   perfectworld.planner._world_terrain.reset()
+end)
+
+T.register_test("perfectworld", "a_road_does_not_bore_a_mine_under_a_mountain", function(ctx)
+  local profile = perfectworld.planner._walkable_profile
+  if not profile then
+    ctx.assert.not_nil(profile, "the planner must flatten ground into a road profile")
+    return
+  end
+
+  -- A coast with a mountain behind it: the lowest ground within reach is sea
+  -- level, and an unbounded profile takes the road down to it and bores through
+  -- the mountain at that level. Measured on a real link before this was bounded:
+  -- a cut 191 deep.
+  local ground = {}
+  for i = 1, 30 do ground[i] = 4 end
+  for i = 31, 90 do ground[i] = math.min(4 + (i - 30) * 4, 190) end
+  for i = 91, 140 do ground[i] = 190 end
+
+  local y = profile(ground, 1, #ground)
+
+  local deepest = 0
+  for i = 1, #ground do
+    local cut = ground[i] - y[i]
+    if cut > deepest then deepest = cut end
+  end
+  ctx.assert.is_true(deepest <= 24,
+    "a road may tunnel, not mine: deepest cut was " .. deepest)
+
+  -- And it must still be walkable, which is the constraint the floor could
+  -- easily have broken.
+  for i = 2, #ground do
+    ctx.assert.is_true(math.abs(y[i] - y[i - 1]) <= 1,
+      "step of " .. math.abs(y[i] - y[i - 1]) .. " at cell " .. i)
+  end
+
+  -- The road does climb early, and that is correct: it cannot be at sea level
+  -- beside the mountain and on top of it sixty cells later at one node a cell.
+  -- What it must not do is stay at sea level and bore.
+  ctx.assert.is_true(y[120] > 150,
+    "the road must be up on the mountain by the far end, not under it: " .. y[120])
 end)

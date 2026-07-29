@@ -83,6 +83,51 @@ Verified in the world rather than only in the plan, with
 from the catalogue, japanese and stilt villages both appearing, and no
 settlement mixing two styles.
 
+## What a Road Does About the Ground
+
+Three things were wrong with roads, and the first two were mine.
+
+**Deep cuttings.** The height profile was one-sided — a road may be cut into a
+hill, never raised above it — and the depth of the cut was never bounded. The
+head-room clearing ran to `max(3, cut + 3)`, so it removed the whole cutting: a
+thirty-node hill became a thirty-node trench with a road at the bottom, the
+ground opened with a sword. A walker needs three nodes of head-room. Bounding
+the clearing to three turns a deep cutting into a bore — a tunnel — with no
+other machinery at all.
+
+**Boring under mountains.** The profile takes the road to the lowest ground
+within reach, which on a coast with a mountain behind it is sea level, and then
+drives through the mountain at that level. Measured on a real link: a cut **191
+deep**. A road does not mine two hundred nodes under a hill; it climbs it. There
+is now a floor under the profile, propagated with the mirror of the same
+transform so it stays grade-limited, and the deepest cut on that same link is
+now **24**. The stretches that used to be bore are decked instead.
+
+**Steering into the sea.** The rule that nudges a road round a hill scores each
+sideways offset by how low and how smooth the ground under it is. Lowest wins —
+which is right on a hill and catastrophic on a coast, where the lowest ground
+for miles is the sea bed. Water is now scored out of reach rather than merely
+disliked.
+
+Routing has three answers, in the order a road builder would take them:
+
+| | |
+|---|---|
+| go round | the line is nudged sideways, at most one node for every four forward — about fourteen degrees — and at most ten from where it was planned. The ends stay put: a road that arrives ten nodes to one side of a village gate has not arrived |
+| go through | where there is no flank within reach, the road holds its level and bores, up to twenty-four nodes under the surface |
+| go over | where the ground falls away, the road holds its level and is decked on piers every fourth cell. Water was already handled this way; a dry gorge is the same problem |
+
+**Where a road meets water it cannot cross** it ends in a landing: a stone apron,
+a plank deck on piles, mooring posts, a lamp and a boat. A road that stops at the
+waterline reads as one that ran out of budget; a road that ends in a quay reads
+as one that arrived.
+
+This is a landing stage and **not a port town**. A settlement is something the
+region planner decides on measured ground, and inventing one wherever a road
+happens to reach the sea would put towns in places nothing chose. The landing
+has not yet been seen in the world either: no link in the areas measured so far
+meets water wider than the forty-eight nodes a bridge will cross.
+
 ## Roads Between Settlements
 
 Villages had streets; the countryside between them had nothing. It now carries a

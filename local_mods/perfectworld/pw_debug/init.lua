@@ -299,7 +299,7 @@ minetest.register_chatcommand("pw_roads_pave", {
     minetest.emerge_area(minp, maxp, function(_, _, remaining)
       if remaining > 0 then return end
       local total = {links = 0, segments = 0, nodes = 0, chunks = 0, bridged = 0,
-        unbridged = 0, tunnelled = 0, deepest_cut = 0}
+        unbridged = 0, tunnelled = 0, deepest_cut = 0, landings = 0}
       for cx = -radius, radius do
         for cz = -radius, radius do
           local chunk_min = {x = base_x + cx * size, y = -64, z = base_z + cz * size}
@@ -313,14 +313,16 @@ minetest.register_chatcommand("pw_roads_pave", {
           total.unbridged = total.unbridged + (result.unbridged or 0)
           total.tunnelled = total.tunnelled + (result.tunnelled or 0)
           total.deepest_cut = math.max(total.deepest_cut, result.deepest_cut or 0)
+          total.landings = total.landings + (result.landings or 0)
         end
       end
       local report = string.format(
         "pw_roads_pave: %d chunk(s) around (%d,%d): %d link stretch(es), %d nodes, "
-          .. "%d bridged, %d tunnelled, %d left at the water's edge, deepest cut %d",
+          .. "%d bridged, %d tunnelled, %d landing(s), %d left at the water's edge, "
+          .. "deepest cut %d",
         total.chunks, math.floor(pos.x), math.floor(pos.z),
         total.links, total.nodes, total.bridged, total.tunnelled,
-        total.unbridged, total.deepest_cut)
+        total.landings, total.unbridged, total.deepest_cut)
       minetest.log("action", "[pw_debug] " .. report)
       minetest.chat_send_player(name, report)
     end)

@@ -2234,6 +2234,12 @@ local LINK_SEAM_OVERLAP = 8
 --- causeway across a sea, and the road simply stops at the shore.
 local BRIDGE_MAX_SPAN = 48
 
+--- The deepest a road will bore under the ground it is crossing.
+--
+-- A tunnel through a hill is a tunnel. A bore two hundred nodes under a
+-- mountain, which is what an unbounded profile produces on a coast, is a mine.
+local MAX_TUNNEL_DEPTH = 24
+
 --- How deep a cutting may go before the road should be doing something else.
 --
 -- Four. A road in a hollow four deep is a hollow way, which is what old roads
@@ -2294,6 +2300,10 @@ end
 -- precisely that.
 local function walkable_profile(raw, first, last, grade)
   grade = grade or LINK_GRADE
+
+  -- The lowest grade-limited profile that stays under the ground:
+  -- `min(raw[j] + |i - j|)` over every j, computed exactly by a forward
+  -- min-pass and a backward one.
   local y = {}
   for i = first, last do y[i] = raw[i] end
   for i = first + 1, last do
@@ -2302,6 +2312,37 @@ local function walkable_profile(raw, first, last, grade)
   for i = last - 1, first, -1 do
     if y[i] and y[i + 1] and y[i] > y[i + 1] + grade then y[i] = y[i + 1] + grade end
   end
+
+  -- ...and then lifted out of the abyss.
+  --
+  -- The rule above takes the road down to the lowest ground within reach, which
+  -- on a coast with a mountain behind it means sea level — and then bores
+  -- through the mountain at that level. Measured on a real link: a cut 191 deep.
+  -- A road does not tunnel two hundred nodes under a hill; it climbs it.
+  --
+  -- So a floor: never more than `MAX_TUNNEL_DEPTH` below the ground. Propagated
+  -- with the mirror of the same transform — `max(floor[j] - |i - j|)` — because
+  -- a pointwise floor is not grade-limited and would put a step in the road
+  -- where it bites. The pointwise maximum of two grade-limited profiles is
+  -- itself grade-limited, so the result still steps by one and no more.
+  local lower = {}
+  for i = first, last do
+    lower[i] = raw[i] and (raw[i] - MAX_TUNNEL_DEPTH) or nil
+  end
+  for i = first + 1, last do
+    if lower[i] and lower[i - 1] and lower[i] < lower[i - 1] - grade then
+      lower[i] = lower[i - 1] - grade
+    end
+  end
+  for i = last - 1, first, -1 do
+    if lower[i] and lower[i + 1] and lower[i] < lower[i + 1] - grade then
+      lower[i] = lower[i + 1] - grade
+    end
+  end
+  for i = first, last do
+    if y[i] and lower[i] and lower[i] > y[i] then y[i] = lower[i] end
+  end
+
   return y
 end
 
@@ -2324,6 +2365,97 @@ local function bridgeable(water, first, last)
 end
 
 perfectworld.planner._bridgeable = bridgeable
+
+--- Where a road meets water it cannot cross, it ends in a landing.
+--
+-- A road that simply stops at the waterline reads as a road that ran out of
+-- budget. A road that ends in a quay reads as a road that arrived: this is
+-- where you get in a boat, and the boat is there.
+--
+-- Not a port town. A settlement is a thing the region planner decides on
+-- measured ground, and inventing one wherever a road happens to reach the sea
+-- would put towns in places nothing chose. This is the landing stage; the town
+-- that should stand behind it is not built.
+local function build_landing(cell, level, ahead, palette)
+  local plank = perfectworld.structures.palette_material(palette, "floor_block", "wood_planks")
+  local post = perfectworld.structures.palette_material(palette, "wall_post", "tree")
+  local stone = perfectworld.structures.palette_material(palette, "foundation", "foundation")
+  local lamp = perfectworld.compat.get_material("lantern", {required = false})
+  if not plank or plank == "air" then return 0 end
+
+  -- Which way the water is: the direction the road was going when it stopped.
+  local dx = (ahead and ahead.x or cell.x) - cell.x
+  local dz = (ahead and ahead.z or cell.z) - cell.z
+  local length = math.sqrt(dx * dx + dz * dz)
+  if length < 0.001 then dx, dz, length = 0, 1, 1 end
+  dx, dz = dx / length, dz / length
+  local px, pz = -dz, dx
+
+  local placed = 0
+  local function put(x, y, z, node)
+    if not node or node == "air" then return end
+    local existing = minetest.get_node({x = x, y = y, z = z}).name
+    if existing == "ignore" then return end
+    minetest.set_node({x = x, y = y, z = z}, {name = node})
+    placed = placed + 1
+  end
+
+  -- A stone apron on the land side, so the quay is founded rather than perched.
+  for back = 0, 1 do
+    for side = -1, 1 do
+      local x = math.floor(cell.x - dx * back + px * side + 0.5)
+      local z = math.floor(cell.z - dz * back + pz * side + 0.5)
+      put(x, level, z, stone)
+    end
+  end
+
+  -- The deck, out over the water, with mooring posts at its head.
+  local head_x, head_z = cell.x, cell.z
+  for out = 1, 5 do
+    local x = math.floor(cell.x + dx * out + 0.5)
+    local z = math.floor(cell.z + dz * out + 0.5)
+    for side = -1, 1 do
+      local sx = math.floor(x + px * side + 0.5)
+      local sz = math.floor(z + pz * side + 0.5)
+      local under = minetest.get_node({x = sx, y = level - 1, z = sz}).name
+      -- Piles under the deck, so it stands on something.
+      if perfectworld.compat.is_liquid_node(under) then
+        for py = level - 1, level - 6, -1 do
+          local name = minetest.get_node({x = sx, y = py, z = sz}).name
+          if perfectworld.compat.is_liquid_node(name) then
+            if side == 0 and out % 2 == 1 then put(sx, py, sz, post) end
+          else
+            break
+          end
+        end
+      end
+      put(sx, level, sz, plank)
+    end
+    head_x, head_z = x, z
+  end
+
+  for side = -1, 1, 2 do
+    local sx = math.floor(head_x + px * side + 0.5)
+    local sz = math.floor(head_z + pz * side + 0.5)
+    put(sx, level + 1, sz, post)
+    put(sx, level + 2, sz, side == 1 and lamp or post)
+  end
+
+  -- And a boat at the end of it, which is the whole point of a landing.
+  local boat_x = head_x + dx * 1.5
+  local boat_z = head_z + dz * 1.5
+  if minetest.registered_entities["mcl_boats:boat"] then
+    local water = minetest.get_node(
+      {x = math.floor(boat_x + 0.5), y = level, z = math.floor(boat_z + 0.5)}).name
+    if perfectworld.compat.is_liquid_node(water) then
+      minetest.add_entity({x = boat_x, y = level + 0.5, z = boat_z}, "mcl_boats:boat")
+    end
+  end
+
+  return placed
+end
+
+perfectworld.planner._build_landing = build_landing
 
 --- Decide where a way actually goes, and what it does where the ground is
 --- against it.
@@ -2394,10 +2526,14 @@ function perfectworld.planner.route_way(cells, first, last, raw_in, water)
     local block_last = math.min(block_first + LATERAL_EVERY - 1, last)
     local best_offset, best_score = 0, nil
     for offset = -LATERAL_MAX, LATERAL_MAX, 2 do
-      local total, samples, roughest = 0, 0, 0
+      local total, samples, roughest, wet = 0, 0, 0, 0
       local previous = nil
       for i = block_first, block_last do
         local at = shifted(i, offset)
+        local column = world_terrain.sample_column(at.x, at.z)
+        if column and column.liquid then
+          wet = wet + 1
+        end
         local ground = paving_level(at.x, at.z)
         if ground then
           total = total + ground
@@ -2412,7 +2548,13 @@ function perfectworld.planner.route_way(cells, first, last, raw_in, water)
       if samples > 0 then
         -- Height first, roughness second, and a small pull back towards the
         -- planned line so the road does not wander for a one-node saving.
+        --
+        -- Water is scored out of reach, not merely disliked. Preferring the
+        -- lowest ground is right on a hill and catastrophic on a coast, where
+        -- the lowest ground for miles is the sea bed: without this the rule
+        -- that steers a road round a hill steers it into the sea.
         local score = total / samples + roughest * 2 + math.abs(offset) * 0.35
+          + wet * 60
         if not best_score or score < best_score then
           best_score, best_offset = score, offset
         end
@@ -2516,7 +2658,7 @@ local function pave_way(cells, first, last, opts)
   local crossable = bridgeable(water, first, last)
 
   local pier = perfectworld.compat.get_material("cobble", {required = false})
-  local placed, bridged, unbridged, tunnelled, deepest_cut = 0, 0, 0, 0, 0
+  local placed, bridged, unbridged, tunnelled, deepest_cut, landings = 0, 0, 0, 0, 0, 0
   for i = first, last do
     local level = y[i]
     local skip = water[i] and not crossable[i]
@@ -2553,9 +2695,19 @@ local function pave_way(cells, first, last, opts)
             end
           end
           minetest.set_node({x = px, y = level, z = pz}, {name = material})
-          local below = minetest.get_node({x = px, y = level - 1, z = pz}).name
-          if below == "air" or below == "ignore" then
-            minetest.set_node({x = px, y = level - 1, z = pz}, {name = fill})
+          -- An embankment where the road runs above the ground. One node of
+          -- fill was enough while the profile could only ever cut; now that it
+          -- is floored out of the abyss it also rises, and a carriageway with
+          -- daylight under it is not a road.
+          for down = 1, MAX_FILL + 1 do
+            local at = {x = px, y = level - down, z = pz}
+            local below = minetest.get_node(at).name
+            if below == "air" or below == "ignore"
+              or perfectworld.compat.is_liquid_node(below) then
+              minetest.set_node(at, {name = fill})
+            else
+              break
+            end
           end
           placed = placed + 1
         end
@@ -2582,10 +2734,19 @@ local function pave_way(cells, first, last, opts)
       end
     elseif skip then
       unbridged = unbridged + 1
+      -- The first cell of open water, with road behind it: this is the shore,
+      -- and the road has arrived rather than failed.
+      if i > first and route.mode[i - 1] ~= nil and y[i - 1]
+        and not (water[i - 1] and not crossable[i - 1]) then
+        landings = landings + 1
+        placed = placed + build_landing(
+          route.cells[i - 1] or cells[i - 1], y[i - 1],
+          route.cells[i] or cells[i], opts.palette)
+      end
     end
   end
 
-  return placed, bridged, unbridged, deepest_cut, tunnelled
+  return placed, bridged, unbridged, deepest_cut, tunnelled, landings
 end
 
 perfectworld.planner._pave_way = pave_way
@@ -4352,7 +4513,7 @@ end
 --- Lay the stretch of every settlement link that crosses this chunk.
 function perfectworld.planner.pave_links_in_chunk(minp, maxp)
   local result = {links = 0, segments = 0, nodes = 0, bridged = 0, unbridged = 0,
-    tunnelled = 0, deepest_cut = 0}
+    tunnelled = 0, deepest_cut = 0, landings = 0}
   if perfectworld.materialization_enabled == false then return result end
 
   local blocked = standing_buildings(minp, maxp)
@@ -4389,11 +4550,14 @@ function perfectworld.planner.pave_links_in_chunk(minp, maxp)
       last = math.min(#cells, last + LINK_SEAM_OVERLAP)
       segments = 1
       local bridged, unbridged, deepest, tunnelled
-      nodes, bridged, unbridged, deepest, tunnelled = pave_way(cells, first, last, {
-        width = link.width or 1,
-        surface = link.surface,
-        blocked = blocked,
-      })
+      local landings
+      nodes, bridged, unbridged, deepest, tunnelled, landings =
+        pave_way(cells, first, last, {
+          width = link.width or 1,
+          surface = link.surface,
+          blocked = blocked,
+        })
+      result.landings = (result.landings or 0) + (landings or 0)
       result.bridged = result.bridged + bridged
       result.unbridged = result.unbridged + unbridged
       result.tunnelled = (result.tunnelled or 0) + (tunnelled or 0)
