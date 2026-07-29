@@ -2733,10 +2733,32 @@ local function pave_way(cells, first, last, opts)
           -- walker needs three nodes; everything above that is the hill, and
           -- the hill stays. Bounding it here is what turns a deep cutting into
           -- a bore — a tunnel — without any other machinery.
+          local felled = false
           for above = 1, 3 do
             local pos = {x = px, y = level + above, z = pz}
             local name = minetest.get_node(pos).name
             if name ~= "air" and name ~= "ignore" then
+              local class = perfectworld.compat.classify_node(name)
+              if class.tree or class.leaves then felled = true end
+              minetest.set_node(pos, {name = "air"})
+            end
+          end
+
+          -- Fell the whole tree, not the three nodes in the way.
+          --
+          -- Clearing head-room through a wood cut the trunk at road height and
+          -- left everything above it hanging in the sky. Photographed from the
+          -- air it is the most obviously wrong thing about a road through
+          -- forest: a row of trunk segments floating over the carriageway.
+          -- Clearing a road through a wood is ordinary; leaving the tops up is
+          -- not.
+          if felled then
+            for above = 4, 24 do
+              local pos = {x = px, y = level + above, z = pz}
+              local name = minetest.get_node(pos).name
+              if name == "air" or name == "ignore" then break end
+              local class = perfectworld.compat.classify_node(name)
+              if not (class.tree or class.leaves) then break end
               minetest.set_node(pos, {name = "air"})
             end
           end

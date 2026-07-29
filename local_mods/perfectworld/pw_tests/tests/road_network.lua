@@ -767,3 +767,67 @@ T.register_test("perfectworld", "a_road_goes_round_a_hill_rather_than_through_it
   end
   perfectworld.planner._world_terrain.reset()
 end)
+
+T.register_test("perfectworld", "a_road_through_a_wood_fells_the_trees_it_clears", function(ctx)
+  local pave = perfectworld.planner._pave_way
+  if not pave then
+    ctx.assert.not_nil(pave, "the planner must be able to pave a way")
+    return
+  end
+
+  -- Flat ground with a line of trees across it. Clearing head-room used to cut
+  -- the trunk at road height and leave everything above it hanging in the sky,
+  -- which from the air is the most obviously wrong thing about a road through
+  -- forest. Clearing a wood for a road is ordinary; leaving the tops up is not.
+  local origin = {x = 29050, z = -29050}
+  local base = 24
+  local length = 30
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+  local trunk = perfectworld.compat.get_material("tree", {required = false})
+  if not trunk or trunk == "air" or not minetest.registered_nodes[trunk] then
+    ctx.assert.is_true(true, "this game registers no tree trunk to fell")
+    return
+  end
+
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 3, y = base - 4, z = origin.z - 4},
+      {x = origin.x + length + 3, y = base + 24, z = origin.z + 4})
+  end
+  for x = origin.x - 2, origin.x + length + 2 do
+    for z = origin.z - 3, origin.z + 3 do
+      minetest.set_node({x = x, y = base - 1, z = z}, {name = ground})
+      for y = base, base + 22 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  -- A trunk fourteen high standing on the line of the road.
+  local tree_x = origin.x + 15
+  for y = base, base + 13 do
+    minetest.set_node({x = tree_x, y = y, z = origin.z}, {name = trunk})
+  end
+
+  perfectworld.planner._world_terrain.reset()
+  local cells = {}
+  for i = 1, length do cells[i] = {x = origin.x + i, z = origin.z} end
+  pave(cells, 1, length, {width = 1, surface = "road", deviate = false})
+
+  local left_standing = 0
+  for y = base, base + 13 do
+    local name = minetest.get_node({x = tree_x, y = y, z = origin.z}).name
+    if name == trunk then left_standing = left_standing + 1 end
+  end
+  ctx.assert.equal(left_standing, 0,
+    "the road cut the tree and left " .. left_standing
+      .. " node(s) of trunk hanging over the carriageway")
+
+  for x = origin.x - 2, origin.x + length + 2 do
+    for z = origin.z - 3, origin.z + 3 do
+      for y = base - 1, base + 22 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+end)

@@ -467,7 +467,16 @@ minetest.register_chatcommand("pw_daylight", {
     if hold then
       minetest.settings:set("time_speed", "0")
     end
+    -- And clear the weather. Rain darkens everything: the first screenshots
+    -- taken at noon with the clock stopped still came out too dim to read, and
+    -- what they were dim from was a downpour, not the hour.
+    local cleared = false
+    if mcl_weather and mcl_weather.change_weather then
+      pcall(mcl_weather.change_weather, "none")
+      cleared = true
+    end
     return true, "noon" .. (hold and ", clock stopped" or "")
+      .. (cleared and ", weather cleared" or "")
   end,
 })
 
