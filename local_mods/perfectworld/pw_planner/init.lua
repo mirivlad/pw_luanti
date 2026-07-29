@@ -2844,11 +2844,35 @@ local function carve_walkway(from, to, material_name, blocked, opts)
   -- the start spreads the descent over the cells there are.
   local destination_y = opts.keep_destination and paving_level(to.x, to.z) or nil
 
+  -- Over water, a way is a boardwalk.
+  --
+  -- `paving_level` in a flooded column returns the floor of the basin, because
+  -- water counts as loose cover, so a path from a door to a street across a
+  -- shoal was laid along the sea bed. A villager stepping out of the house
+  -- walked straight into the sea. A settlement built over water joins its doors
+  -- with decking held at the level of the doorstep, on piles.
+  local deck = perfectworld.compat.get_material("wood_planks", {required = false})
+  local pile = perfectworld.structures.palette_material(
+    opts.palette, "wall_post", "tree")
+
+  local function flooded_at(x, z, ground)
+    if not ground then return false end
+    for above = 0, 4 do
+      local node = minetest.get_node({x = x, y = ground + above, z = z})
+      if node and node.name and perfectworld.compat.is_liquid_node(node.name) then
+        return true
+      end
+    end
+    return false
+  end
+
   local previous_y = target_y
   for s = 0, steps do
     local cell = cells[s]
     local natural = paving_level(cell.x, cell.z, hint)
-    local y = natural or previous_y
+    local wet = flooded_at(cell.x, cell.z, natural)
+    -- Hold the level across the water rather than following the bottom down.
+    local y = wet and (previous_y or target_y or natural) or natural or previous_y
     if destination_y and y then
       local remaining = steps - s
       if y > destination_y + remaining then y = destination_y + remaining end
@@ -2868,11 +2892,28 @@ local function carve_walkway(from, to, material_name, blocked, opts)
       previous_y = y
       hint = y
     elseif y then
-      minetest.set_node({x = cell.x, y = y, z = cell.z}, {name = material_name})
-      local below = minetest.get_node({x = cell.x, y = y - 1, z = cell.z}).name
-      if below == "air" or below == "ignore" then
-        minetest.set_node({x = cell.x, y = y - 1, z = cell.z},
-          {name = perfectworld.compat.get_material("ground", {required = false})})
+      minetest.set_node({x = cell.x, y = y, z = cell.z},
+        {name = (wet and deck and deck ~= "air") and deck or material_name})
+      if wet then
+        -- Piles every third cell, carried down to the bed. Without them the
+        -- decking is a plank ribbon lying on the sea.
+        if s % 3 == 0 and pile and pile ~= "air" then
+          for py = y - 1, math.max((natural or y) , y - 12), -1 do
+            local name = minetest.get_node({x = cell.x, y = py, z = cell.z}).name
+            if name == "air" or name == "ignore"
+              or perfectworld.compat.is_liquid_node(name) then
+              minetest.set_node({x = cell.x, y = py, z = cell.z}, {name = pile})
+            else
+              break
+            end
+          end
+        end
+      else
+        local below = minetest.get_node({x = cell.x, y = y - 1, z = cell.z}).name
+        if below == "air" or below == "ignore" then
+          minetest.set_node({x = cell.x, y = y - 1, z = cell.z},
+            {name = perfectworld.compat.get_material("ground", {required = false})})
+        end
       end
       for above = 1, 3 do
         local pos = {x = cell.x, y = y + above, z = cell.z}
@@ -2919,7 +2960,8 @@ perfectworld.planner._carve_walkway = carve_walkway
 -- to the street level".
 local function build_door_approach(door, floor_y, road_point, material_name, profile, blocked)
   if not floor_y then
-    carve_walkway(door, road_point, material_name, nil, {keep_destination = true})
+    carve_walkway(door, road_point, material_name, nil,
+      {keep_destination = true, palette = profile.material_palette})
     return
   end
 
@@ -2938,7 +2980,7 @@ local function build_door_approach(door, floor_y, road_point, material_name, pro
   end
 
   carve_walkway({x = door.x, y = floor_y, z = door.z}, road_point, material_name, blocked,
-    {keep_destination = true})
+    {keep_destination = true, palette = profile.material_palette})
 end
 
 local function worksite_candidate_anchors(lot, seed_key)
@@ -3406,7 +3448,8 @@ local function materialize_village_plan(plan, profile, candidate)
         for _, destination in ipairs({lot.road_point, street_anchor}) do
           if path then break end
           carve_walkway({x = lot.door.x, y = lot.door.y, z = lot.door.z},
-            destination, road_material, blocked_by_building, {keep_destination = true})
+            destination, road_material, blocked_by_building,
+            {keep_destination = true, palette = profile.material_palette})
           origin = standing_spot(street_anchor.x, street_anchor.z, street_anchor.y) or origin
           target = standing_spot(lot.door.x, lot.door.z, lot.door.y) or target
           kerb = standing_spot(lot.road_point.x, lot.road_point.z, lot.door.y) or kerb

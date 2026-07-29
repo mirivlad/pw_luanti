@@ -831,3 +831,107 @@ T.register_test("perfectworld", "a_road_through_a_wood_fells_the_trees_it_clears
   end
   perfectworld.planner._world_terrain.reset()
 end)
+
+T.register_test("perfectworld", "a_way_across_water_is_a_boardwalk_not_a_path_on_the_bottom", function(ctx)
+  local carve = perfectworld.planner._carve_walkway
+  if not carve then
+    ctx.assert.not_nil(carve, "the planner must be able to carve a way")
+    return
+  end
+
+  -- A trench of standing water between a door and a street. `paving_level` in a
+  -- flooded column returns the floor of the basin, because water counts as
+  -- loose cover, so a way across a shoal used to be laid along the bottom — and
+  -- a villager stepping out of the house walked straight into the sea.
+  local origin = {x = 29800, y = 30, z = -29800}
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+  local water = perfectworld.compat.get_material("water", {required = false})
+  if not water or water == "air" then
+    ctx.assert.is_true(true, "this game has no water to cross")
+    return
+  end
+
+  local length = 24
+  if minetest.load_area then
+    pcall(minetest.load_area,
+      {x = origin.x - 3, y = origin.y - 10, z = origin.z - 3},
+      {x = origin.x + length + 3, y = origin.y + 8, z = origin.z + 3})
+  end
+  -- Solid everywhere, then a trench dug out of the middle of it.
+  for x = origin.x - 2, origin.x + length + 2 do
+    for z = origin.z - 2, origin.z + 2 do
+      for y = origin.y - 8, origin.y + 6 do
+        minetest.set_node({x = x, y = y, z = z},
+          {name = y < origin.y and ground or "air"})
+      end
+    end
+  end
+  for x = origin.x + 8, origin.x + 16 do
+    for z = origin.z - 1, origin.z + 1 do
+      for y = origin.y - 4, origin.y - 1 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  -- The water goes in second, once the trench exists: filling as you dig pours
+  -- each column into the next one before it has been dug.
+  for x = origin.x + 8, origin.x + 16 do
+    for z = origin.z - 1, origin.z + 1 do
+      for y = origin.y - 4, origin.y - 1 do
+        minetest.set_node({x = x, y = y, z = z}, {name = water})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+
+  local wet_cells = 0
+  for x = origin.x + 8, origin.x + 16 do
+    if perfectworld.compat.is_liquid_node(
+      minetest.get_node({x = x, y = origin.y - 1, z = origin.z}).name) then
+      wet_cells = wet_cells + 1
+    end
+  end
+  if wet_cells < 5 then
+    return ctx.skip("the water would not stay in the trench: " .. wet_cells .. " cell(s)")
+  end
+
+  carve({x = origin.x, y = origin.y, z = origin.z},
+    {x = origin.x + length, z = origin.z},
+    perfectworld.compat.get_material("road", {required = false}), nil, {})
+
+  -- Across the water the way must be at the doorstep's level, not on the bed.
+  -- Piles are allowed down there, and wanted: without them the decking is a
+  -- plank ribbon lying on the sea. What must not be down there is the path.
+  local surface = perfectworld.compat.get_material("road", {required = false})
+  local on_the_bottom, decked, piles = 0, 0, 0
+  for x = origin.x + 9, origin.x + 15 do
+    local at_level = minetest.get_node({x = x, y = origin.y - 1, z = origin.z}).name
+    local below = minetest.get_node({x = x, y = origin.y - 4, z = origin.z}).name
+    if at_level ~= "air" and not perfectworld.compat.is_liquid_node(at_level) then
+      decked = decked + 1
+    end
+    if below == surface then on_the_bottom = on_the_bottom + 1 end
+    if below ~= "air" and below ~= ground and below ~= surface
+      and not perfectworld.compat.is_liquid_node(below) then
+      piles = piles + 1
+    end
+  end
+
+  ctx.assert.is_true(decked >= 5,
+    "the way across the water must be held at the doorstep's level; "
+      .. decked .. " of 7 cells were")
+  ctx.assert.equal(on_the_bottom, 0,
+    "and the path itself must not be laid along the bed: "
+      .. on_the_bottom .. " cell(s) were")
+  ctx.assert.is_true(piles > 0,
+    "the decking must stand on something rather than lie on the sea")
+
+  for x = origin.x - 2, origin.x + length + 2 do
+    for z = origin.z - 2, origin.z + 2 do
+      for y = origin.y - 8, origin.y + 6 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+end)
