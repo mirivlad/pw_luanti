@@ -517,3 +517,75 @@ T.register_test("perfectworld", "a_name_is_written_the_way_a_place_is_called", f
   ctx.assert.equal(#offenders, 0,
     "these names have a capital in the middle: " .. table.concat(offenders, " "))
 end)
+
+-- === Town walls ===
+
+T.register_test("perfectworld", "one_road_through_a_wall_is_one_gate", function(ctx)
+  if not perfectworld.planner.build_town_wall then
+    ctx.assert.not_nil(perfectworld.planner.build_town_wall,
+      "the planner must be able to wall a town")
+    return
+  end
+
+  -- A square of flat ground with a single road running out of it to the north.
+  -- One road crossing one wall is one gate. It used to report five or more,
+  -- because the four walls were walked interleaved and a cell of the far wall
+  -- reset the "still in the same opening" flag halfway through an opening.
+  local origin = {x = 29200, z = -29200}
+  local half = 20
+  local ground_node = perfectworld.compat.get_material("ground", {required = false})
+  local low = {x = origin.x - half - 12, y = 14, z = origin.z - half - 12}
+  local high = {x = origin.x + half + 12, y = 40, z = origin.z + half + 40}
+  if minetest.load_area then pcall(minetest.load_area, low, high) end
+  for x = low.x, high.x do
+    for z = low.z, high.z do
+      minetest.set_node({x = x, y = 19, z = z}, {name = ground_node})
+      for y = 20, 28 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+
+  local bounds = {
+    min_x = origin.x - half, max_x = origin.x + half,
+    min_z = origin.z - half, max_z = origin.z + half,
+  }
+  local ways = {{
+    path = {
+      {x = origin.x, z = origin.z},
+      {x = origin.x, z = origin.z + half + 30},
+    },
+  }}
+  local profile = {material_palette = nil}
+
+  local result = perfectworld.planner.build_town_wall(bounds, profile, ways)
+  ctx.assert.not_nil(result, "the wall must be built")
+  if result then
+    ctx.assert.equal(result.gates, 1,
+      "one road out of the town is one gate, not " .. result.gates)
+    ctx.assert.equal(#result.gate_spots, 1,
+      "and one place to post a guard, not " .. #result.gate_spots)
+    ctx.assert.is_true(result.nodes > 0, "the wall must actually be built")
+  end
+
+  -- Two roads out, in opposite directions, are two gates.
+  local both = {
+    {path = {{x = origin.x, z = origin.z}, {x = origin.x, z = origin.z + half + 30}}},
+    {path = {{x = origin.x, z = origin.z}, {x = origin.x, z = origin.z - half - 30}}},
+  }
+  local two = perfectworld.planner.build_town_wall(bounds, profile, both)
+  if two then
+    ctx.assert.equal(two.gates, 2,
+      "two roads out of the town are two gates, not " .. two.gates)
+  end
+
+  for x = low.x, high.x do
+    for z = low.z, high.z do
+      for y = 16, 30 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+end)

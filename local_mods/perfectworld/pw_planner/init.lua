@@ -4430,9 +4430,9 @@ function perfectworld.planner.build_town_wall(bounds, profile, ways)
   local max_z = math.ceil(bounds.max_z + margin)
 
   -- Where the ways cross the line. A cell within two of a way's centreline is
-  -- a gate cell, which makes the opening three wide for a road drawn straight
-  -- and a little wider for one crossing at an angle — which is what a gate
-  -- through a thick wall looks like anyway.
+  -- a gate cell, which makes the opening five wide for a road drawn straight
+  -- and a little wider for one crossing at an angle — a road three wide needs
+  -- more than three of gap to pass a wall without scraping it.
   local gate_cells = {}
   local gates = 0
   for _, way in ipairs(ways or {}) do
@@ -4454,21 +4454,31 @@ function perfectworld.planner.build_town_wall(bounds, profile, ways)
     end
   end
 
-  local perimeter = {}
+  -- Four walls, walked one at a time.
+  --
+  -- They used to be walked interleaved — south, north, south, north — with a
+  -- single "am I still in the same opening" flag shared between them. The
+  -- openings were always in the right place, cut where a road crosses and
+  -- nowhere else; it was the count that was nonsense, and not in a consistent
+  -- direction. Two roads leaving opposite sides of a town line up on the
+  -- interleaved walk and were counted as one gate; openings that do not line up
+  -- were counted once per cell. The guard detail is sized from that number.
+  local walls = {{}, {}, {}, {}}
   for x = min_x, max_x do
-    perimeter[#perimeter + 1] = {x = x, z = min_z}
-    perimeter[#perimeter + 1] = {x = x, z = max_z}
+    walls[1][#walls[1] + 1] = {x = x, z = min_z}
+    walls[2][#walls[2] + 1] = {x = x, z = max_z}
   end
   for z = min_z + 1, max_z - 1 do
-    perimeter[#perimeter + 1] = {x = min_x, z = z}
-    perimeter[#perimeter + 1] = {x = max_x, z = z}
+    walls[3][#walls[3] + 1] = {x = min_x, z = z}
+    walls[4][#walls[4] + 1] = {x = max_x, z = z}
   end
 
   world_terrain.reset()
   local nodes = 0
-  local in_gate = false
   local gate_spots = {}
-  for _, cell in ipairs(perimeter) do
+  for _, wall in ipairs(walls) do
+  local in_gate = false
+  for _, cell in ipairs(wall) do
     local ground = paving_level(cell.x, cell.z)
     if ground then
       local gate = gate_cells[cell.x .. ":" .. cell.z]
@@ -4503,6 +4513,7 @@ function perfectworld.planner.build_town_wall(bounds, profile, ways)
         end
       end
     end
+  end
   end
 
   return {nodes = nodes, gates = gates, gate_spots = gate_spots,
