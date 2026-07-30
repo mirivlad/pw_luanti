@@ -2834,10 +2834,23 @@ minetest.register_chatcommand("pw_mapgen_probe", {
           end
           probe.placed_after = placed
           probe.built = probe.buildings > 0
+          if not probe.built then
+            probe.refusal = perfectworld.planner.last_refusal
+              and perfectworld.planner.last_refusal(probe.id)
+            if not probe.refusal and stored then
+              local worst, worst_count = nil, 0
+              for reason, count in pairs((stored.plan or {}).rejections or {}) do
+                if count > worst_count then worst, worst_count = reason, count end
+              end
+              probe.refusal = worst
+            end
+          end
           minetest.log("action", string.format(
             "[pw_debug] mapgen_probe %d/%d %s %s at (%d,%d): %s after %ds",
             index, #probes, probe.type, probe.id, probe.x, probe.z,
-            probe.built and ("built " .. probe.buildings) or "nothing", waited))
+            probe.built and ("built " .. probe.buildings)
+              or ("nothing (" .. tostring(probe.refusal or "no reason recorded") .. ")"),
+            waited))
           probe_next()
         end
         minetest.after(5, settle)

@@ -28,9 +28,9 @@ def main(path):
             # The site is spent but nothing stands on it: the plan failed and
             # the candidate was marked placed so no later mapchunk replans the
             # same hopeless ground. Not a building.
-            result = "NOTHING (site spent, %s)" % (p.get("status") or "no plan")
+            result = "NOTHING (%s)" % (p.get("refusal") or p.get("status") or "no reason recorded")
         else:
-            result = "NOTHING"
+            result = "NOTHING (%s)" % (p.get("refusal") or "no reason recorded")
         lots = p.get("lots")
         print(f"{p.get('id', '?'):44} {p.get('type', '?'):8} "
               f"{p.get('x', 0):7} {p.get('z', 0):7} "
@@ -51,6 +51,14 @@ def main(path):
     for kind in sorted(by_type):
         asked, ok = by_type[kind]
         print(f"  {kind:8} {ok}/{asked}  ({ok / asked * 100:.0f}%)")
+
+    refusals = collections.Counter(
+        p.get("refusal") or "no reason recorded"
+        for p in fresh if not p.get("built"))
+    if refusals:
+        print("why nothing was built:")
+        for reason, count in refusals.most_common():
+            print(f"  {count:3}  {reason}")
 
     lots = [p["lots"] for p in built if p.get("lots")]
     if lots:

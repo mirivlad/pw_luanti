@@ -4616,6 +4616,7 @@ function perfectworld.planner.queue_village(candidate)
 			pending_villages[id] = nil
 			if not ok then
 				local reason = type(result) == "table" and result.reason or tostring(result)
+				perfectworld.planner.note_refusal(queued.id, reason)
 				minetest.log("action", "[pw_planner] village " .. tostring(queued.id)
 					.. " not materialized: " .. tostring(reason))
 			end
@@ -4641,6 +4642,33 @@ end
 -- again if it ever fired on the same column twice; it does not. So the retry is
 -- explicit: emerge the small area the building actually needs, then place.
 local pending_structures = {}
+
+-- Why the last attempt on a candidate came to nothing.
+--
+-- The mapgen hook logs its refusals and then forgets them, so a measurement of
+-- what the world built could only count outcomes and guess at causes — and
+-- guessing produced two rounds of tuning against the wrong cause. Bounded,
+-- because this is diagnostic and must not grow without limit on a long-running
+-- server.
+local refusals = {}
+local refusal_order = {}
+local REFUSAL_MEMORY = 512
+
+function perfectworld.planner.note_refusal(id, reason)
+	if not id then return end
+	if refusals[id] == nil then
+		refusal_order[#refusal_order + 1] = id
+		if #refusal_order > REFUSAL_MEMORY then
+			local oldest = table.remove(refusal_order, 1)
+			refusals[oldest] = nil
+		end
+	end
+	refusals[id] = tostring(reason)
+end
+
+function perfectworld.planner.last_refusal(id)
+	return refusals[id]
+end
 
 -- Only failures more ground could fix. A slope is a slope however much of it
 -- has been generated, and retrying one is work for nothing.
@@ -4669,6 +4697,7 @@ function perfectworld.planner.queue_structure(candidate, reason)
 			local ok, result = materialize_single_structure(queued)
 			pending_structures[id] = nil
 			if not ok then
+				perfectworld.planner.note_refusal(queued.id, result)
 				minetest.log("action", "[pw_planner] structure " .. tostring(queued.id)
 					.. " not materialized after emerge: " .. tostring(result))
 			end
@@ -5212,6 +5241,7 @@ function perfectworld.planner.materialize_chunk(minp, maxp)
 								if retried then
 									result.queued = result.queued + 1
 								end
+								perfectworld.planner.note_refusal(candidate.id, placed_or_reason)
 								table.insert(result.skipped, {
 									settlement_id = candidate.id,
 									structure_id = candidate.structure_id,
