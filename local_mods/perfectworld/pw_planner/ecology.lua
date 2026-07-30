@@ -275,6 +275,11 @@ end
 
 function ecology.select_site(candidate, terrain, environment_provider)
   local pairs = {}
+  -- Sites that are land inside the region but whose best trade is not viable.
+  -- A village is its trade and must have one; three houses at a crossroads are
+  -- not, and refusing them for it left two hamlets in five with nowhere to
+  -- stand. See the fallback at the end.
+  local liveable = {}
   local key = seed_key(candidate)
   local rx = candidate.rx or math.floor(candidate.x / perfectworld.REGION_SIZE)
   local rz = candidate.rz or math.floor(candidate.z / perfectworld.REGION_SIZE)
@@ -310,8 +315,9 @@ function ecology.select_site(candidate, terrain, environment_provider)
         selected_site.z = evidence.shore_land_anchor.z
         center_is_land = true
       end
-      if item.viable and center_is_land and inside_region(selected_site) then
-        pairs[#pairs + 1] = {
+      if center_is_land and inside_region(selected_site) then
+        local list = item.viable and pairs or liveable
+        list[#list + 1] = {
           site = selected_site,
           survey_site = deep_copy(site),
           evidence = evidence,
@@ -326,19 +332,37 @@ function ecology.select_site(candidate, terrain, environment_provider)
     end
   end
 
-  table.sort(pairs, function(a, b)
-    if a.specialization_score ~= b.specialization_score then
-      return a.specialization_score > b.specialization_score
-    end
-    if a.tie ~= b.tie then return a.tie > b.tie end
-    if a.site.id ~= b.site.id then return a.site.id < b.site.id end
-    return a.specialization < b.specialization
-  end)
-
-  if not pairs[1] then
-    return nil, "no_suitable_ecological_site", pairs
+  local function best_first(list)
+    table.sort(list, function(a, b)
+      if a.specialization_score ~= b.specialization_score then
+        return a.specialization_score > b.specialization_score
+      end
+      if a.tie ~= b.tie then return a.tie > b.tie end
+      if a.site.id ~= b.site.id then return a.site.id < b.site.id end
+      return a.specialization < b.specialization
+    end)
   end
-  return pairs[1], nil, pairs
+
+  best_first(pairs)
+  if pairs[1] then
+    return pairs[1], nil, pairs
+  end
+
+  -- Nothing here supports a trade. A village or a town is refused: a village
+  -- that cannot fish, farm, log or mine is a village with no reason to be
+  -- there, and the site is better left empty. A farmstead or a hamlet is not
+  -- refused — people do live at a crossroads on ground that grows nothing much
+  -- — so the best-scoring liveable site is taken instead, and the profile
+  -- falls back to farming as it always did when no definition was selected.
+  local kind = candidate and candidate.type
+  if kind == "farm" or kind == "hamlet" then
+    best_first(liveable)
+    if liveable[1] then
+      return liveable[1], nil, liveable
+    end
+  end
+
+  return nil, "no_suitable_ecological_site", pairs
 end
 
 return ecology
