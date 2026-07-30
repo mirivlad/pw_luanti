@@ -2760,17 +2760,19 @@ minetest.register_chatcommand("pw_mapgen_probe", {
         local built, empty, already = 0, 0, 0
         local by_type = {}
         for _, p in ipairs(probes) do
-          local slot = by_type[p.type] or {asked = 0, built = 0}
-          slot.asked = slot.asked + 1
           if p.placed_before then
             already = already + 1
-          elseif p.placed_after then
-            built = built + 1
-            slot.built = slot.built + 1
           else
-            empty = empty + 1
+            local slot = by_type[p.type] or {asked = 0, built = 0}
+            slot.asked = slot.asked + 1
+            if p.built then
+              built = built + 1
+              slot.built = slot.built + 1
+            else
+              empty = empty + 1
+            end
+            by_type[p.type] = slot
           end
-          by_type[p.type] = slot
         end
         local parts = {}
         for kind, slot in pairs(by_type) do
@@ -2812,16 +2814,30 @@ minetest.register_chatcommand("pw_mapgen_probe", {
             minetest.after(5, settle)
             return
           end
-          probe.placed_after = placed
+          -- "Placed" is not "built". A settlement whose plan fails is marked
+          -- placed all the same — the site is spent, and rightly, or every
+          -- mapchunk would replan the same hopeless hillside — but nothing
+          -- stands there. Counting those as built reported ninety-six per cent
+          -- where the honest figure was eighty-seven. What counts is a
+          -- structure record with this settlement's name on it.
           probe.waited = waited
           local stored = perfectworld.planner.get_settlement_plan(probe.id)
           if stored then
             probe.lots = #((stored.plan or {}).lots or stored.lots or {})
+            probe.status = (stored.settlement or {}).status
           end
+          probe.buildings = 0
+          for _, record in ipairs(perfectworld.planner.list_structures()) do
+            if record.settlement_id == probe.id then
+              probe.buildings = probe.buildings + 1
+            end
+          end
+          probe.placed_after = placed
+          probe.built = probe.buildings > 0
           minetest.log("action", string.format(
             "[pw_debug] mapgen_probe %d/%d %s %s at (%d,%d): %s after %ds",
             index, #probes, probe.type, probe.id, probe.x, probe.z,
-            probe.placed_after and "built" or "nothing", waited))
+            probe.built and ("built " .. probe.buildings) or "nothing", waited))
           probe_next()
         end
         minetest.after(5, settle)

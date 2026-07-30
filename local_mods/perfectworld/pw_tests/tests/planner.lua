@@ -541,33 +541,42 @@ local WATER_SCENE_Y = 26
 -- The water goes in on a second pass, after the whole basin exists. Filling
 -- column by column pours into the neighbours that have not been dug yet and
 -- the scene drains before it is finished.
-local function lay_flooded_scene(centre, reach)
+--- A lake with a bank standing above it.
+--
+-- The bank has to be *above* the water, not merely beside it: ground level with
+-- the water is refused too, and rightly — cut a foundation into it and the lake
+-- comes in. A scene whose every offset is refused proves only that the search
+-- can say no.
+local function lay_flooded_scene(centre, reach, span)
   local ground = perfectworld.compat.get_material("ground", {required = false})
-  local minp = {x = centre.x - reach - 4, y = WATER_SCENE_Y - 6, z = centre.z - reach - 4}
-  local maxp = {x = centre.x + reach + 4, y = WATER_SCENE_Y + 8, z = centre.z + reach + 4}
+  local bank_y = WATER_SCENE_Y - 1
+  local water_y = WATER_SCENE_Y - 3
+  local minp = {x = centre.x - span, y = WATER_SCENE_Y - 8, z = centre.z - span}
+  local maxp = {x = centre.x + span, y = WATER_SCENE_Y + 8, z = centre.z + span}
   if minetest.load_area then pcall(minetest.load_area, minp, maxp) end
 
+  -- Solid to the top of the bank, then the basin carved strictly inside it, so
+  -- the rim holds the water in.
   for x = minp.x, maxp.x do
     for z = minp.z, maxp.z do
-      for y = WATER_SCENE_Y - 6, WATER_SCENE_Y - 2 do
-        minetest.set_node({x = x, y = y, z = z}, {name = ground})
-      end
-      for y = WATER_SCENE_Y - 1, maxp.y do
-        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
-      end
-      -- The basin: everything from the centre out to `reach` is dug one node
-      -- deeper than the land around it.
-      if math.abs(x - centre.x) <= reach and math.abs(z - centre.z) <= reach then
-        minetest.set_node({x = x, y = WATER_SCENE_Y - 2, z = z}, {name = "air"})
-      else
-        minetest.set_node({x = x, y = WATER_SCENE_Y - 2, z = z}, {name = ground})
+      for y = minp.y, maxp.y do
+        minetest.set_node({x = x, y = y, z = z},
+          {name = y <= bank_y and ground or "air"})
       end
     end
   end
-
   for x = centre.x - reach, centre.x + reach do
     for z = centre.z - reach, centre.z + reach do
-      minetest.set_node({x = x, y = WATER_SCENE_Y - 2, z = z},
+      for y = water_y, bank_y do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  -- The water goes in on a second pass, once the whole basin exists: filling
+  -- as you dig pours each column into the neighbour that has not been dug yet.
+  for x = centre.x - reach, centre.x + reach do
+    for z = centre.z - reach, centre.z + reach do
+      minetest.set_node({x = x, y = water_y, z = z},
         {name = "mcl_core:water_source"})
     end
   end
@@ -581,20 +590,30 @@ T.register_test("perfectworld", "a_lone_building_is_not_offered_a_site_in_the_wa
 
     -- Far from anything the world planned, so the scene is the only thing
     -- under test.
+    -- A lake ten nodes across the middle, with a bank standing above it: the
+    -- search reaches sixteen nodes out, so there is dry ground for it to find
+    -- and wet ground for it to refuse.
     local centre = {x = 24000, z = 24000}
-    local reach = 20
-    lay_flooded_scene(centre, reach)
+    lay_flooded_scene(centre, 10, 30)
     perfectworld.planner._world_terrain.reset()
 
-    if minetest.get_node({x = centre.x, y = WATER_SCENE_Y - 2, z = centre.z}).name
-      ~= "mcl_core:water_source" then
-      ctx.skip("the flooded scene did not hold its water")
-      return
-    end
+    ctx.assert.equal(
+      minetest.get_node({x = centre.x, y = WATER_SCENE_Y - 3, z = centre.z}).name,
+      "mcl_core:water_source", "the flooded scene must hold its water")
+
+    -- Without this the test is vacuous, and it was: while a liquid counted as
+    -- loose cover the sampler read the lake as its own bed, `is_liquid` was
+    -- false everywhere, and an assertion that no offered site is wet passed
+    -- because no site anywhere could ever be wet.
+    ctx.assert.is_true(
+      perfectworld.planner._world_terrain.is_liquid(centre.x, centre.z),
+      "the middle of the lake must read as water, or this test proves nothing")
 
     local def = perfectworld.structures.get("pw_farmstead_v1")
     local ranked = perfectworld.planner._ranked_sites(
       {x = centre.x, z = centre.z, id = "test_wet_site"}, def)
+    ctx.assert.is_true(#ranked > 0,
+      "there is dry land at the edge of this scene and it must be offered")
 
     for _, site in ipairs(ranked) do
       local x = centre.x + site.offset.x
@@ -654,3 +673,89 @@ T.register_test("perfectworld", "the_site_search_offers_the_flattest_ground_firs
         "the search must not depend on table order at position " .. index)
     end
   end)
+
+-- === Nobody builds a house at the waterline ===
+--
+-- The lot test refused a footprint with water *in* it, and a beach beside an
+-- ocean has no water in it. So a settlement went up level with the sea, the
+-- placer cut its foundations, and the sea came in: five lots, three of them
+-- standing knee-deep in the ocean, every one of which had passed the liquid
+-- test because on the day it was asked the ground was dry.
+
+T.register_test("perfectworld", "a_lot_level_with_the_sea_is_refused", function(ctx)
+  ctx.assert.not_nil(perfectworld.planner._terrain_verdict,
+    "the lot ground test must be reachable from a test")
+  if not perfectworld.planner._terrain_verdict then return end
+
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+  local centre = {x = 24400, z = 24400}
+  local shore_y = 30
+  -- Dry, flat land west of x = centre; open water east of it, its surface at
+  -- exactly the height of the land. Nothing about the land itself is wrong.
+  local minp = {x = centre.x - 24, y = shore_y - 8, z = centre.z - 24}
+  local maxp = {x = centre.x + 40, y = shore_y + 10, z = centre.z + 24}
+  if minetest.load_area then pcall(minetest.load_area, minp, maxp) end
+  -- Solid ground everywhere first, then the basin carved strictly inside it.
+  -- A basin dug out to the edge of the scene has no walls and drains into
+  -- whatever the world put next to it; the rim is what holds the water.
+  for x = minp.x, maxp.x do
+    for z = minp.z, maxp.z do
+      for y = minp.y, maxp.y do
+        minetest.set_node({x = x, y = y, z = z},
+          {name = y < shore_y and ground or "air"})
+      end
+    end
+  end
+  for x = centre.x + 7, maxp.x - 1 do
+    for z = minp.z + 1, maxp.z - 1 do
+      for y = shore_y - 3, shore_y - 1 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+    end
+  end
+  -- The water goes in after the basin exists, not column by column while it is
+  -- still being dug.
+  for x = centre.x + 7, maxp.x - 1 do
+    for z = minp.z + 1, maxp.z - 1 do
+      for y = shore_y - 3, shore_y - 1 do
+        minetest.set_node({x = x, y = y, z = z}, {name = "mcl_core:water_source"})
+      end
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+
+  local terrain = perfectworld.planner._world_terrain
+  local probe = {x = centre.x + 12, y = shore_y - 1, z = centre.z}
+  ctx.assert.is_true(terrain.is_liquid(probe.x, probe.z), string.format(
+    "the shore scene must hold its water: at (%d,%d,%d) the node is %s, "
+      .. "the column reads %s at y=%s",
+    probe.x, probe.y, probe.z,
+    minetest.get_node(probe).name,
+    minetest.get_node({x = probe.x, y = shore_y, z = probe.z}).name,
+    tostring(terrain.surface_y(probe.x, probe.z))))
+  if not terrain.is_liquid(probe.x, probe.z) then return end
+
+  -- A plot on the dry land, close enough to the water that cutting into it
+  -- would let the sea in. The ground is flat, solid and liquid-free.
+  local fp_min = {x = centre.x - 3, z = centre.z - 3}
+  local fp_max = {x = centre.x + 3, z = centre.z + 3}
+  local ok, reason = perfectworld.planner._terrain_verdict(fp_min, fp_max, 3, terrain)
+  ctx.assert.is_false(ok,
+    "a plot level with the sea beside it must be refused, got ok=" .. tostring(ok))
+  ctx.assert.equal(reason, "waterline",
+    "the refusal must name the waterline, got " .. tostring(reason))
+
+  -- The same ground, raised two nodes above the water, is fine.
+  for x = centre.x - 10, centre.x + 4 do
+    for z = minp.z, maxp.z do
+      minetest.set_node({x = x, y = shore_y, z = z}, {name = ground})
+      minetest.set_node({x = x, y = shore_y + 1, z = z}, {name = ground})
+    end
+  end
+  perfectworld.planner._world_terrain.reset()
+  local dry_ok, dry_reason = perfectworld.planner._terrain_verdict(
+    fp_min, fp_max, 3, terrain)
+  ctx.assert.is_true(dry_ok, string.format(
+    "ground standing above the water must still be buildable, refused: %s",
+    tostring(dry_reason)))
+end)

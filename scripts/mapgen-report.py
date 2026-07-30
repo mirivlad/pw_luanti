@@ -22,8 +22,13 @@ def main(path):
     for p in probes:
         if p.get("placed_before"):
             result = "already standing"
+        elif p.get("built"):
+            result = "built %d" % p.get("buildings", 0)
         elif p.get("placed_after"):
-            result = "built"
+            # The site is spent but nothing stands on it: the plan failed and
+            # the candidate was marked placed so no later mapchunk replans the
+            # same hopeless ground. Not a building.
+            result = "NOTHING (site spent, %s)" % (p.get("status") or "no plan")
         else:
             result = "NOTHING"
         lots = p.get("lots")
@@ -32,12 +37,12 @@ def main(path):
               f"{(lots if lots is not None else ''):>5}  {result}")
 
     fresh = [p for p in probes if not p.get("placed_before")]
-    built = [p for p in fresh if p.get("placed_after")]
+    built = [p for p in fresh if p.get("built")]
     by_type = collections.defaultdict(lambda: [0, 0])
     for p in fresh:
         slot = by_type[p.get("type", "?")]
         slot[0] += 1
-        if p.get("placed_after"):
+        if p.get("built"):
             slot[1] += 1
 
     print()

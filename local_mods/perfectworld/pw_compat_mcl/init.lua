@@ -228,8 +228,17 @@ function perfectworld.compat.classify_node(node_name)
   local liquid = perfectworld.compat.is_liquid_node(node_name)
   local leaves = (groups.leaves or 0) > 0
   local tree = (groups.tree or groups.log or 0) > 0
-  local flora = (groups.flora or groups.plant or 0) > 0
-    or (def and def.buildable_to == true) or false
+  -- Water is not a plant.
+  --
+  -- `buildable_to` is how grass, flowers and snow announce that a sampler
+  -- should look past them for the ground — and water is `buildable_to` too. So
+  -- every column sampler in this project looked straight past the sea and
+  -- reported the sea bed: flat, solid, dry, entirely acceptable ground. That is
+  -- why a settlement stood knee-deep in the ocean and why the planner's own
+  -- flooded-site tests reported no water anywhere. A liquid is terrain, and the
+  -- sampler stops at it.
+  local flora = ((groups.flora or groups.plant or 0) > 0
+    or (def and def.buildable_to == true) or false) and not liquid
   local soil = perfectworld.compat.is_livable_ground(node_name)
   local stone = (groups.stone or groups.material_stone or 0) > 0
     or ((groups.cracky or groups.pickaxey or 0) > 0

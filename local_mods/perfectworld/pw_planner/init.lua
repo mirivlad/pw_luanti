@@ -1237,8 +1237,34 @@ local function terrain_verdict(fp_min, fp_max, max_slope, terrain)
   -- Barren ground: flat naked rock passes every geometric test and still
   -- makes a village that nobody could live in.
   if total > 0 and livable / total < 0.7 then return false, "barren" end
+
+  -- Above the waterline, not merely out of the water.
+  --
+  -- The test above refuses a footprint that has water in it. A beach beside an
+  -- ocean has no water in it and is still no place to build: the plot is level
+  -- with the sea, the placer cuts its foundation, and the sea comes in. That is
+  -- the settlement standing knee-deep in the ocean in the screenshots — five
+  -- lots, three of them flooded, and every one of them passed the liquid test
+  -- because on the day it was asked the ground was dry.
+  --
+  -- So: look a little further out than the footprint, find the highest water
+  -- surface there, and require the plot to stand above it.
+  local reach = margin + 3
+  local water_y = nil
+  for x = fp_min.x - reach, fp_max.x + reach do
+    for z = fp_min.z - reach, fp_max.z + reach do
+      if terrain.is_liquid(x, z) then
+        local wy = terrain.surface_y(x, z)
+        if wy then water_y = water_y and math.max(water_y, wy) or wy end
+      end
+    end
+  end
+  if water_y and min_y and min_y <= water_y then return false, "waterline" end
+
   return true, nil, min_y, slope
 end
+
+perfectworld.planner._terrain_verdict = terrain_verdict
 
 -- === Village Grammar: Full Plan Generation ===
 
@@ -3005,7 +3031,13 @@ local function lay_walkway(plan, material_name, opts)
 
       if cell.wet then
         if cell.pile and pile and pile ~= "air" then
-          for py = cell.y - 1, math.max(cell.natural or cell.y, cell.y - 12), -1 do
+          -- Down to the bed, which is where the loop stops of its own accord:
+          -- it breaks at the first node that is neither air nor water. The
+          -- floor used to be `cell.natural`, back when a flooded column
+          -- reported its bed rather than its surface; now that it reports the
+          -- surface, that floor was the deck itself and the piles were never
+          -- built.
+          for py = cell.y - 1, cell.y - 12, -1 do
             local name = minetest.get_node({x = cell.x, y = py, z = cell.z}).name
             if name == "air" or name == "ignore"
               or perfectworld.compat.is_liquid_node(name) then
@@ -4378,6 +4410,29 @@ local function site_relief(x, z, reach)
     low = low and math.min(low, y) or y
     high = high and math.max(high, y) or y
   end
+
+  -- Dry ground is not the same as ground above the water. A beach beside an
+  -- ocean is dry, level with the sea, and floods the moment a foundation is
+  -- cut into it. Look a little further out for open water and require the site
+  -- to stand above it.
+  if not wet and low then
+    local out = reach + 3
+    for _, probe in ipairs({
+      {x = -out, z = 0}, {x = out, z = 0}, {x = 0, z = -out}, {x = 0, z = out},
+      {x = -out, z = -out}, {x = out, z = -out},
+      {x = -out, z = out}, {x = out, z = out},
+    }) do
+      local px, pz = x + probe.x, z + probe.z
+      if world_terrain.is_liquid(px, pz) then
+        local wy = world_terrain.surface_y(px, pz)
+        if wy and low <= wy then
+          wet = true
+          break
+        end
+      end
+    end
+  end
+
   return high - low, wet
 end
 
