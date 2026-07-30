@@ -525,3 +525,132 @@ T.register_test("perfectworld", "roads_api_persists_and_reads_back", function(ct
 
   ctx.log("road API roundtrip verified")
 end)
+
+-- === A lone building does not stand in the sea ===
+--
+-- `analyze_terrain` looks down a column for the first node that is not air and
+-- not cover. Water is `buildable_to`, which makes it cover, so a lake reads as
+-- its own bed: perfectly flat, perfectly acceptable ground. A farmstead went up
+-- in it. Villages have refused flooded sites for a while; a lone building never
+-- asked, and the result is in every screenshot of this world.
+
+local WATER_SCENE_Y = 26
+
+--- A basin of standing water with dry land on one side.
+--
+-- The water goes in on a second pass, after the whole basin exists. Filling
+-- column by column pours into the neighbours that have not been dug yet and
+-- the scene drains before it is finished.
+local function lay_flooded_scene(centre, reach)
+  local ground = perfectworld.compat.get_material("ground", {required = false})
+  local minp = {x = centre.x - reach - 4, y = WATER_SCENE_Y - 6, z = centre.z - reach - 4}
+  local maxp = {x = centre.x + reach + 4, y = WATER_SCENE_Y + 8, z = centre.z + reach + 4}
+  if minetest.load_area then pcall(minetest.load_area, minp, maxp) end
+
+  for x = minp.x, maxp.x do
+    for z = minp.z, maxp.z do
+      for y = WATER_SCENE_Y - 6, WATER_SCENE_Y - 2 do
+        minetest.set_node({x = x, y = y, z = z}, {name = ground})
+      end
+      for y = WATER_SCENE_Y - 1, maxp.y do
+        minetest.set_node({x = x, y = y, z = z}, {name = "air"})
+      end
+      -- The basin: everything from the centre out to `reach` is dug one node
+      -- deeper than the land around it.
+      if math.abs(x - centre.x) <= reach and math.abs(z - centre.z) <= reach then
+        minetest.set_node({x = x, y = WATER_SCENE_Y - 2, z = z}, {name = "air"})
+      else
+        minetest.set_node({x = x, y = WATER_SCENE_Y - 2, z = z}, {name = ground})
+      end
+    end
+  end
+
+  for x = centre.x - reach, centre.x + reach do
+    for z = centre.z - reach, centre.z + reach do
+      minetest.set_node({x = x, y = WATER_SCENE_Y - 2, z = z},
+        {name = "mcl_core:water_source"})
+    end
+  end
+end
+
+T.register_test("perfectworld", "a_lone_building_is_not_offered_a_site_in_the_water",
+  function(ctx)
+    ctx.assert.not_nil(perfectworld.planner._ranked_sites,
+      "the site search must be reachable from a test")
+    if not perfectworld.planner._ranked_sites then return end
+
+    -- Far from anything the world planned, so the scene is the only thing
+    -- under test.
+    local centre = {x = 24000, z = 24000}
+    local reach = 20
+    lay_flooded_scene(centre, reach)
+    perfectworld.planner._world_terrain.reset()
+
+    if minetest.get_node({x = centre.x, y = WATER_SCENE_Y - 2, z = centre.z}).name
+      ~= "mcl_core:water_source" then
+      ctx.skip("the flooded scene did not hold its water")
+      return
+    end
+
+    local def = perfectworld.structures.get("pw_farmstead_v1")
+    local ranked = perfectworld.planner._ranked_sites(
+      {x = centre.x, z = centre.z, id = "test_wet_site"}, def)
+
+    for _, site in ipairs(ranked) do
+      local x = centre.x + site.offset.x
+      local z = centre.z + site.offset.z
+      ctx.assert.is_false(
+        perfectworld.planner._world_terrain.is_liquid(x, z),
+        string.format("offered a site standing in water at (%d,%d)", x, z))
+    end
+  end)
+
+T.register_test("perfectworld", "the_site_search_offers_the_flattest_ground_first",
+  function(ctx)
+    if not perfectworld.planner._ranked_sites then return end
+
+    -- A shelf: flat on one side of the candidate, stepped on the other. The
+    -- search must prefer the shelf, whatever order the offsets were generated
+    -- in.
+    local centre = {x = 24200, z = 24200}
+    local ground = perfectworld.compat.get_material("ground", {required = false})
+    local base = WATER_SCENE_Y
+    local minp = {x = centre.x - 30, y = base - 20, z = centre.z - 30}
+    local maxp = {x = centre.x + 30, y = base + 20, z = centre.z + 30}
+    if minetest.load_area then pcall(minetest.load_area, minp, maxp) end
+    for x = minp.x, maxp.x do
+      for z = minp.z, maxp.z do
+        -- West of the candidate: level. East: a staircase climbing away.
+        local top = base
+        if x > centre.x then top = base + math.min(math.floor((x - centre.x) / 2), 12) end
+        for y = minp.y, maxp.y do
+          minetest.set_node({x = x, y = y, z = z},
+            {name = y <= top and ground or "air"})
+        end
+      end
+    end
+    perfectworld.planner._world_terrain.reset()
+
+    local def = perfectworld.structures.get("pw_farmstead_v1")
+    local ranked = perfectworld.planner._ranked_sites(
+      {x = centre.x, z = centre.z, id = "test_shelf_site"}, def)
+    ctx.assert.is_true(#ranked > 0, "the search must offer something on dry land")
+    if #ranked == 0 then return end
+    ctx.assert.is_true(ranked[1].relief <= 1, string.format(
+      "the flattest site must come first, got relief %d", ranked[1].relief))
+    ctx.assert.is_true(ranked[1].offset.x <= 0, string.format(
+      "the flat ground is west of the candidate, was offered x offset %d",
+      ranked[1].offset.x))
+
+    -- Determinism: the same ground answered twice gives the same order.
+    perfectworld.planner._world_terrain.reset()
+    local again = perfectworld.planner._ranked_sites(
+      {x = centre.x, z = centre.z, id = "test_shelf_site"}, def)
+    ctx.assert.equal(#again, #ranked, "the search must offer the same sites again")
+    for index = 1, math.min(#again, #ranked) do
+      ctx.assert.equal(
+        again[index].offset.x .. ":" .. again[index].offset.z,
+        ranked[index].offset.x .. ":" .. ranked[index].offset.z,
+        "the search must not depend on table order at position " .. index)
+    end
+  end)

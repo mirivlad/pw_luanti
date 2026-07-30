@@ -4319,6 +4319,95 @@ end
 
 -- === Single Structure Materialization ===
 
+--- Where to try putting a lone building, flattest ground first.
+--
+-- A candidate names a point, and the point is wherever a hash landed. The
+-- ground there is as often a hillside as not, and `analyze_terrain` refuses
+-- anything with more than three or four nodes of relief across its footprint —
+-- correctly, because a house on a slope is a house on stilts. The old answer
+-- was seven fixed offsets tried in a fixed order, which is a very small lottery:
+-- most of the countryside's flat ground is a little further off than eight
+-- nodes, and being flat is not something the order knew anything about.
+--
+-- So: a bounded local search. Rings of offsets out to sixteen nodes, each one
+-- measured cheaply — the relief across five columns, which is enough to tell a
+-- terrace from a hillside — and sorted flattest first. Ties break on the
+-- offset's own index, never on table order, so the same seed and the same
+-- ground give the same answer every time.
+local SITE_SEARCH_RINGS = {0, 6, 11, 16}
+local SITE_SEARCH_TRIES = 10
+
+local function site_offsets()
+  local offsets = {}
+  for _, radius in ipairs(SITE_SEARCH_RINGS) do
+    if radius == 0 then
+      offsets[#offsets + 1] = {x = 0, z = 0}
+    else
+      for _, step in ipairs({
+        {x = 1, z = 0}, {x = 0, z = 1}, {x = -1, z = 0}, {x = 0, z = -1},
+        {x = 1, z = 1}, {x = 1, z = -1}, {x = -1, z = 1}, {x = -1, z = -1},
+      }) do
+        offsets[#offsets + 1] = {x = step.x * radius, z = step.z * radius}
+      end
+    end
+  end
+  return offsets
+end
+
+--- How much the ground moves across a footprint of this size, and whether any
+--- of it is standing water. Relief is nil where the ground is not generated.
+--
+-- The wet test is not fussiness. `analyze_terrain` finds a surface by looking
+-- down for the first node that is not air and not cover, and water is
+-- `buildable_to`, so it counts as cover: a lake reads as its own bed, perfectly
+-- flat and perfectly acceptable, and a farmstead goes up in it. That is the
+-- house standing in the sea in every screenshot of this world. Villages have
+-- refused flooded sites for a while; a lone building never asked.
+local function site_relief(x, z, reach)
+  local low, high = nil, nil
+  local wet = false
+  for _, probe in ipairs({
+    {x = 0, z = 0},
+    {x = -reach, z = -reach}, {x = reach, z = -reach},
+    {x = -reach, z = reach}, {x = reach, z = reach},
+  }) do
+    local px, pz = x + probe.x, z + probe.z
+    if world_terrain.is_liquid(px, pz) then wet = true end
+    local y = world_terrain.surface_y(px, pz)
+    if not y then return nil, wet end
+    low = low and math.min(low, y) or y
+    high = high and math.max(high, y) or y
+  end
+  return high - low, wet
+end
+
+local function ranked_sites(candidate, def)
+  local size = (def and def.size) or {x = 7, z = 7}
+  local reach = math.max(math.floor(math.max(size.x or 7, size.z or 7) / 2), 2)
+  local ranked = {}
+  for index, offset in ipairs(site_offsets()) do
+    local relief, wet = site_relief(
+      candidate.x + offset.x, candidate.z + offset.z, reach)
+    if not wet then
+      ranked[#ranked + 1] = {
+        offset = offset,
+        index = index,
+        -- Ground nobody has generated sorts last rather than out: on the mapgen
+        -- hook the neighbouring chunk often is not there yet, and refusing to
+        -- try is how a candidate goes to waste.
+        relief = relief or 999,
+      }
+    end
+  end
+  table.sort(ranked, function(a, b)
+    if a.relief ~= b.relief then return a.relief < b.relief end
+    return a.index < b.index
+  end)
+  return ranked
+end
+
+perfectworld.planner._ranked_sites = ranked_sites
+
 local function materialize_single_structure(candidate)
 	if perfectworld.materialization_enabled == false then
 		return false, perfectworld.world_format_error or "materialization_disabled"
@@ -4342,18 +4431,18 @@ local function materialize_single_structure(candidate)
 		return false, "already_placed"
 	end
 
-	local offsets = {
-		{x = 0, z = 0},
-		{x = 8, z = 0},
-		{x = -8, z = 0},
-		{x = 0, z = 8},
-		{x = 0, z = -8},
-		{x = 8, z = 8},
-		{x = -8, z = -8},
-	}
+	local ranked = ranked_sites(candidate,
+		perfectworld.structures.get(candidate.structure_name))
+	if #ranked == 0 then
+		return false, "no_dry_ground"
+	end
 
 	local last_error = nil
-	for _, offset in ipairs(offsets) do
+	local tried = 0
+	for _, site in ipairs(ranked) do
+		if tried >= SITE_SEARCH_TRIES then break end
+		tried = tried + 1
+		local offset = site.offset
 		local pos = {x = x + offset.x, y = 0, z = z + offset.z}
 		local ctx = {
 			structure_id = candidate.structure_id,
@@ -4476,6 +4565,64 @@ end
 -- Test helper: forget that a village is in flight so a test can re-queue it.
 function perfectworld.planner._test_clear_pending_village(id)
 	pending_villages[id] = nil
+end
+
+--- Try a lone building again once its ground exists.
+--
+-- The mapgen hook runs on a chunk of eighty nodes. A farmstead planned near the
+-- edge of one reads `ignore` where its own footprint crosses into the
+-- neighbour, `analyze_terrain` reports `missing_surface`, and the candidate is
+-- dropped — on ground that would have been perfectly good a second later. Seven
+-- of every nineteen attempts in a played world failed exactly this way.
+--
+-- The candidate is not marked placed when that happens, so the hook would try
+-- again if it ever fired on the same column twice; it does not. So the retry is
+-- explicit: emerge the small area the building actually needs, then place.
+local pending_structures = {}
+
+-- Only failures more ground could fix. A slope is a slope however much of it
+-- has been generated, and retrying one is work for nothing.
+local RETRIABLE = {
+	missing_surface = true,
+	missing_surface_after_analysis = true,
+	no_valid_placement = true,
+}
+
+function perfectworld.planner.queue_structure(candidate, reason)
+	local id = candidate.id
+	if pending_structures[id] or perfectworld.planner.is_placed(id) then
+		return false
+	end
+	if reason and not RETRIABLE[tostring(reason):match("^[%a_]+") or ""] then
+		return false
+	end
+	pending_structures[id] = true
+	local queued = perfectworld.core.deep_copy(candidate)
+	minetest.after(0, function()
+		perfectworld.planner.emerge_settlement_area(queued, 40, function()
+			if perfectworld.planner.is_placed(queued.id) then
+				pending_structures[id] = nil
+				return
+			end
+			local ok, result = materialize_single_structure(queued)
+			pending_structures[id] = nil
+			if not ok then
+				minetest.log("action", "[pw_planner] structure " .. tostring(queued.id)
+					.. " not materialized after emerge: " .. tostring(result))
+			end
+		end)
+	end)
+	return true
+end
+
+function perfectworld.planner.pending_structure_count()
+	local n = 0
+	for _ in pairs(pending_structures) do n = n + 1 end
+	return n
+end
+
+function perfectworld.planner._test_clear_pending_structure(id)
+	pending_structures[id] = nil
 end
 
 function perfectworld.planner.pending_village_count()
@@ -4995,13 +5142,23 @@ function perfectworld.planner.materialize_chunk(minp, maxp)
 							if ok then
 								result.materialized = result.materialized + 1
 							else
+								-- A failure that only means "the neighbouring chunk
+								-- is not there yet" gets the ground it asked for and
+								-- another go; anything else is a real refusal.
+								local retried = perfectworld.planner.queue_structure(
+									candidate, placed_or_reason)
+								if retried then
+									result.queued = result.queued + 1
+								end
 								table.insert(result.skipped, {
 									settlement_id = candidate.id,
 									structure_id = candidate.structure_id,
 									reason = placed_or_reason,
+									retried = retried,
 								})
 								minetest.log("warning", "[pw_planner] skipped settlement " ..
-									tostring(candidate.id) .. ": " .. tostring(placed_or_reason))
+									tostring(candidate.id) .. ": " .. tostring(placed_or_reason)
+									.. (retried and " (queued for retry)" or ""))
 							end
 						end
 					end
