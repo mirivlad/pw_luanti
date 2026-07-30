@@ -74,10 +74,11 @@ deterministically from the world seed.
   materialized, 16 doors with no walkable route from the street. A rescue route
   was built for all sixteen and none of them worked. Run
   `scripts/pw-accessibility-check.sh --fresh` to reproduce the figure
-- **Every planned settlement.** Walking to 23 candidates a traveller would meet,
-  20 had something standing on them. The three that did not were a town the
-  survey put in the ocean, a village on a hillside too rough to build on, and
-  one farmstead. Run `scripts/pw-mapgen-probe.sh` to reproduce the figure
+- **Every planned settlement.** Walking to candidates a traveller would meet, 54
+  to 75 per cent of them had something standing on them, measured over three
+  bands of one world. Most of what is missing is `no_viable_layout` — the site
+  is accepted and the settlement cannot be laid out on it. Run
+  `scripts/pw-mapgen-probe.sh` to reproduce the figure
 - Global route pathfinding over the settlement network
 - Save migration between planner versions
 

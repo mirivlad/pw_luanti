@@ -98,15 +98,25 @@ origin, generates the ground under each one the way arriving there would, and
 reports what `register_on_generated` made of it on its own. Nothing is
 materialized by hand — the emerge is the whole experiment.
 
-Baseline, on the world the player had been flying in:
+Baseline, and three later runs on bands of the same world that had never been
+generated. Each run is a different band, so the terrain differs between them and
+the spread is real rather than noise in the measurement:
 
 | | before | after |
 |---|---:|---:|
-| fresh candidates walked to | 18 | 23 |
-| something standing on them | 10 (56%) | 20 (87%) |
-| lone farmsteads | 6/6 | 9/10 |
-| hamlets | 4/13 | 9/9 |
-| villages and towns | no fresh sample | 2/4 |
+| fresh candidates walked to | 18 | 24 / 26 / 30 |
+| something standing on them | 10 (56%) | 75% / 54% / 63% |
+| lone farmsteads | 6/6 | 11/11, 5/11, 10/13 |
+| hamlets | 4/13 | 6/11, 5/8, 6/10 |
+| villages and towns | no fresh sample | 7/8, 4/7, 3/7 |
+
+What changed underneath those numbers matters more than the percentage. Before,
+the *only* things a traveller found were lone houses: hamlets resolved to a
+single farmstead, and not one village or town in the baseline sample was built
+by the mapgen hook rather than by hand. After, a little over half of what a
+traveller finds is a settlement with a street and three to seventeen buildings
+on it. At 1.74 candidates to the square kilometre that is roughly one settlement
+every kilometre and a half, where before it was none.
 
 Four things were wrong, and none of them was the settlement planner.
 
@@ -138,13 +148,25 @@ nothing to refuse. A lot is now refused for standing level with water beside it
 as well as for having water in it: cut a foundation into a beach and the sea
 comes in.
 
-What is still wrong at the end of it: of three candidates that produced nothing,
-one was a town the ecological survey placed in the ocean, one a village on
-ground with fourteen nodes of roughness, and one a farmstead. The first two are
-refusals, not failures — but the site is spent either way, because a candidate
-whose plan fails is marked placed so that no later mapchunk replans the same
-hopeless ground. Nothing looks for a better site nearby at that scale, the way a
-lone building now does.
+A fifth cause was found by tuning against a guess, twice, and is the reason the
+probe now records *why* a candidate came to nothing rather than only that it
+did. The rule that a plot must stand above the water beside it first compared
+the water to the lowest corner of the footprint; the placer levels a plot to its
+highest point and fills underneath, so that refused every plot merely sloping
+towards a stream and took hamlets from nine in nine to one in five. And a site
+was refused unless some trade scored as viable on it — right for a village,
+which is its trade, and wrong for three houses at a crossroads.
+
+**What is still wrong.** On the last run, eleven of thirty candidates produced
+nothing, and eight of those eleven were `no_viable_layout`: the site was
+accepted and the settlement could not be laid out on it. The rejections behind
+that are `slope` and `road_conflict` — lot geometry, not ground and not site
+selection. Two more were `slope_too_steep` on a lone building and one was
+`no_dry_ground`, both of which are honest refusals of ground.
+
+A candidate that fails this way is marked placed, so the site is spent and no
+later mapchunk replans the same hopeless ground. That is right for a refusal and
+wrong for a layout failure, and nothing currently distinguishes them.
 
 ## Doors Nobody Can Reach
 
