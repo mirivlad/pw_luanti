@@ -110,13 +110,20 @@ function perfectworld.planner.plan_region(rx, rz)
 		local structure_id = perfectworld.core.structure_id(candidate_id, 0)
 		local rotation = choice.pick(seed_key, "candidate:" .. i .. ":rotation", {0, 90, 180, 270})
 
+		-- A hamlet is a place, not a house.
+		--
+		-- Hamlets used to be a single farmstead, which meant that of every four
+		-- planned settlements three were one building standing alone in a field,
+		-- and only one was somewhere you could arrive at. A player who flew
+		-- across this world for half an hour met two buildings and no
+		-- settlement, and that is the arithmetic behind it. A hamlet now goes
+		-- through the village planner at the smallest size it supports: two
+		-- dwellings and the work that keeps them there.
 		local structure_name
-		if stype == "village" or stype == "town" then
-			structure_name = "__village__" -- marker: will be processed by village planner
-		elseif stype == "hamlet" then
+		if stype == "farm" then
 			structure_name = "pw_farmstead_v1"
 		else
-			structure_name = "pw_farmstead_v1"
+			structure_name = "__village__" -- marker: will be processed by village planner
 		end
 
 		table.insert(settlement_candidates, {
@@ -731,6 +738,14 @@ function perfectworld.planner.create_village_profile(candidate, environment)
     profile.size_class = "town"
     profile.target_lots = choice.int(seed_key, "target_lots:town", 14, 24)
     profile.density = choice.range(seed_key, "density:town", 0.50, 0.75)
+  elseif profile.settlement_type == "hamlet" then
+    -- The smallest thing that still reads as a settlement rather than as a
+    -- farm with outbuildings: a few houses and the work between them. The
+    -- specializations each require three lots, so this is a range around the
+    -- floor rather than above it.
+    profile.size_class = "small"
+    profile.target_lots = choice.int(seed_key, "target_lots:hamlet", 3, 5)
+    profile.density = choice.range(seed_key, "density:hamlet", 0.25, 0.40)
   else
     profile.size_class = choice.weighted(seed_key, "size_class", {
       {value = "small", weight = 30},
