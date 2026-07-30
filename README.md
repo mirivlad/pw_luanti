@@ -125,12 +125,7 @@ That restarts the server in test mode, connects `pwbot`, runs everything and
 prints the summary. `--keep` reuses a running server; `--no-client` skips
 starting the client.
 
-Current: **385 total | 383 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
-
-The two failures are a configuration contradiction, not a regression: two
-`pw_bot_bridge` tests require `external_transport` to be off by default, while
-`config/luanti.conf` turns it on for `pw_bot_runtime`. See
-[docs/status.md](docs/status.md).
+Current: **385 total | 385 PASS | 0 FAIL | 0 SKIP | 0 ERROR**
 
 Two further scripts measure the world rather than the code, and both take
 tens of minutes:

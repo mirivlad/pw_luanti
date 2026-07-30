@@ -29,9 +29,27 @@ test("transport_is_off_by_default_and_needs_no_insecure_environment", function(c
   local status = transport.status()
   ctx.assert.equal(status.requires_insecure_environment, false,
     "the spool works inside the normal mod sandbox")
-  ctx.assert.equal(minetest.settings:get_bool("pw_bot_bridge.external_transport", false), false,
-    "the setting defaults to off")
   ctx.assert.equal(B.get_capabilities().transport.kind, "file_spool", "transport kind")
+
+  -- The default, not the deployment.
+  --
+  -- This used to read the live setting and assert it was off, which made it a
+  -- test of whoever wrote the config file rather than of this mod. On a machine
+  -- where the operator had turned the spool on — which is every machine running
+  -- `pw_bot_runtime` — it failed permanently and said nothing. Take the setting
+  -- away, re-read, and put it back: that asks the question the name promises.
+  local key = "pw_bot_bridge.external_transport"
+  local before = minetest.settings:get(key)
+  minetest.settings:remove(key)
+  local default_value = B.impl.settings.reload().external_transport
+  if before ~= nil then minetest.settings:set(key, before) end
+  B.impl.settings.reload()
+
+  ctx.assert.equal(default_value, false,
+    "with nothing in the configuration the spool stays off")
+  ctx.assert.equal(B.impl.settings.external_transport,
+    minetest.settings:get_bool(key, false),
+    "and the configuration is put back exactly as it was found")
 end)
 
 test("transport_reports_which_filesystem_primitives_it_has", function(ctx)

@@ -1,12 +1,17 @@
 # Project Status
 
 **Date:** 2026-07-30
-**Test baseline:** 385 total | 383 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+**Test baseline:** 385 total | 385 PASS | 0 FAIL | 0 SKIP | 0 ERROR
 
-The two failures are the long-standing `external_transport` configuration
-contradiction: two `pw_bot_bridge` tests require the setting to be off by
-default, while `config/luanti.conf` turns it on so `pw_bot_runtime` can reach
-the spool.
+The long-standing `external_transport` pair passes for the first time. They
+were not testing this mod. One read the live setting and asserted it was off,
+which made it a test of whoever wrote the config file; the other opened by
+asserting the spool was not running "while the setting is off" and then
+depended on the deployment for the setting being off. On any machine running
+`pw_bot_runtime` the setting is on, so the first assertion failed and
+everything below it went unreached — including the administrator start/stop
+lifecycle the test is named for. Each test now establishes its own
+precondition and puts the deployment back.
 
 Measured on `master` after the world-generation work below.
 
@@ -577,15 +582,23 @@ Resource-aware, multi-archetype physical settlement pipeline. See
 
 ## Known Test Issues
 
-The two FAILs are an existing test-configuration contradiction, not planner
-regressions:
+None. The `external_transport` pair — red for long enough that both this file
+and the README carried a paragraph explaining why it did not count — was two
+tests reading the deployment instead of the code:
 
-- `pw_bot_bridge.integration_transport_follows_its_setting`
-- `pw_bot_bridge.transport_is_off_by_default_and_needs_no_insecure_environment`
+- `transport_is_off_by_default_and_needs_no_insecure_environment` asserted the
+  *live* setting was off, so it tested whoever wrote `config/luanti.conf`. It
+  now takes the setting away, re-reads, asserts the default, and puts it back.
+- `integration_transport_follows_its_setting` opened by asserting the spool was
+  not running "while the setting is off" and inherited that precondition from
+  the deployment. On any machine running `pw_bot_runtime` the setting is on, the
+  first assertion failed, and the administrator start/stop lifecycle the test is
+  named for was never reached. It now stops the spool itself and restores the
+  setting afterwards, which the globalstep reconciles on the next step.
 
-Both expect `pw_bot_bridge.external_transport=false`, while the local
-development file `config/luanti.conf` explicitly sets it to `true`. Configuration
-was not changed during this cycle. Every other test passes.
+The cost of leaving them red was not the two red lines. It was that a
+permission-gated lifecycle went untested for as long as they were there, and
+that a permanently red suite teaches you to read past red.
 
 Expected log noise remains: the world-format test deliberately feeds `pw_core`
 an incompatible lock, terrain rollback fixtures provoke

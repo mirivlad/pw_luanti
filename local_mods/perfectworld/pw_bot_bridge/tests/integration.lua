@@ -304,7 +304,17 @@ test("integration_transport_follows_its_setting", function(ctx)
     return ctx.skip("sandbox lacks: " .. table.concat(missing, ","))
   end
 
+  -- Establish the precondition rather than inherit it.
+  --
+  -- This test used to open by asserting the transport was not running "while
+  -- the setting is off", and then depend on the deployment for the setting
+  -- being off. On a machine running `pw_bot_runtime` it is on, the first
+  -- assertion failed, and everything below it — the administrator lifecycle,
+  -- which is the thing the test is named for — was never reached. A test that
+  -- needs the spool stopped stops it.
   local before = settings.external_transport
+  settings.external_transport = false
+  transport.stop(B.SERVER_ACTOR)
   ctx.assert.is_false(transport.is_running(),
     "the transport is not running while the setting is off")
 
@@ -315,6 +325,11 @@ test("integration_transport_follows_its_setting", function(ctx)
 
   transport.stop(B.SERVER_ACTOR)
   ctx.assert.is_false(transport.is_running(), "and stop it again")
+
+  -- Put the deployment back. The globalstep reconciles setting and state, so
+  -- restoring the setting restarts the spool on the next step if it was on;
+  -- leaving it off here would silently take the runtime's channel away for the
+  -- rest of the session.
   settings.external_transport = before
 end)
 
