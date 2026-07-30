@@ -1249,6 +1249,12 @@ local function terrain_verdict(fp_min, fp_max, max_slope, terrain)
   --
   -- So: look a little further out than the footprint, find the highest water
   -- surface there, and require the plot to stand above it.
+  --
+  -- The comparison is against the *highest* ground in the footprint, not the
+  -- lowest, because that is where the floor ends up: the placer levels to the
+  -- top of the plot and fills underneath. Comparing against the lowest corner
+  -- refused every plot that merely sloped down towards a stream, and took the
+  -- build rate for hamlets from nine in nine to one in five.
   local reach = margin + 3
   local water_y = nil
   for x = fp_min.x - reach, fp_max.x + reach do
@@ -1259,7 +1265,7 @@ local function terrain_verdict(fp_min, fp_max, max_slope, terrain)
       end
     end
   end
-  if water_y and min_y and min_y <= water_y then return false, "waterline" end
+  if water_y and max_y and max_y <= water_y then return false, "waterline" end
 
   return true, nil, min_y, slope
 end
@@ -4414,8 +4420,9 @@ local function site_relief(x, z, reach)
   -- Dry ground is not the same as ground above the water. A beach beside an
   -- ocean is dry, level with the sea, and floods the moment a foundation is
   -- cut into it. Look a little further out for open water and require the site
-  -- to stand above it.
-  if not wet and low then
+  -- to stand above it — above the *highest* ground in the footprint, because
+  -- that is the level the placer builds at.
+  if not wet and high then
     local out = reach + 3
     for _, probe in ipairs({
       {x = -out, z = 0}, {x = out, z = 0}, {x = 0, z = -out}, {x = 0, z = out},
@@ -4425,7 +4432,7 @@ local function site_relief(x, z, reach)
       local px, pz = x + probe.x, z + probe.z
       if world_terrain.is_liquid(px, pz) then
         local wy = world_terrain.surface_y(px, pz)
-        if wy and low <= wy then
+        if wy and high <= wy then
           wet = true
           break
         end
