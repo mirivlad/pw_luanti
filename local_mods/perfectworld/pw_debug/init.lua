@@ -2676,6 +2676,165 @@ minetest.register_chatcommand("pw_village_export", {
   end,
 })
 
+-- === What a player actually finds ===
+--
+-- Every other measurement in this file asks the planner to build something and
+-- then grades the result. That answers "can we build a settlement", not "does a
+-- world have settlements in it" — and those turned out to be very different
+-- questions. A player who flew for half an hour across this world met two
+-- buildings.
+--
+-- This command measures the second question. It takes planned candidates in
+-- order of distance from the origin, generates the ground under each one
+-- exactly the way walking there would, and then reports what the mapgen hook
+-- made of it. Nothing here materializes anything by hand: the emerge is the
+-- whole experiment, and whatever appears is what `register_on_generated` chose
+-- to do on its own.
+minetest.register_chatcommand("pw_mapgen_probe", {
+  params = "[count] [region_radius] [min_region_radius]",
+  description = "Generate the ground under planned candidates and report what mapgen built there",
+  privs = {server = true},
+  func = function(name, params)
+    local count_s, radius_s, inner_s =
+      tostring(params or ""):match("^%s*(%d*)%s*(%d*)%s*(%d*)%s*$")
+    local want = math.min(math.max(tonumber(count_s) or 24, 1), 80)
+    local radius = math.min(math.max(tonumber(radius_s) or 8, 1), 20)
+    -- Regions to leave alone. A world that has been played in, or measured in
+    -- before, has settlements standing in it already, and a candidate that is
+    -- already built tells you nothing about whether it would have been. Start
+    -- the sample outside the part of the world that has been touched.
+    local inner = math.max(tonumber(inner_s) or 0, 0)
+
+    local limit = tonumber(minetest.settings:get("mapgen_limit")) or 31000
+    local cells = {}
+    for rx = -radius, radius do
+      for rz = -radius, radius do
+        if math.max(math.abs(rx), math.abs(rz)) >= inner then
+          cells[#cells + 1] = {rx = rx, rz = rz}
+        end
+      end
+    end
+    table.sort(cells, function(a, b)
+      local da, db = a.rx * a.rx + a.rz * a.rz, b.rx * b.rx + b.rz * b.rz
+      if da ~= db then return da < db end
+      if a.rx ~= b.rx then return a.rx < b.rx end
+      return a.rz < b.rz
+    end)
+
+    local probes = {}
+    for _, cell in ipairs(cells) do
+      if #probes >= want then break end
+      local plan = perfectworld.planner.plan_region(cell.rx, cell.rz)
+      for _, candidate in ipairs(plan.settlement_candidates or {}) do
+        if #probes >= want then break end
+        if math.abs(candidate.x) < limit - 256 and math.abs(candidate.z) < limit - 256 then
+          probes[#probes + 1] = {
+            id = candidate.id,
+            type = candidate.type,
+            x = candidate.x,
+            z = candidate.z,
+            region = plan.id,
+            placed_before = perfectworld.planner.is_placed(candidate.id) and true or false,
+          }
+        end
+      end
+    end
+
+    if #probes == 0 then
+      return false, "no candidates within " .. radius .. " regions"
+    end
+
+    -- One mapchunk is 80 nodes; a candidate sits somewhere inside one and its
+    -- buildings spill into the neighbours, so a little over one chunk each way
+    -- is the smallest area that lets a farmstead land at all. This is
+    -- deliberately not the settlement's own emerge radius: the point is to
+    -- reproduce what a traveller generates by arriving, not what the village
+    -- pipeline asks for once it knows a village is coming.
+    local SPAN = 48
+
+    local index = 0
+    local function probe_next()
+      index = index + 1
+      local probe = probes[index]
+      if not probe then
+        local built, empty, already = 0, 0, 0
+        local by_type = {}
+        for _, p in ipairs(probes) do
+          local slot = by_type[p.type] or {asked = 0, built = 0}
+          slot.asked = slot.asked + 1
+          if p.placed_before then
+            already = already + 1
+          elseif p.placed_after then
+            built = built + 1
+            slot.built = slot.built + 1
+          else
+            empty = empty + 1
+          end
+          by_type[p.type] = slot
+        end
+        local parts = {}
+        for kind, slot in pairs(by_type) do
+          parts[#parts + 1] = string.format("%s %d/%d", kind, slot.built, slot.asked)
+        end
+        table.sort(parts)
+        local stamp = os.date("!%Y%m%d_%H%M%S")
+        local path = write_world_file("pw_mapgen_probe_" .. stamp .. ".json",
+          minetest.write_json({probes = probes, span = SPAN}, true))
+        local report = string.format(
+          "pw_mapgen_probe: %d candidate(s) walked to, %d built, %d left empty, "
+            .. "%d already standing | %s | %s",
+          #probes, built, empty, already, table.concat(parts, " "), tostring(path))
+        minetest.log("action", "[pw_debug] " .. report)
+        minetest.chat_send_player(name, report)
+        return
+      end
+
+      local surface = (minetest.get_spawn_level
+        and minetest.get_spawn_level(probe.x, probe.z)) or 32
+      local minp = {x = probe.x - SPAN, y = surface - 32, z = probe.z - SPAN}
+      local maxp = {x = probe.x + SPAN, y = surface + 40, z = probe.z + SPAN}
+      minetest.emerge_area(minp, maxp, function(_, _, remaining)
+        if remaining > 0 then return end
+        -- A settlement is queued by the hook rather than built by it, so the
+        -- answer is not ready when the ground is: the queue emerges its own
+        -- site first and only then plans. Waiting a fixed twenty seconds
+        -- reported "nothing" for work that was still in flight, so this waits
+        -- for the queue to empty and gives up on a clock rather than on a
+        -- guess.
+        local waited = 0
+        local function settle()
+          local in_flight = (perfectworld.planner.pending_village_count() or 0)
+            + (perfectworld.planner.pending_structure_count and
+               perfectworld.planner.pending_structure_count() or 0)
+          local placed = perfectworld.planner.is_placed(probe.id) and true or false
+          if not placed and in_flight > 0 and waited < 180 then
+            waited = waited + 5
+            minetest.after(5, settle)
+            return
+          end
+          probe.placed_after = placed
+          probe.waited = waited
+          local stored = perfectworld.planner.get_settlement_plan(probe.id)
+          if stored then
+            probe.lots = #((stored.plan or {}).lots or stored.lots or {})
+          end
+          minetest.log("action", string.format(
+            "[pw_debug] mapgen_probe %d/%d %s %s at (%d,%d): %s after %ds",
+            index, #probes, probe.type, probe.id, probe.x, probe.z,
+            probe.placed_after and "built" or "nothing", waited))
+          probe_next()
+        end
+        minetest.after(5, settle)
+      end)
+    end
+
+    probe_next()
+    return true, string.format(
+      "walking to %d candidate(s) within %d regions; the report follows",
+      #probes, radius)
+  end,
+})
+
 -- The PW Bot obstacle course lives here rather than in pw_player_bot because
 -- it writes nodes, and the bot mods are forbidden from doing that.
 local ok, err = pcall(dofile, minetest.get_modpath("pw_debug") .. "/bot_course.lua")

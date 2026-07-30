@@ -72,6 +72,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# How many times something appears in the server log so far.
+#
+# `grep -q` on this pipe is a trap: grep exits at the first match, the
+# still-writing `docker logs` takes SIGPIPE, and under `pipefail` the whole
+# pipeline reports failure however many matches there were. It fails more often
+# the longer the log gets, which is to say it starts working and then stops.
+# Counting reads the stream to the end and cannot do that.
+seen() { docker logs perfectworld-dev 2>&1 | grep -c "$1" || true; }
+
 fail() {
     log "FAILED: $*"
     echo "--- server log (tail) ---"
@@ -112,7 +121,7 @@ compose up -d >/dev/null 2>&1
 # client that "never connected": the socket was not open yet.
 ready=0
 for _ in $(seq 1 120); do
-    if docker logs perfectworld-dev 2>&1 | grep -q "listening on"; then ready=1; break; fi
+    if [ "$(seen "listening on")" -gt 0 ]; then ready=1; break; fi
     sleep 2
 done
 [ "$ready" = "1" ] || fail "the server never reported that it is listening"
@@ -129,7 +138,7 @@ pgrep -x luanti >/dev/null && fail "a client from an earlier run will not die"
 
 # Anchor detection to this run rather than to a time window: count the joins
 # already in the log and wait for one more.
-joins_before="$(docker logs perfectworld-dev 2>&1 | grep -c "$LTK_USER.*joins game" || true)"
+joins_before="$(seen "$LTK_USER.*joins game")"
 
 rm -f "/tmp/.X${DISPLAY_NUM}-lock" 2>/dev/null || true
 Xvfb ":$DISPLAY_NUM" -screen 0 1280x720x24 -nolisten tcp >/dev/null 2>&1 &
@@ -143,7 +152,7 @@ CLIENT_PID=$!
 
 connected=0
 for _ in $(seq 1 90); do
-    joins_now="$(docker logs perfectworld-dev 2>&1 | grep -c "$LTK_USER.*joins game" || true)"
+    joins_now="$(seen "$LTK_USER.*joins game")"
     if [ "$joins_now" -gt "$joins_before" ]; then connected=1; break; fi
     kill -0 "$CLIENT_PID" 2>/dev/null || fail "the client exited before joining"
     sleep 1
@@ -165,7 +174,7 @@ log "building $COUNT settlements within $RADIUS regions"
 rc pw_village_batch "$COUNT $RADIUS" 6
 built=0
 for _ in $(seq 1 240); do
-    if docker logs perfectworld-dev 2>&1 | grep -q "village batch finished"; then built=1; break; fi
+    if [ "$(seen "village batch finished")" -gt 0 ]; then built=1; break; fi
     kill -0 "$CLIENT_PID" 2>/dev/null || fail "the client died during the batch"
     sleep 10
 done
