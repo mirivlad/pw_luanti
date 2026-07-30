@@ -15,9 +15,11 @@ deterministically from the world seed.
 **The land and what stands on it**
 
 - Divides the world into 1024×1024 deterministic regions, each holding on
-  average 1.8 settlements
+  average 1.8 settlements: a lone farmstead about four times in ten, and a
+  hamlet, village or town the rest of the time
 - Plans farms, hamlets, villages and towns, choosing each site from a bounded
-  physical survey rather than from a biome label
+  physical survey rather than from a biome label, and refusing ground that is
+  too steep, too barren, or level with the water beside it
 - Gives each settlement a trade — fishing, farming, forestry or mining — that
   has to be supported by measured water, soil, trees or stone
 - Builds from a catalogue of **68 declarative building schemes in six styles**:
@@ -72,6 +74,10 @@ deterministically from the world seed.
   materialized, 16 doors with no walkable route from the street. A rescue route
   was built for all sixteen and none of them worked. Run
   `scripts/pw-accessibility-check.sh --fresh` to reproduce the figure
+- **Every planned settlement.** Walking to 23 candidates a traveller would meet,
+  20 had something standing on them. The three that did not were a town the
+  survey put in the ocean, a village on a hillside too rough to build on, and
+  one farmstead. Run `scripts/pw-mapgen-probe.sh` to reproduce the figure
 - Global route pathfinding over the settlement network
 - Save migration between planner versions
 
@@ -118,12 +124,29 @@ That restarts the server in test mode, connects `pwbot`, runs everything and
 prints the summary. `--keep` reuses a running server; `--no-client` skips
 starting the client.
 
-Current: **379 total | 377 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
+Current: **385 total | 383 PASS | 2 FAIL | 0 SKIP | 0 ERROR**
 
 The two failures are a configuration contradiction, not a regression: two
 `pw_bot_bridge` tests require `external_transport` to be off by default, while
 `config/luanti.conf` turns it on for `pw_bot_runtime`. See
 [docs/status.md](docs/status.md).
+
+Two further scripts measure the world rather than the code, and both take
+tens of minutes:
+
+```bash
+./scripts/pw-mapgen-probe.sh --count 26 --radius 12 --inner 4
+```
+
+walks to planned settlements, generates the ground under each the way arriving
+there would, and reports what the mapgen hook built on its own.
+
+```bash
+./scripts/pw-accessibility-check.sh --fresh
+```
+
+builds a sample of settlements and reports how many doors have no walkable route
+from the street.
 
 See [docs/testing.md](docs/testing.md) for full test documentation.
 

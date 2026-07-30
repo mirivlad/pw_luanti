@@ -1,15 +1,14 @@
 # Project Status
 
-**Date:** 2026-07-29
-**Test baseline:** 379 total | 377 PASS | 2 FAIL | 0 SKIP | 0 ERROR
+**Date:** 2026-07-30
+**Test baseline:** 385 total | 383 PASS | 2 FAIL | 0 SKIP | 0 ERROR
 
 The two failures are the long-standing `external_transport` configuration
 contradiction: two `pw_bot_bridge` tests require the setting to be off by
 default, while `config/luanti.conf` turns it on so `pw_bot_runtime` can reach
 the spool.
 
-Measured on `master` after roads between settlements, larger settlements and
-population.
+Measured on `master` after the world-generation work below.
 
 ## Implemented Modules
 
@@ -83,6 +82,70 @@ Verified in the world rather than only in the plan, with
 from the catalogue, japanese and stilt villages both appearing, and no
 settlement mixing two styles.
 
+## What a Traveller Actually Finds
+
+A player flew across a generated world for half an hour and met two buildings:
+one lone house and one standing in the water, joined by a road he described as a
+road only by courtesy. No hamlet, no village, no town. In the same week the
+acceptance run of `pw_village_batch` reported 162 lots standing. Both numbers
+were true. They answer different questions, and only one of them is the
+player's.
+
+Every check in this repository asked the planner to build a settlement and then
+graded the result. That measures the builder. `scripts/pw-mapgen-probe.sh`
+measures the world: it takes planned candidates in order of distance from the
+origin, generates the ground under each one the way arriving there would, and
+reports what `register_on_generated` made of it on its own. Nothing is
+materialized by hand — the emerge is the whole experiment.
+
+Baseline, on the world the player had been flying in:
+
+| | before | after |
+|---|---:|---:|
+| fresh candidates walked to | 18 | 23 |
+| something standing on them | 10 (56%) | 20 (87%) |
+| lone farmsteads | 6/6 | 9/10 |
+| hamlets | 4/13 | 9/9 |
+| villages and towns | no fresh sample | 2/4 |
+
+Four things were wrong, and none of them was the settlement planner.
+
+**Three settlements in four were one house.** `farm` and `hamlet` both resolved
+to a single `pw_farmstead_v1`; only `village` and `town` went through the
+settlement pipeline at all. A hamlet now goes through it too, at the smallest
+size the specializations allow — three to five lots. Lone farmsteads are now
+about four candidates in ten rather than eight.
+
+**A candidate names a point, and the point is wherever a hash landed.** The
+answer to a hillside was seven fixed offsets tried in a fixed order, and
+`analyze_terrain` refuses more than three or four nodes of relief across a
+footprint: `slope_too_steep` accounted for eight of the nine hamlets that failed
+in the baseline. Now there is a bounded local search — rings out to sixteen
+nodes, each measured across five columns, flattest first, ties broken on the
+offset's index rather than on table order.
+
+**`missing_surface` usually meant only that the neighbour was not there yet.**
+A footprint that crosses the eighty-node mapchunk boundary reads `ignore` on the
+far side. Those are queued for an emerge and a second attempt; a slope is not,
+because a slope is a slope however much of it has been generated.
+
+**Water was classified as a plant.** `buildable_to` is how grass and flowers
+tell a column sampler to look past them, and water is `buildable_to`, so every
+sampler in the project read a lake as its bed — flat, solid, dry. That is one
+line, and it is why a settlement stood in the sea with `water_ratio` reported as
+zero, why roads followed the sea bed, and why the flooded-site tests found
+nothing to refuse. A lot is now refused for standing level with water beside it
+as well as for having water in it: cut a foundation into a beach and the sea
+comes in.
+
+What is still wrong at the end of it: of three candidates that produced nothing,
+one was a town the ecological survey placed in the ocean, one a village on
+ground with fourteen nodes of roughness, and one a farmstead. The first two are
+refusals, not failures — but the site is spent either way, because a candidate
+whose plan fails is marked placed so that no later mapchunk replans the same
+hopeless ground. Nothing looks for a better site nearby at that scale, the way a
+lone building now does.
+
 ## Doors Nobody Can Reach
 
 Measured, not estimated. `scripts/pw-accessibility-check.sh` regenerates a
@@ -114,7 +177,23 @@ same way. What they cannot prove is the part the world run just disproved.
 
 ## What a Road Does About the Ground
 
-Three things were wrong with roads, and the first two were mine.
+**A road made of dashes.** The carriageway took its direction from the two
+neighbouring centreline cells. A rasterized gentle diagonal is a staircase, so
+that direction flipped between along-x and along-z from one cell to the next and
+the cross-section flipped with it. What went into the ground was a chain of
+two-cell dashes touching only at their corners — ugly from the air, and not
+walkable at all, because the engine's pathfinder steps north, south, east and
+west and never diagonally. That is the road in the player's screenshot.
+
+`roads.way_footprint` fixes it with two rules. Take the direction from a window
+of five cells, because a staircase averaged over five cells is a diagonal and a
+diagonal has a stable perpendicular; then, where consecutive rows touch only at
+a corner, fill the corner. It is pure — no world reads, no randomness — so the
+contracts are testable: a way is one four-connected piece at every width, a
+straight run covers exactly the width asked for, and walking the same way
+backwards covers the same cells.
+
+Three further things were wrong with roads, and the first two were mine.
 
 **Deep cuttings.** The height profile was one-sided — a road may be cut into a
 hill, never raised above it — and the depth of the cut was never bounded. The
@@ -525,6 +604,9 @@ worksite cameras.
 | No complete fishing village was found inside valid world coordinates in this seed's acceptance sample | Viable shore geometry must fit two houses, a fishery and a dock without using water or a cliff | Fishery and dock components pass physical tests, but full real-world fishing composition still needs a deterministic acceptance fixture |
 | `/pw_village_batch` accepts radii beyond the engine's usable coordinate range | The development command enumerates arbitrary region coordinates and does not clamp to `mapgen_limit` | It can write non-visualizable diagnostic records; normal mapgen does not generate those regions |
 | A settlement on a shoal joins its doors with boardwalks | `paving_level` in a flooded column returns the floor of the basin, so a way from a door to a street was laid along the sea bed and a villager stepping out walked into the water. Ways over water are now decked at the doorstep's level, on piles | Fixed |
+| A settlement stands knee-deep in the ocean on a beach | A third cause, and the one behind the rest: `classify_node` called water vegetation, because `buildable_to` is how grass and flowers tell a sampler to look past them and water is `buildable_to` too. Every column sampler read a lake as its bed — flat, solid, dry — so `water_ratio` on a shoreline mesa came back as zero and none of the flooded-site machinery below ever had anything to refuse. A liquid is terrain and the sampler stops at it. A lot is now refused for standing level with water beside it as well as for having water in it | Fixed |
+| Roads laid along the sea bed | Same cause: `pave_way` decides a cell is wet from `column.liquid`, which was false for every ordinary water column, so the carriageway followed the bottom down and back up | Fixed |
+| A road is a chain of two-cell dashes touching at their corners | The cross-section took its direction from the two neighbouring centreline cells, and a rasterized gentle diagonal is a staircase, so the direction flipped from cell to cell. Not merely ugly: the engine's pathfinder steps north, south, east and west, so a diagonally-connected way is not walkable at all. The direction now comes from a window of five cells and corners are filled | Fixed |
 | A settlement can be planned standing in the sea | Two causes. The survey radius was fixed at 24 whatever was to be built, so a town 167 nodes wide was judged on a patch 48 across; and every lot was checked against water on its own while nothing asked about the ground between them, so a chain of dry hummocks across a shoal passed lot by lot. Measured on a fresh world: 73%, 98% and 29% of three settlements' own footprints stood in water. The survey now follows the settlement type, and a plan whose footprint is more than a third water is refused | Fixed for new settlements. The ones already built are still in the water, joined by boardwalks |
 | A settlement link can leave one water cell unpaved at a lake edge | The bridge decides from the column it probes; water that flows back over a freshly laid deck is not re-probed | One cell in sixty-two on the link measured; the road either side is continuous |
 | `/pw_street_check` reads nothing for settlements whose blocks are not loaded | Teleporting to a settlement does not guarantee the server keeps its mapblocks, and `load_area` only loads what is already generated | Streets in those settlements report every cell unreadable, which is honest but leaves them unmeasured |
