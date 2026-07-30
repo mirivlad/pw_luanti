@@ -50,6 +50,95 @@ function roads.cross_section(dx, dz, width)
   return result
 end
 
+--- The cells a way of this width covers, one list per centreline cell.
+--
+-- `cross_section` alone does not make a road. It gives a row of cells across
+-- one direction, and a rasterized centreline changes direction constantly: a
+-- gentle diagonal is a staircase, so the row flips between running north-south
+-- and east-west from one cell to the next. Laid out, that is not a carriageway
+-- but a chain of two-cell dashes touching at their corners — the blotchy zigzag
+-- in every screenshot of a road this project has taken.
+--
+-- Two rules fix it, and neither is a special case:
+--
+--  * Take the direction from a window rather than from the neighbours. A
+--    staircase averaged over five cells is a diagonal, and a diagonal has a
+--    stable perpendicular.
+--  * Where consecutive rows touch only at a corner, fill the corner. A road you
+--    can only cross diagonally is not one a walker can follow, and the engine's
+--    pathfinder agrees: it steps north, south, east and west.
+--
+-- Pure: no world reads, no randomness, and the same input gives the same
+-- output cell for cell.
+local WINDOW = 2
+
+function roads.way_footprint(cells, first, last, width)
+  first = first or 1
+  last = last or #cells
+  local footprint = {}
+  local owner = {}
+
+  local function claim(index, x, z)
+    local key = x .. ":" .. z
+    if owner[key] then return end
+    owner[key] = index
+    footprint[index] = footprint[index] or {}
+    local list = footprint[index]
+    list[#list + 1] = {x = x, z = z}
+  end
+
+  for i = first, last do
+    local cell = cells[i]
+    if cell then
+      local ahead = cells[math.min(i + WINDOW, last)] or cell
+      local behind = cells[math.max(i - WINDOW, first)] or cell
+      local dx, dz = ahead.x - behind.x, ahead.z - behind.z
+      if dx == 0 and dz == 0 then dx = 1 end
+      for _, offset in ipairs(roads.cross_section(dx, dz, width)) do
+        claim(i, cell.x + offset.x, cell.z + offset.z)
+      end
+    end
+  end
+
+  -- Close the corners. Two rows that share no edge are joined through the
+  -- cell that is orthogonal to one and orthogonal to the other; there are two
+  -- such cells for a diagonal pair and the lower-sorting one is taken, so the
+  -- result does not depend on which way the way was walked.
+  for i = first, last - 1 do
+    local here, there = footprint[i], footprint[i + 1]
+    if here and there then
+      local touching = false
+      for _, a in ipairs(here) do
+        for _, b in ipairs(there) do
+          if math.abs(a.x - b.x) + math.abs(a.z - b.z) <= 1 then
+            touching = true
+            break
+          end
+        end
+        if touching then break end
+      end
+      if not touching then
+        local best = nil
+        for _, a in ipairs(here) do
+          for _, b in ipairs(there) do
+            if math.abs(a.x - b.x) == 1 and math.abs(a.z - b.z) == 1 then
+              for _, corner in ipairs({{x = a.x, z = b.z}, {x = b.x, z = a.z}}) do
+                if not best or corner.x < best.x
+                  or (corner.x == best.x and corner.z < best.z) then
+                  best = corner
+                end
+              end
+            end
+          end
+        end
+        if best then claim(i, best.x, best.z) end
+      end
+    end
+  end
+
+  return footprint
+end
+
 local function sorted_cells(set)
   local cells = {}
   for _, cell in pairs(set) do

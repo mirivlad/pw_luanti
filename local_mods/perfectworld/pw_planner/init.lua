@@ -2739,6 +2739,12 @@ local function pave_way(cells, first, last, opts)
   local y = route.y
   local crossable = bridgeable(water, first, last)
 
+  -- The whole carriageway, worked out before a node is laid. Taking the
+  -- direction from the two neighbouring cells left a road that changed its
+  -- mind about which way it faced at every step of a diagonal, and laid the
+  -- surface as a chain of dashes touching at their corners.
+  local footprint = perfectworld.roads.way_footprint(route.cells, first, last, width)
+
   local pier = perfectworld.compat.get_material("cobble", {required = false})
   local placed, bridged, unbridged, tunnelled, deepest_cut, landings = 0, 0, 0, 0, 0, 0
   for i = first, last do
@@ -2746,12 +2752,6 @@ local function pave_way(cells, first, last, opts)
     local skip = water[i] and not crossable[i]
     local cell = route.cells[i] or cells[i]
     if level and not skip then
-      -- Across the direction of travel, taken from the neighbours rather than
-      -- from one segment, so the strip does not kink at a corner.
-      local ahead = route.cells[math.min(i + 1, last)] or cell
-      local behind = route.cells[math.max(i - 1, first)] or cell
-      local offsets = perfectworld.roads.cross_section(
-        ahead.x - behind.x, ahead.z - behind.z, width)
       local mode = route.mode[i]
       local material = (mode == "bridge") and deck or surface
       local cut = (route.raw[i] and route.raw[i] > level) and (route.raw[i] - level) or 0
@@ -2759,8 +2759,8 @@ local function pave_way(cells, first, last, opts)
       if mode == "bridge" then bridged = bridged + 1 end
       if mode == "tunnel" then tunnelled = tunnelled + 1 end
 
-      for _, offset in ipairs(offsets) do
-        local px, pz = cell.x + offset.x, cell.z + offset.z
+      for _, paved in ipairs(footprint[i] or {}) do
+        local px, pz = paved.x, paved.z
         if not (blocked and blocked(px, pz)) then
           -- Head-room, and no more.
           --

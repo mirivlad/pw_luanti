@@ -107,3 +107,105 @@ T.register_test("perfectworld", "new_road_records_persist_their_exact_cells", fu
       "new road record must persist its canonical exact cells")
   end
 end)
+
+-- === The shape a way actually covers ===
+--
+-- These are the contracts that were missing while every road in the world came
+-- out as a chain of two-cell dashes touching at their corners. A cross-section
+-- alone is not a carriageway: it has to join up.
+
+local function staircase(steps)
+  -- A shallow diagonal: two along, one across. Rasterized, this is the
+  -- direction that made `cross_section` flip between north-south and east-west
+  -- from one cell to the next.
+  local cells = {}
+  for index = 0, steps do
+    cells[#cells + 1] = {x = index, z = math.floor(index / 2)}
+  end
+  return cells
+end
+
+local function footprint_cells(footprint, first, last)
+  local set, list = {}, {}
+  for i = first, last do
+    for _, cell in ipairs(footprint[i] or {}) do
+      local key = cell.x .. ":" .. cell.z
+      if not set[key] then
+        set[key] = true
+        list[#list + 1] = cell
+      end
+    end
+  end
+  return set, list
+end
+
+T.register_test("perfectworld", "a_way_is_one_piece_a_walker_can_cross", function(ctx)
+  ctx.assert.not_nil(perfectworld.roads.way_footprint,
+    "roads must expose the shape a way covers")
+  if not perfectworld.roads.way_footprint then return end
+
+  for _, width in ipairs({1, 2, 3}) do
+    local cells = staircase(12)
+    local footprint = perfectworld.roads.way_footprint(cells, 1, #cells, width)
+    local set, list = footprint_cells(footprint, 1, #cells)
+    ctx.assert.is_true(#list > 0, "width " .. width .. " must cover something")
+
+    -- Flood fill from the first cell over four-connected neighbours only,
+    -- because that is what walking means to the engine's pathfinder.
+    local seen = {[list[1].x .. ":" .. list[1].z] = true}
+    local queue = {list[1]}
+    local reached = 1
+    while #queue > 0 do
+      local cell = table.remove(queue)
+      for _, step in ipairs({{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) do
+        local key = (cell.x + step[1]) .. ":" .. (cell.z + step[2])
+        if set[key] and not seen[key] then
+          seen[key] = true
+          reached = reached + 1
+          queue[#queue + 1] = {x = cell.x + step[1], z = cell.z + step[2]}
+        end
+      end
+    end
+    ctx.assert.equal(reached, #list, string.format(
+      "width %d: every cell of a way must be reachable from every other by "
+        .. "north/south/east/west steps, reached %d of %d", width, reached, #list))
+  end
+end)
+
+T.register_test("perfectworld", "a_way_does_not_change_its_mind_about_which_way_it_faces",
+  function(ctx)
+    if not perfectworld.roads.way_footprint then return end
+    -- Along a straight run the covered width must be exactly the width asked
+    -- for, with no cell owned twice and no bulges.
+    local cells = {}
+    for index = 0, 9 do cells[#cells + 1] = {x = index, z = 0} end
+    for width = 1, 3 do
+      local footprint = perfectworld.roads.way_footprint(cells, 1, #cells, width)
+      local _, list = footprint_cells(footprint, 1, #cells)
+      ctx.assert.equal(#list, 10 * width, string.format(
+        "a straight way of width %d over ten cells covers %d, found %d",
+        width, 10 * width, #list))
+    end
+  end)
+
+T.register_test("perfectworld", "the_same_way_walked_backwards_covers_the_same_cells",
+  function(ctx)
+    if not perfectworld.roads.way_footprint then return end
+    local forwards = staircase(10)
+    local backwards = {}
+    for index = #forwards, 1, -1 do
+      backwards[#backwards + 1] = forwards[index]
+    end
+    for width = 1, 3 do
+      local a = select(1, footprint_cells(
+        perfectworld.roads.way_footprint(forwards, 1, #forwards, width), 1, #forwards))
+      local b = select(1, footprint_cells(
+        perfectworld.roads.way_footprint(backwards, 1, #backwards, width), 1, #backwards))
+      local only_a, only_b = 0, 0
+      for key in pairs(a) do if not b[key] then only_a = only_a + 1 end end
+      for key in pairs(b) do if not a[key] then only_b = only_b + 1 end end
+      ctx.assert.equal(only_a + only_b, 0, string.format(
+        "width %d: a way must not depend on which end it was walked from "
+          .. "(%d cells only forwards, %d only backwards)", width, only_a, only_b))
+    end
+  end)
